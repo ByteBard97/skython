@@ -1,0 +1,19 @@
+# handoff notes are session scratch, not project history
+HANDOFF-*.md
+
+# build outputs
+build/
+*/build/
+out/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
