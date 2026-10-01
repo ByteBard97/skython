@@ -150,7 +150,7 @@ Fixed paths:
     virtual void Run(const std::string& op, const json& args, Done, Cancelled, Progress) = 0;  // must not block the caller
     virtual json BaseState() = 0;                                                              // any thread, never blocks
     virtual std::optional<std::string> NotReadyReason(bool require_unpaused) = 0;              // any thread
-    virtual std::uint32_t LoadsStarted() = 0;                                                  // any thread
+    virtual std::uint32_t LoadsStarted() = 0;                                                  // any thread; MUST be lock-free (an atomic read): Tick calls it while holding the Dispatcher's lock
   };
   using Ticket = std::uint64_t;
   struct DispatcherOptions { std::uint32_t default_timeout_ms = 5000; std::uint32_t max_inflight_total = 1024;
