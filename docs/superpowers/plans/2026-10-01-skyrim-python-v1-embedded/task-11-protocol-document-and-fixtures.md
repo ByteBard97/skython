@@ -57,7 +57,7 @@ The bridge writes a session file (fields in the generated Discovery table) so a 
 `{"type":"response","id":<same>,"ok":false,"error":{"code":"<code>","message":"...","detail":{...}}}`
 Responses may arrive in any order. On a bridge connection, a request whose id is still in flight on that connection is refused with `bad_request`; in-process, the `skyrim` package numbers its own requests and the plugin does not check ids. A request whose text cannot be parsed gets an error response with the id read from the text when one can be found, else id 0. Error messages are truncated to `max_error_message_bytes` and never echo a whole request, so a response cannot exceed the frame limit. Every field of the wrong JSON type (`{"type":5}`, `"op":5`, `"kind":5`, `"client":5`) is `bad_request`; the plugin never answers with anything but a typed error. The error codes and what each means are in the generated tables.
 
-A `not_ready` error carries `detail.reason`, one of the reasons listed there, plus `detail.paused` and `detail.menus`. Ops marked as needing a game get `not_ready` at once, without waiting, while no game is loaded or a save is loading; `game.state` is always answered. When a save starts loading, every call still in flight that needs a game ends with `not_ready` (reason `loading`). A `timeout` error may carry `detail.late_cancel: true`, meaning the caller stopped waiting before the plugin's own deadline; the call may still run in the game either way.
+A `not_ready` error carries `detail.reason`, one of the reasons listed there, plus `detail.paused` and `detail.menus`. Ops marked as needing a game get `not_ready` at once, without waiting, while no game is loaded or a save is loading; `game.state` is always answered. When a save starts loading, every call still in flight that needs a game ends with `not_ready` (reason `loading`). A `timeout` error's detail also carries `detail.paused` and `detail.menus`, and may carry `detail.late_cancel: true`, meaning the caller stopped waiting before the plugin's own deadline; the call may still run in the game either way.
 
 ## Events (M2)
 `{"type":"event","event":"<name>","sub":<id>,"seq":<n>,"epoch":<n>,"data":{...}}`
@@ -246,10 +246,11 @@ The `requests.json` fixtures include a valid request for every op (Task 12's cov
 {
   "valid": [
     {"type": "response", "id": 1, "ok": true, "result": 6},
-    {"type": "response", "id": 2, "ok": false, "error": {"code": "not_ready", "message": "a game is loading", "detail": {"reason": "loading"}}},
+    {"type": "response", "id": 2, "ok": false, "error": {"code": "not_ready", "message": "a game is loading", "detail": {"reason": "loading", "paused": false, "menus": []}}},
     {"type": "response", "id": 3, "ok": true, "result": {"kind": "form", "form_id": 20, "form_key": "Skyrim.esm|0x000014", "type": "Actor", "epoch": 1}},
     {"type": "welcome", "protocol": [1, 0], "plugin_version": "0.1.0", "game_version": "1.6.1170.0", "runtime": "AE", "epoch": 1, "capabilities": ["game.state"]},
-    {"type": "handshake_error", "code": "unauthorized", "message": "bad token"}
+    {"type": "handshake_error", "code": "unauthorized", "message": "bad token"},
+    {"type": "response", "id": 22, "ok": false, "error": {"code": "timeout", "message": "papyrus.call_static timed out after 5000 ms", "detail": {"paused": false, "menus": []}}}
   ]
 }
 ```
