@@ -1,0 +1,5 @@
+{
+  "name": "skyrim-python-spike",
+  "version-string": "0.0.1",
+  "dependencies": [ "spdlog", "rapidcsv", "directxtk" ]
+}

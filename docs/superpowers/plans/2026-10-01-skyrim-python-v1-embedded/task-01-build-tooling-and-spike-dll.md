@@ -183,12 +183,35 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT/tools/env.sh"
 mkdir -p "$SKYRIM_PYTHON_STATE"
-if pgrep -x SkyrimSE.exe >/dev/null || pgrep -f skse64_loader.exe >/dev/null; then
+STEAM_ROOT="$HOME/.local/share/Steam"
+PFX_DIR="$STEAM_ROOT/steamapps/compatdata/4190904831/pfx"
+game_running() { pgrep -x SkyrimSE.exe >/dev/null || pgrep -f skse64_loader.exe >/dev/null; }
+# True when a wineserver for this prefix is alive (a leftover Wine session makes 'proton waitforexitandrun' hang).
+prefix_wineserver_alive() {
+  local p
+  for p in $(pgrep -x wineserver); do
+    tr '\0' '\n' < "/proc/$p/environ" 2>/dev/null | grep -q "^WINEPREFIX=${PFX_DIR%/}/\?$" && return 0
+  done
+  return 1
+}
+if [ "${LAUNCH_DRY_RUN:-0}" = 1 ]; then   # test hook: report what would happen, launch nothing, stop nothing
+  game_running && echo "dry-run: game running" || echo "dry-run: game not running"
+  prefix_wineserver_alive && echo "dry-run: prefix wineserver alive" || echo "dry-run: no prefix wineserver"
+  exit 0
+fi
+if game_running; then
   echo "launch_game: the game (or its loader) is already running; quit it first (console: qqq)" >&2
   exit 1
 fi
-pgrep -x steam >/dev/null || echo "launch_game: warning: Steam is not running; the launch may fail" >&2
-STEAM_ROOT="$HOME/.local/share/Steam"
+if ! pgrep -x steam >/dev/null; then
+  echo "launch_game: Steam is not running; start Steam first (without it the game hands off to Steam and exits)" >&2
+  exit 1
+fi
+if prefix_wineserver_alive; then
+  WINEPREFIX="$PFX_DIR" "$STEAM_ROOT/compatibilitytools.d/GE-Proton10-14/files/bin/wineserver" -k || true
+  echo "launch_game: stopped a leftover Wine session for this prefix" >&2
+  sleep 2
+fi
 export STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT"
 export STEAM_COMPAT_DATA_PATH="$STEAM_ROOT/steamapps/compatdata/4190904831"
 export STEAM_COMPAT_MOUNTS="/mnt/games/SteamLibrary"
@@ -505,6 +528,8 @@ SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/S
 cat "$SKSE_LOG_DIR/SkyrimPythonSpike.log"
 ```
 Expected: `SkyrimPythonSpike loading on Skyrim 1.6.1170.0`, `spike: listening on 127.0.0.1:45978`. **If the wait times out, STOP and ask the owner** (do not relaunch in a loop). **If the logged version is not 1.6.1170, STOP and ask the owner.** If the build fails in CommonLibSSE-NG's configure step, the missing dependency is named in the CMake error: add it to `spikes/spike-dll/vcpkg.json` and rebuild.
+
+Two launch failure modes seen on 2026-10-01 (`launch_game.sh` now guards both): with Steam not running the game's Steam API hands off to Steam (steam://run/489830) and exits, and a Wine session left over from a failed launch makes `proton waitforexitandrun` hang forever (the script stops it with the prefix's own `wineserver -k`). `LAUNCH_DRY_RUN=1 tools/launch_game.sh` reports the detection results and launches nothing.
 
 Then make the throwaway save that Tasks 2-10 run on (no spike command has been sent yet, so nothing has touched the game state): from the main menu load a disposable save (a fresh character or any save you do not care about; never a real playthrough), wait for gameplay, open the console and type `save spikebase`, close the console, and confirm it exists:
 
