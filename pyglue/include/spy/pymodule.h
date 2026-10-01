@@ -1,0 +1,24 @@
+#pragma once
+#include "spy/dispatcher.h"
+#include "spy/fake_backend.h"
+#include <functional>
+#include <string>
+#include <pybind11/pybind11.h>
+
+namespace spy {
+// What the _skyrim module talks to. The game build (plugin core, Tasks 26-27) and the Linux fake build
+// (pyglue/linux/fake_module.cpp) each fill one in and call InstallModuleHost before the module is imported.
+struct ModuleHost
+{
+    Dispatcher* dispatcher = nullptr;
+    const char* backend = "game";                                               // _skyrim.BACKEND
+    std::function<std::string()> config_json;                                   // _skyrim.config()
+    std::function<void(const std::string& level, const std::string& msg)> log;  // _skyrim.log()
+    FakeBackend* fake = nullptr;  // set only by the fake build: adds the _fake_* controls
+};
+
+void InstallModuleHost(ModuleHost host);
+// Defines every _skyrim function on `m`. Only strings, numbers and None cross the boundary; every call that can
+// wait releases the GIL; a C++ exception reaches Python as a Python exception (ValueError, TypeError, RuntimeError).
+void DefineModule(pybind11::module_& m);
+}
