@@ -8,7 +8,7 @@
 
 **Decisions this task makes, and why.**
 - **A script's import and `setup(game)` run on their own thread; the host thread waits up to `SETUP_TIMEOUT_S` (10 s).** A setup that blocks is reported as `"timeout: setup still running after 10 s"` and keeps running, and the next script still loads; a setup that finishes after `SETUP_WARN_S` (1 s) is `"ok"` with a warning in the log.
-- **Each script gets its own `Game`** (`connect_in_process()` on the script's thread), so a script that closes its `Game` (`with game:` in `setup`) closes no one else's.
+- **Each script gets its own `Game`** (`connect_in_process()` on the script's thread), so a script that closes its `Game` (`with game:` in `setup`) closes no one else's. The host keeps each script's `Game` and `reload` closes it after `teardown()`: a thread `teardown()` did not stop gets `ConnectionLost` instead of driving the game (SkyrimPlatform comparison, Top 4; ruling R38).
 - **No game is loaded while `setup` runs.** In the game, `main()` runs at `kDataLoaded`, at the main menu, so a `needs_game` call in `setup` answers `NotReady`. The module docstring says so: game work belongs on a thread that `setup` starts and that first calls `game.wait_ready()`; a test pins that pattern.
 - **The switch interval stays at CPython's default (0.005 s)**: `SWITCH_INTERVAL_S = None`. Spike S9 (Task 5) measures what a CPU-bound Python thread adds to other threads' game calls and records a recommendation in `spikes/RESULTS.md`; if it says `set 0.001`, change this one constant (the owner can veto). `status()` reports the interval in use and `main()` logs it.
 - **Log files:** `python.log` in `_skyrim.config()["log_dir"]` (the folder that also holds `session.json`), rotating at 1 MiB with 3 backups, all levels from INFO; WARNING and above also go to the plugin's `SkyrimPython.log` through `_skyrim.log`. There is no console in the game, so stdout and stderr are replaced by line-buffered writers into the log.
@@ -23,7 +23,7 @@
 - Produces (`skyrim._host`):
   - `main() -> None`: never raises; on a failure before logging is set up it reports the traceback through `_skyrim.log("error", ...)`.
   - `load_scripts(game, scripts_dir) -> dict[str, str]`: every `<name>.py` and `<name>/__init__.py` in name order (names starting with `_` or `.` skipped); name → `"ok"`, `"failed: <ExceptionType>: <message>"`, `"failed: no setup(game) function"` or `"timeout: setup still running after <n> s"`. Each script's `setup` gets a `Game` of its own; `game` is the host's, kept for `status` and `reload`. Appends the folder to `sys.path` if it is missing (in the game it is already on the search path), so a script's name must not clash with a standard-library or site-packages module.
-  - `reload(name) -> str`: `teardown()` if the script has one (same timeout; a failing teardown is logged and the reload goes on), drops `name` and `name.*` from `sys.modules`, re-imports and calls `setup(game)`; returns the new status, or `"failed: no scripts have been loaded yet"` / `"failed: no script named ..."`. Best effort (spec 4.10).
+  - `reload(name) -> str`: `teardown()` if the script has one (same timeout; a failing teardown is logged and the reload goes on), closes the script's previous `Game`, drops `name` and `name.*` from `sys.modules`, re-imports and calls `setup` with a new `Game`; returns the new status, or `"failed: no scripts have been loaded yet"` / `"failed: no script named ..."`. Best effort (spec 4.10).
   - `status() -> dict`: `scripts`, `bridge` (`"not started"`, `"disabled"`, `"listening on 127.0.0.1:<port>"` or `"failed: <why>"`), `bridge_port`, `bridge_connections`, `switch_interval_s`, `log_file`, `python`. Plain data.
   - Module constants: `SETUP_WARN_S = 1.0`, `SETUP_TIMEOUT_S = 10.0`, `SWITCH_INTERVAL_S = None`, `LOG_FILE_NAME = "python.log"`, `LOG_MAX_BYTES`, `LOG_BACKUPS`. `_reset()` is for tests only (closes the bridge, removes the log handlers, forgets everything).
 
@@ -177,6 +177,46 @@ def test_reload_runs_teardown_and_the_new_code(host, fake, tmp_path):
     assert echoes(fake) == ["one", "second version"]
     assert ("info", "teardown one") in fake.logs
     assert host.reload("t24_missing").startswith("failed: no script named")
+
+
+def test_reload_closes_the_scripts_previous_game(host, fake, tmp_path):
+    # An old thread that teardown() did not stop must not keep driving the game after a reload.
+    body = """
+    import builtins, threading, time
+
+    def setup(game):
+        builtins.t24_games = getattr(builtins, "t24_games", []) + [game]
+        if len(builtins.t24_games) > 1:
+            return  # the new version starts no thread
+
+        def loop():
+            while True:
+                try:
+                    game.call("Fake", "Echo", "old thread")
+                except Exception as e:
+                    builtins.t24_old_error = e
+                    return
+                time.sleep(0.01)
+
+        threading.Thread(target=loop, daemon=True).start()
+    """
+    script(tmp_path, "t24_closes", body)
+    import builtins
+    try:
+        host.main()
+        wait_until(lambda: "old thread" in echoes(fake), what="the old thread's first call")
+        script(tmp_path, "t24_closes", body + "# second version\n")  # a different size, so no stale .pyc
+        assert host.reload("t24_closes") == "ok"
+        wait_until(lambda: hasattr(builtins, "t24_old_error"), what="the old thread to see its Game closed")
+        assert isinstance(builtins.t24_old_error, errors.ConnectionLost)
+        old, new = builtins.t24_games
+        assert old.closed and not new.closed and new is not old
+        new.call("Fake", "Echo", "new game")
+        assert echoes(fake)[-1] == "new game"
+    finally:
+        for attr in ("t24_games", "t24_old_error"):
+            if hasattr(builtins, attr):
+                delattr(builtins, attr)
 
 
 def test_reload_before_any_load_is_a_failure_not_an_exception(host):
@@ -422,7 +462,8 @@ in name order (names starting with "_" or "." are skipped), with `setup(game)` a
 a script whose setup blocks is reported as "timeout: ..." and keeps running, and the next script still
 loads. setup should return quickly (a setup over SETUP_WARN_S is logged) and start a thread for long work.
 Each script gets its own Game, so a script that closes its Game (`with game:` in setup) does not close
-anyone else's.
+anyone else's. reload(name) closes that script's Game after teardown(), so a thread teardown() did not stop
+gets ConnectionLost instead of driving the game; the new setup gets a fresh Game.
 No game is loaded while setup runs: in the game, main() runs when the data has loaded, at the main menu,
 so a needs_game call made in setup answers NotReady. Game work belongs on a thread that setup starts and
 that first calls game.wait_ready().
@@ -458,7 +499,7 @@ _STATE: dict = {}
 
 def _fresh_state() -> dict:
     return {"config": None, "game": None, "bridge": None, "bridge_status": "not started", "scripts": {},
-            "modules": {}, "scripts_dir": None, "log_file": None}
+            "modules": {}, "games": {}, "scripts_dir": None, "log_file": None}
 
 
 _STATE.update(_fresh_state())
@@ -635,7 +676,10 @@ def _load_one(name: str) -> str:
             if not callable(setup):
                 holder["missing"] = True
             else:
-                setup(connect_in_process())  # the script's own Game: closing it closes no one else's
+                game = connect_in_process()  # the script's own Game: closing it closes no one else's
+                with _LOCK:  # recorded before setup runs, so reload can close it even if setup times out
+                    _STATE["games"][name] = game
+                setup(game)
         except BaseException as e:  # noqa: BLE001 - SystemExit from a script is a failure, not an exit
             holder["error"] = f"{type(e).__name__}: {e}"
             holder["traceback"] = traceback.format_exc()
@@ -698,8 +742,9 @@ def _drop_script_modules(name: str, folder: pathlib.Path) -> None:
 
 
 def reload(name: str) -> str:
-    """Development aid, best effort (spec 4.10): teardown(), forget the script's modules, import it again
-    and call setup(game). State in C extensions or in threads teardown() did not stop is not reset."""
+    """Development aid, best effort (spec 4.10): teardown(), close the script's previous Game, forget the
+    script's modules, import it again and call setup() with a new Game. State in C extensions is not reset;
+    threads teardown() did not stop keep running, but their Game is closed (ConnectionLost)."""
     with _RELOAD_LOCK:
         with _LOCK:
             game = _STATE["game"]
@@ -710,6 +755,7 @@ def reload(name: str) -> str:
             return f"failed: no script named {name!r} in {folder}"
         with _LOCK:
             module = _STATE["modules"].pop(name, None)  # a failed re-import must not leave it to be torn down again
+            old_game = _STATE["games"].pop(name, None)
         teardown = getattr(module, "teardown", None) if module is not None else None
         if callable(teardown):
             finished, error, tb = _run_with_timeout(teardown, f"script-teardown:{name}", SETUP_TIMEOUT_S)
@@ -717,6 +763,11 @@ def reload(name: str) -> str:
                 log.error("script %s: teardown still running after %g s; reloading anyway", name, SETUP_TIMEOUT_S)
             elif error is not None:
                 log.error("script %s: teardown failed: %s; reloading anyway\n%s", name, error, tb)
+        if old_game is not None:  # after teardown, which may still use it: threads it did not stop get ConnectionLost
+            try:
+                old_game.close()
+            except Exception:  # noqa: BLE001 - a failed close must not stop the reload
+                log.exception("script %s: closing its previous Game failed; reloading anyway", name)
         _drop_script_modules(name, folder)
         importlib.invalidate_caches()
         log.info("script %s: reloading", name)
@@ -860,11 +911,11 @@ def _reset() -> None:
 - [ ] **Step 4: Run to verify they pass, on both Python versions**
 
 Run: `cd python && uv run --python 3.12 pytest -q && uv run --python 3.14 pytest -q`
-Expected: `397 passed, 7 skipped` twice, each in about 15 s (373 before this task plus its 24 host tests; the 7 skipped are test_real_module.py). The blocking-setup test leaves a daemon thread sleeping for 3 s after it ends; that is intended (it shows main() returning while a script is still stuck).
+Expected: `398 passed, 7 skipped` twice, each in about 15 s (373 before this task plus its 25 host tests; the 7 skipped are test_real_module.py). The blocking-setup test leaves a daemon thread sleeping for 3 s after it ends; that is intended (it shows main() returning while a script is still stuck).
 
 Run the host, bridge and remote tests together five times, to catch races between them:
 `for i in 1 2 3 4 5; do uv run --python 3.14 pytest -q tests/test_bridge.py tests/test_host.py tests/test_remote.py; done`
-Expected: `107 passed` five times.
+Expected: `108 passed` five times.
 
 - [ ] **Step 5: Run the drift check**
 

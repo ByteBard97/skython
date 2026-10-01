@@ -13,7 +13,8 @@ in name order (names starting with "_" or "." are skipped), with `setup(game)` a
 a script whose setup blocks is reported as "timeout: ..." and keeps running, and the next script still
 loads. setup should return quickly (a setup over SETUP_WARN_S is logged) and start a thread for long work.
 Each script gets its own Game, so a script that closes its Game (`with game:` in setup) does not close
-anyone else's.
+anyone else's. reload(name) closes that script's Game after teardown(), so a thread teardown() did not stop
+gets ConnectionLost instead of driving the game; the new setup gets a fresh Game.
 No game is loaded while setup runs: in the game, main() runs when the data has loaded, at the main menu,
 so a needs_game call made in setup answers NotReady. Game work belongs on a thread that setup starts and
 that first calls game.wait_ready().
@@ -49,7 +50,7 @@ _STATE: dict = {}
 
 def _fresh_state() -> dict:
     return {"config": None, "game": None, "bridge": None, "bridge_status": "not started", "scripts": {},
-            "modules": {}, "scripts_dir": None, "log_file": None}
+            "modules": {}, "games": {}, "scripts_dir": None, "log_file": None}
 
 
 _STATE.update(_fresh_state())
@@ -226,7 +227,10 @@ def _load_one(name: str) -> str:
             if not callable(setup):
                 holder["missing"] = True
             else:
-                setup(connect_in_process())  # the script's own Game: closing it closes no one else's
+                game = connect_in_process()  # the script's own Game: closing it closes no one else's
+                with _LOCK:  # recorded before setup runs, so reload can close it even if setup times out
+                    _STATE["games"][name] = game
+                setup(game)
         except BaseException as e:  # noqa: BLE001 - SystemExit from a script is a failure, not an exit
             holder["error"] = f"{type(e).__name__}: {e}"
             holder["traceback"] = traceback.format_exc()
@@ -289,8 +293,9 @@ def _drop_script_modules(name: str, folder: pathlib.Path) -> None:
 
 
 def reload(name: str) -> str:
-    """Development aid, best effort (spec 4.10): teardown(), forget the script's modules, import it again
-    and call setup(game). State in C extensions or in threads teardown() did not stop is not reset."""
+    """Development aid, best effort (spec 4.10): teardown(), close the script's previous Game, forget the
+    script's modules, import it again and call setup() with a new Game. State in C extensions is not reset;
+    threads teardown() did not stop keep running, but their Game is closed (ConnectionLost)."""
     with _RELOAD_LOCK:
         with _LOCK:
             game = _STATE["game"]
@@ -301,6 +306,7 @@ def reload(name: str) -> str:
             return f"failed: no script named {name!r} in {folder}"
         with _LOCK:
             module = _STATE["modules"].pop(name, None)  # a failed re-import must not leave it to be torn down again
+            old_game = _STATE["games"].pop(name, None)
         teardown = getattr(module, "teardown", None) if module is not None else None
         if callable(teardown):
             finished, error, tb = _run_with_timeout(teardown, f"script-teardown:{name}", SETUP_TIMEOUT_S)
@@ -308,6 +314,11 @@ def reload(name: str) -> str:
                 log.error("script %s: teardown still running after %g s; reloading anyway", name, SETUP_TIMEOUT_S)
             elif error is not None:
                 log.error("script %s: teardown failed: %s; reloading anyway\n%s", name, error, tb)
+        if old_game is not None:  # after teardown, which may still use it: threads it did not stop get ConnectionLost
+            try:
+                old_game.close()
+            except Exception:  # noqa: BLE001 - a failed close must not stop the reload
+                log.exception("script %s: closing its previous Game failed; reloading anyway", name)
         _drop_script_modules(name, folder)
         importlib.invalidate_caches()
         log.info("script %s: reloading", name)

@@ -146,6 +146,46 @@ def test_reload_runs_teardown_and_the_new_code(host, fake, tmp_path):
     assert host.reload("t24_missing").startswith("failed: no script named")
 
 
+def test_reload_closes_the_scripts_previous_game(host, fake, tmp_path):
+    # An old thread that teardown() did not stop must not keep driving the game after a reload.
+    body = """
+    import builtins, threading, time
+
+    def setup(game):
+        builtins.t24_games = getattr(builtins, "t24_games", []) + [game]
+        if len(builtins.t24_games) > 1:
+            return  # the new version starts no thread
+
+        def loop():
+            while True:
+                try:
+                    game.call("Fake", "Echo", "old thread")
+                except Exception as e:
+                    builtins.t24_old_error = e
+                    return
+                time.sleep(0.01)
+
+        threading.Thread(target=loop, daemon=True).start()
+    """
+    script(tmp_path, "t24_closes", body)
+    import builtins
+    try:
+        host.main()
+        wait_until(lambda: "old thread" in echoes(fake), what="the old thread's first call")
+        script(tmp_path, "t24_closes", body + "# second version\n")  # a different size, so no stale .pyc
+        assert host.reload("t24_closes") == "ok"
+        wait_until(lambda: hasattr(builtins, "t24_old_error"), what="the old thread to see its Game closed")
+        assert isinstance(builtins.t24_old_error, errors.ConnectionLost)
+        old, new = builtins.t24_games
+        assert old.closed and not new.closed and new is not old
+        new.call("Fake", "Echo", "new game")
+        assert echoes(fake)[-1] == "new game"
+    finally:
+        for attr in ("t24_games", "t24_old_error"):
+            if hasattr(builtins, attr):
+                delattr(builtins, attr)
+
+
 def test_reload_before_any_load_is_a_failure_not_an_exception(host):
     assert host.reload("anything") == "failed: no scripts have been loaded yet"
 
