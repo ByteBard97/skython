@@ -17,7 +17,7 @@ Adapted from: branch `plan-out-of-process`, task 10 (`task-10-errors-and-the-val
   - `enum class spy::ErrorCode` (defined in the generated header, in the order of `protocol.json`: `not_ready, busy, bad_request, unknown_function, type_mismatch, stale_reference, not_found, timeout, vm_error, unsupported, internal, unauthorized, protocol_mismatch`), re-exported by `errors.h`
   - `std::string_view spy::to_string(ErrorCode)` and `std::optional<ErrorCode> spy::error_code_from_string(std::string_view)`: lookups over the generated `kErrorCodeNames` table (`to_string` of a value outside the table is `"internal"`)
   - `struct spy::ProtocolError : std::runtime_error { ErrorCode code; ProtocolError(ErrorCode, const std::string&); }`
-  - `std::string spy::clip_text(std::string_view s, std::size_t max = 120)`: at most `max` bytes (never splitting a UTF-8 sequence) plus `"..."` when cut. Every message that quotes caller input goes through it.
+  - `std::string spy::clip_text(std::string_view s, std::size_t max = 120)`: at most `max` bytes (never splitting a UTF-8 sequence: it backs up at most 3 bytes, and only to a real lead byte whose sequence crosses the cut, so Windows-1252 bytes 0x80-0xBF do not shorten the text) plus `"..."` when cut. Every message that quotes caller input goes through it.
   - `using spy::json = nlohmann::json;`
   - `std::string spy::dump_json(const json&, int indent = -1)`: **the only way core or the plugin turns JSON into text.** It uses `error_handler_t::replace`, so invalid UTF-8 in a game string becomes U+FFFD instead of throwing `json::type_error` 316. Never call `json::dump()` directly on outgoing data.
   - `std::string spy::str_or(const json& j, const char* key, std::string_view default_value)`: `default_value` when `j` is not an object or `key` is missing or `null`; the string when it is a string; otherwise throws `ProtocolError(bad_request)`. Use it instead of `j.value(key, "")`, which throws `json::type_error` for a non-string.
@@ -209,6 +209,19 @@ TEST_CASE("clip_text bounds quoted input and never splits a UTF-8 sequence")
     CHECK(spy::clip_text(std::string(2000000, 'x')).size() == 123);
 }
 
+TEST_CASE("clip_text backs up at most 3 bytes and only over a real UTF-8 sequence")
+{
+    // Game strings are often Windows-1252, whose punctuation (0x92 is a right single quote) looks like UTF-8
+    // continuation bytes. They must not make the clip eat the whole message.
+    const std::string cp1252 = "Name: " + std::string(300, '\x92');
+    CHECK(spy::clip_text(cp1252, 120) == cp1252.substr(0, 120) + "...");
+    const std::string emoji = "x\xF0\x9F\x98\x80y";             // a 4-byte character between two letters
+    CHECK(spy::clip_text(emoji, 2) == "x...");                    // the cut is inside it: back up to its lead byte
+    CHECK(spy::clip_text(emoji, 4) == "x...");                    // three bytes back is still inside it
+    CHECK(spy::clip_text(emoji, 5) == "x\xF0\x9F\x98\x80...");  // the cut falls after the whole character
+    CHECK(spy::clip_text("\xC3\xA9\x92\x92", 2) == "\xC3\xA9...");   // a stray continuation byte after a whole character
+}
+
 TEST_CASE("error messages never echo a large input")
 {
     const std::string big(3 * 1024 * 1024, 'x');
@@ -317,12 +330,32 @@ std::optional<ErrorCode> error_code_from_string(std::string_view s)
     return std::nullopt;
 }
 
+namespace {
+// Length of the UTF-8 sequence a lead byte starts (2-4), or 0 for any other byte.
+std::size_t utf8_sequence_length(unsigned char lead)
+{
+    if ((lead & 0xE0) == 0xC0) return 2;
+    if ((lead & 0xF0) == 0xE0) return 3;
+    if ((lead & 0xF8) == 0xF0) return 4;
+    return 0;
+}
+}
+
 std::string clip_text(std::string_view s, std::size_t max)
 {
     if (s.size() <= max) return std::string(s);
     std::size_t cut = max;
-    // Back up over UTF-8 continuation bytes (10xxxxxx) so the cut lands between characters.
-    while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80) --cut;
+    // If the cut splits a UTF-8 sequence, move it back to that sequence's lead byte: at most 3 bytes, and only when a
+    // real lead byte starts a sequence that runs past the cut. Windows-1252 bytes 0x80-0xBF look like continuation
+    // bytes; backing up over them without a bound would eat the whole message.
+    if ((static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80) {
+        for (std::size_t back = 1; back <= 3 && back <= cut; ++back) {
+            const auto b = static_cast<unsigned char>(s[cut - back]);
+            if ((b & 0xC0) == 0x80) continue;                     // another continuation byte: keep looking
+            if (utf8_sequence_length(b) > back) cut -= back;      // a lead byte whose sequence crosses the cut
+            break;
+        }
+    }
     return std::string(s.substr(0, cut)) + "...";
 }
 
@@ -630,7 +663,7 @@ bool form_key_matches_id(std::string_view, std::uint32_t) { return true; }  // r
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cmake --build core/build -j && core/build/spy_core_tests`
-Expected: PASS, `[doctest] test cases:  15 |  15 passed | 0 failed | 0 skipped` and `[doctest] assertions: 113 | 113 passed | 0 failed |`.
+Expected: PASS, `[doctest] test cases:  16 |  16 passed | 0 failed | 0 skipped` and `[doctest] assertions: 118 | 118 passed | 0 failed |`.
 
 - [ ] **Step 5: Commit**
 

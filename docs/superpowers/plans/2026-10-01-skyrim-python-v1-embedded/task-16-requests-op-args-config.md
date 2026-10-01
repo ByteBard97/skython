@@ -25,7 +25,7 @@ Adapted from: branch `plan-out-of-process`, task 12 (`task-12-messages-op-argume
   - `struct spy::PropertyArgs { Value object; std::string script; std::string property; std::optional<Value> value; }`; `PropertyArgs spy::parse_property_args(const json& args, bool needs_value)`
   - `struct spy::BatchStep { std::string op; json args; }`; `struct spy::BatchArgs { std::vector<BatchStep> calls; bool stop_on_error; std::optional<std::uint32_t> timeout_ms; }`; `BatchArgs spy::parse_batch_args(const json&)` (1..`kMaxBatchCalls` calls; a step's op must be marked `batchable` in the generated op table)
   - `json spy::make_ok(std::uint64_t id, json result)`; `json spy::make_error(std::uint64_t id, ErrorCode, std::string_view message, json detail = json::object())` (the message is clipped to `kMaxErrorMessageBytes`; `detail` is the caller's responsibility and must be small). Both build `{"type":"response", ...}` exactly as `responses.json` shows; callers turn them into text with `dump_json`.
-- Produces (`config.h`): `struct spy::Config { bool python_enabled; bool scripts_enabled; bool bridge_enabled; std::uint16_t port; std::string fixed_token; std::string session_file; std::uint32_t default_timeout_ms; std::uint32_t max_inflight_per_connection; std::uint32_t max_inflight_total; bool enable_console; std::vector<std::string> ignored_keys; }`, every default from `spy::config_defaults` (true, true, false, 45977, "", "", 5000, 256, 1024, false); `Config spy::parse_config(std::string_view ini_text)` (throws `std::invalid_argument` on a bad value, always that type; `ignored_keys` lists the unrecognised keys so the plugin can log them); `json spy::config_to_json(const Config&)` (every field under its ini key name plus `ignored_keys`).
+- Produces (`config.h`): `struct spy::Config { bool python_enabled; bool scripts_enabled; bool bridge_enabled; std::uint16_t port; std::string fixed_token; std::string session_file; std::uint32_t default_timeout_ms; std::uint32_t max_inflight_per_connection; std::uint32_t max_inflight_total; bool enable_console; std::vector<std::string> ignored_keys; }`, every default from `spy::config_defaults` (true, true, false, 45977, "", "", 5000, 256, 1024, false); `Config spy::parse_config(std::string_view ini_text)` (throws `std::invalid_argument` on a bad value, always that type; `ignored_keys` lists the unrecognised keys, and every line without `=` clipped to 64 bytes, so the plugin can log them); `json spy::config_to_json(const Config&)` (every field under its ini key name plus `ignored_keys`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -256,6 +256,17 @@ TEST_CASE("parses keys, ignores sections, comments and unknown keys")
     CHECK(c.max_inflight_total == 10u);
     REQUIRE(c.ignored_keys.size() == 1);
     CHECK(c.ignored_keys[0] == "unknown_key");
+}
+
+TEST_CASE("a line without '=' is reported in ignored_keys, clipped")
+{
+    auto c = spy::parse_config("bridge_enabled true\nport: 45990\n" + std::string(500, 'k') + "\n");
+    CHECK_FALSE(c.bridge_enabled);  // the typo does not set the key, but it is no longer silent
+    CHECK(c.port == 45977);
+    REQUIRE(c.ignored_keys.size() == 3);
+    CHECK(c.ignored_keys[0] == "bridge_enabled true");
+    CHECK(c.ignored_keys[1] == "port: 45990");
+    CHECK(c.ignored_keys[2] == std::string(64, 'k') + "...");
 }
 
 TEST_CASE("the old allow_external_clients key is no longer recognised")
@@ -1054,7 +1065,7 @@ struct Config
     std::uint32_t max_inflight_per_connection = config_defaults::kMaxInflightPerConnection;  // dev bridge; at least 1
     std::uint32_t max_inflight_total = config_defaults::kMaxInflightTotal;  // dispatcher; at least 1
     bool enable_console = config_defaults::kEnableConsole;
-    std::vector<std::string> ignored_keys;  // keys that were not recognised (log them: "Port" instead of "port" is silent otherwise)
+    std::vector<std::string> ignored_keys;  // unrecognised keys and lines without '=' (log them: "Port" instead of "port" is silent otherwise)
 };
 
 // INI subset, UTF-8 (a leading byte order mark is skipped).
@@ -1062,7 +1073,8 @@ struct Config
 //  - An inline comment starts at whitespace followed by ';' ("port = 1 ; dev"). A ';' with no whitespace before it stays in
 //    the value, and '#' is never an inline comment.
 //  - Keys and the boolean values (true/false/1/0) are case-sensitive and lower case. An unrecognised key, including one
-//    with the wrong case, is ignored but listed in Config::ignored_keys. A repeated key: the last one wins.
+//    with the wrong case, is ignored but listed in Config::ignored_keys. So is a line without '=' (clipped to 64 bytes).
+//    A repeated key: the last one wins.
 //  - Every bad value throws std::invalid_argument, including numbers too large for 64 bits.
 Config parse_config(std::string_view text);
 
@@ -1134,7 +1146,10 @@ Config parse_config(std::string_view text)
         start = end + 1;
         if (line.empty() || line[0] == ';' || line[0] == '#' || line[0] == '[') continue;
         auto eq = line.find('=');
-        if (eq == std::string::npos) continue;
+        if (eq == std::string::npos) {  // "bridge_enabled true": a typo must not be silent
+            c.ignored_keys.push_back(clip_text(line, 64));
+            continue;
+        }
         auto key = trim(line.substr(0, eq));
         auto val = trim(strip_inline_comment(std::string_view(line).substr(eq + 1)));
         const ConfigKey* spec = find_config_key(key);  // names, ranges and defaults come from protocol.json
@@ -1181,7 +1196,7 @@ Note: `port = 70000` must throw: the `port` entry of the generated table has `ma
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cmake --build core/build -j && core/build/spy_core_tests`
-Expected: PASS, `[doctest] test cases:  59 |  59 passed | 0 failed | 0 skipped` and `[doctest] assertions: 764 | 764 passed | 0 failed |` (Tasks 14-16 together). If a fixture case fails, fix the code, never the fixture, unless the fixture contradicts `protocol/PROTOCOL.md`.
+Expected: PASS, `[doctest] test cases:  61 |  61 passed | 0 failed | 0 skipped` and `[doctest] assertions: 777 | 777 passed | 0 failed |` (Tasks 14-16 together). If a fixture case fails, fix the code, never the fixture, unless the fixture contradicts `protocol/PROTOCOL.md`.
 
 - [ ] **Step 5: Run the suite under warnings and the sanitizers**
 
