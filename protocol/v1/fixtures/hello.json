@@ -1,0 +1,26 @@
+{
+  "valid": [
+    {"type": "hello", "protocol": [1, 0], "token": "00112233445566778899aabbccddeeff", "client": "test"},
+    {"type": "hello", "protocol": [1, 3], "token": "ffffffffffffffffffffffffffffffff", "client": "skyrim-dm"}
+  ],
+  "invalid": [
+    {"message": {"type": "hello", "protocol": [1, 0], "client": "x"}, "error": "bad_request"},
+    {"message": {"type": "hello", "protocol": "1.0", "token": "00112233445566778899aabbccddeeff", "client": "x"}, "error": "bad_request"},
+    {"message": {"type": "hello", "protocol": [1, 0], "token": "XYZ", "client": "x"}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 1, "op": "game.state", "args": {}}, "error": "bad_request"},
+    {"message": {"type": 1, "protocol": [1, 0], "token": "00112233445566778899aabbccddeeff", "client": "x"}, "error": "bad_request"},
+    {"message": {"type": "hello", "protocol": [1, 0], "token": "00112233445566778899aabbccddeeff", "client": 5}, "error": "bad_request"},
+    {"message": {"type": "hello", "protocol": [1, 0], "token": 5, "client": "x"}, "error": "bad_request"},
+    {"message": {"type": "hello", "protocol": [4294967297, 0], "token": "00112233445566778899aabbccddeeff", "client": "x"}, "error": "bad_request"},
+    {"message": {"type": "hello", "protocol": [-1, 0], "token": "00112233445566778899aabbccddeeff", "client": "x"}, "error": "bad_request"},
+    {"message": {"type": "hello", "protocol": [1.5, 0], "token": "00112233445566778899aabbccddeeff", "client": "x"}, "error": "bad_request"},
+    {"message": {"type": "hello", "protocol": [1, 0, 0], "token": "00112233445566778899aabbccddeeff", "client": "x"}, "error": "bad_request"}
+  ],
+  "check": [
+    {"name": "right token, right major", "hello": {"type": "hello", "protocol": [1, 0], "token": "00112233445566778899aabbccddeeff", "client": "t"}, "expected_token": "00112233445566778899aabbccddeeff", "result": null},
+    {"name": "a newer minor is accepted", "hello": {"type": "hello", "protocol": [1, 9], "token": "00112233445566778899aabbccddeeff", "client": "t"}, "expected_token": "00112233445566778899aabbccddeeff", "result": null},
+    {"name": "wrong token", "hello": {"type": "hello", "protocol": [1, 0], "token": "00112233445566778899aabbccddeeff", "client": "t"}, "expected_token": "ffffffffffffffffffffffffffffffff", "result": "unauthorized"},
+    {"name": "wrong major", "hello": {"type": "hello", "protocol": [2, 0], "token": "00112233445566778899aabbccddeeff", "client": "t"}, "expected_token": "00112233445566778899aabbccddeeff", "result": "protocol_mismatch"},
+    {"name": "wrong token and wrong major: the token is checked first", "hello": {"type": "hello", "protocol": [2, 0], "token": "00112233445566778899aabbccddeeff", "client": "t"}, "expected_token": "ffffffffffffffffffffffffffffffff", "result": "unauthorized"}
+  ]
+}

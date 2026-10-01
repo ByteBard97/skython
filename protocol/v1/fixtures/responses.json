@@ -1,0 +1,9 @@
+{
+  "valid": [
+    {"type": "response", "id": 1, "ok": true, "result": 6},
+    {"type": "response", "id": 2, "ok": false, "error": {"code": "not_ready", "message": "a game is loading", "detail": {"reason": "loading"}}},
+    {"type": "response", "id": 3, "ok": true, "result": {"kind": "form", "form_id": 20, "form_key": "Skyrim.esm|0x000014", "type": "Actor", "epoch": 1}},
+    {"type": "welcome", "protocol": [1, 0], "plugin_version": "0.1.0", "game_version": "1.6.1170.0", "runtime": "AE", "epoch": 1, "capabilities": ["game.state"]},
+    {"type": "handshake_error", "code": "unauthorized", "message": "bad token"}
+  ]
+}

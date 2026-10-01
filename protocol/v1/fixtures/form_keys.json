@@ -1,0 +1,13 @@
+{
+  "valid": [
+    {"text": "Skyrim.esm|0x01A69F", "plugin": "Skyrim.esm", "local_id": 108191, "canonical": "Skyrim.esm|0x01A69F"},
+    {"text": "Skyrim.esm|0x14", "plugin": "Skyrim.esm", "local_id": 20, "canonical": "Skyrim.esm|0x000014"},
+    {"text": "Skyrim.esm|0xFFFFFF", "plugin": "Skyrim.esm", "local_id": 16777215, "canonical": "Skyrim.esm|0xFFFFFF"},
+    {"text": "SkyrimPythonTest.esp|0x000800", "plugin": "SkyrimPythonTest.esp", "local_id": 2048, "canonical": "SkyrimPythonTest.esp|0x000800"},
+    {"text": "Light Mod.esl|0xabc", "plugin": "Light Mod.esl", "local_id": 2748, "canonical": "Light Mod.esl|0x000ABC"},
+    {"text": "Light Mod.esl|0xFFF", "plugin": "Light Mod.esl", "local_id": 4095, "canonical": "Light Mod.esl|0x000FFF"}
+  ],
+  "invalid": ["Skyrim.esm", "Skyrim.esm|12", "notes.txt|0x1", "Skyrim.esm|0x1000000", "|0x1", "Skyrim.esm|0x", "Skyrim.esm|0xZZ",
+    ".esm|0x1", " Skyrim.esm|0x1", "Skyrim .esm|0x1", "\tSkyrim.esm|0x1", "Sky\nrim.esm|0x1", "Skyrim.esm|0x1\n", "Skyrim.esm\n|0x1", "Skyrim.esm|0x123456789",
+    "Light Mod.esl|0x1000", "Light Mod.esl|0xFFFFFF"]
+}
