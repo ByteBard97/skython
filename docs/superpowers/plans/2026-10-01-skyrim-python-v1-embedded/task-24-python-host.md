@@ -7,10 +7,13 @@
 **What this module is.** The Python side of the plugin's host thread. `main()` sets up logging, routes `print`, stderr and uncaught exceptions (main thread and other threads) into it, starts the dev bridge when `bridge_enabled` is set (before the scripts, so a slow script never delays the developer's tools), loads the player scripts and returns. It never raises into the plugin. Long work belongs on threads the scripts start; after `main()` returns, the host thread releases the GIL and waits forever (Global Constraints, Task 26).
 
 **Decisions this task makes, and why.**
-- **A script's import and `setup(game)` run on their own thread; the host thread waits up to `SETUP_TIMEOUT_S` (10 s).** A setup that blocks is reported as `"timeout: setup still running after 10 s"` and keeps running, and the next script still loads; a setup that finishes after `SETUP_WARN_S` (1 s) is `"ok"` with a warning in the log. (The index Contract says setup runs "on the host thread" and lists only `"ok"` and `"failed: ..."`; a blocking script would then stop every later script and the end of startup, which Review Focus 1 forbids. This is the one deviation, and it adds the `"timeout: ..."` status.)
+- **A script's import and `setup(game)` run on their own thread; the host thread waits up to `SETUP_TIMEOUT_S` (10 s).** A setup that blocks is reported as `"timeout: setup still running after 10 s"` and keeps running, and the next script still loads; a setup that finishes after `SETUP_WARN_S` (1 s) is `"ok"` with a warning in the log.
+- **Each script gets its own `Game`** (`connect_in_process()` on the script's thread), so a script that closes its `Game` (`with game:` in `setup`) closes no one else's.
+- **No game is loaded while `setup` runs.** In the game, `main()` runs at `kDataLoaded`, at the main menu, so a `needs_game` call in `setup` answers `NotReady`. The module docstring says so: game work belongs on a thread that `setup` starts and that first calls `game.wait_ready()`; a test pins that pattern.
 - **The switch interval stays at CPython's default (0.005 s)**: `SWITCH_INTERVAL_S = None`. Spike S9 (Task 5) measures what a CPU-bound Python thread adds to other threads' game calls and records a recommendation in `spikes/RESULTS.md`; if it says `set 0.001`, change this one constant (the owner can veto). `status()` reports the interval in use and `main()` logs it.
 - **Log files:** `python.log` in `_skyrim.config()["log_dir"]` (the folder that also holds `session.json`), rotating at 1 MiB with 3 backups, all levels from INFO; WARNING and above also go to the plugin's `SkyrimPython.log` through `_skyrim.log`. There is no console in the game, so stdout and stderr are replaced by line-buffered writers into the log.
-- **A disabled bridge writes an inactive session file** (reason `bridge_enabled is false in SkyrimPython.ini`), so `skyrim.connect()` on Linux says why instead of following a stale port from an earlier run. A bridge that cannot listen is reported in `status()` and the log; the scripts still load.
+- **A disabled bridge writes an inactive session file** (reason `bridge_enabled is false in SkyrimPython.ini`), so `skyrim.connect()` on Linux says why instead of following a stale port from an earlier run. A bridge that cannot start is reported in `status()` and the log, and the session file says why (`serve` writes `could not listen ...` itself on an `OSError`; for any other failure, such as a malformed `fixed_token`, `_host` writes `the bridge could not start: ...`); the scripts still load.
+- **`sys.stdout` and `sys.stderr` are `io.TextIOBase` writers** (`encoding`, `writable()`), and each thread keeps its own partial line, because `print()` writes the text and the newline separately.
 
 **Files:**
 - Create: `python/src/skyrim/_host.py`, `python/tests/test_host.py`, `python/tests/test_real_module.py` (Step 6: the package against the real `_skyrim` from Task 19)
@@ -19,7 +22,7 @@
 - Consumes: the `_skyrim` API from the index Contracts (`config`, `state`, `log`, plus what `connect_in_process` and `serve` use), Task 23 (`skyrim.bridge.serve`), Task 22 (`skyrim.discovery.write_inactive_session_file`), Task 21 (`skyrim.inprocess.connect_in_process`), and in the tests the `fake` fixture (`FakeSkyrim` with `config_overrides`, `epoch`, `logs`, `requests`), `support.wait_until`, `connect_remote`, `find_session`.
 - Produces (`skyrim._host`):
   - `main() -> None`: never raises; on a failure before logging is set up it reports the traceback through `_skyrim.log("error", ...)`.
-  - `load_scripts(game, scripts_dir) -> dict[str, str]`: every `<name>.py` and `<name>/__init__.py` in name order (names starting with `_` or `.` skipped); name → `"ok"`, `"failed: <ExceptionType>: <message>"`, `"failed: no setup(game) function"` or `"timeout: setup still running after <n> s"`. Appends the folder to `sys.path` if it is missing (in the game it is already on the search path), so a script's name must not clash with a standard-library or site-packages module.
+  - `load_scripts(game, scripts_dir) -> dict[str, str]`: every `<name>.py` and `<name>/__init__.py` in name order (names starting with `_` or `.` skipped); name → `"ok"`, `"failed: <ExceptionType>: <message>"`, `"failed: no setup(game) function"` or `"timeout: setup still running after <n> s"`. Each script's `setup` gets a `Game` of its own; `game` is the host's, kept for `status` and `reload`. Appends the folder to `sys.path` if it is missing (in the game it is already on the search path), so a script's name must not clash with a standard-library or site-packages module.
   - `reload(name) -> str`: `teardown()` if the script has one (same timeout; a failing teardown is logged and the reload goes on), drops `name` and `name.*` from `sys.modules`, re-imports and calls `setup(game)`; returns the new status, or `"failed: no scripts have been loaded yet"` / `"failed: no script named ..."`. Best effort (spec 4.10).
   - `status() -> dict`: `scripts`, `bridge` (`"not started"`, `"disabled"`, `"listening on 127.0.0.1:<port>"` or `"failed: <why>"`), `bridge_port`, `bridge_connections`, `switch_interval_s`, `log_file`, `python`. Plain data.
   - Module constants: `SETUP_WARN_S = 1.0`, `SETUP_TIMEOUT_S = 10.0`, `SWITCH_INTERVAL_S = None`, `LOG_FILE_NAME = "python.log"`, `LOG_MAX_BYTES`, `LOG_BACKUPS`. `_reset()` is for tests only (closes the bridge, removes the log handlers, forgets everything).
@@ -29,6 +32,7 @@
 `python/tests/test_host.py`:
 ```python
 """skyrim._host against the fake _skyrim: logging, the script loader, reload, and the bridge it starts."""
+import io
 import json
 import socket
 import sys
@@ -40,7 +44,7 @@ import pytest
 
 from support import wait_until
 from skyrim import errors
-from skyrim.discovery import find_session
+from skyrim.discovery import Session, find_session, write_session_file
 from skyrim.remote import connect_remote
 
 
@@ -122,6 +126,34 @@ def test_a_blocking_setup_times_out_and_main_still_returns(host, fake, tmp_path)
     assert st["t24_b_after"] == "ok"
 
 
+def test_each_script_gets_its_own_game(host, fake, tmp_path):
+    script(tmp_path, "t24_a_closes", "def setup(game):\n    with game:\n        pass\n")  # closes its Game
+    script(tmp_path, "t24_b_calls", ECHO_SETUP)
+    host.main()
+    assert host.status()["scripts"] == {"t24_a_closes": "ok", "t24_b_calls": "ok"}
+    assert echoes(fake) == ["t24_b_calls"]
+
+
+def test_setup_runs_before_a_game_is_loaded_so_game_work_waits_on_a_thread(host, fake, tmp_path):
+    # In the game, main() runs at the main menu: a needs_game call in setup would be NotReady.
+    script(tmp_path, "t24_waits", """
+    import threading
+
+    def setup(game):
+        def work():
+            game.wait_ready(timeout=10)
+            game.call("Fake", "Echo", "after the load")
+
+        threading.Thread(target=work, daemon=True).start()
+    """)
+    fake._fake_set_not_ready("no_game")
+    host.main()
+    assert host.status()["scripts"] == {"t24_waits": "ok"}
+    assert echoes(fake) == []
+    fake._fake_set_not_ready(None)
+    wait_until(lambda: echoes(fake) == ["after the load"], what="the script's call after the game is ready")
+
+
 def test_a_slow_setup_is_ok_but_logged(host, tmp_path):
     script(tmp_path, "t24_slow", "import time\n\ndef setup(game):\n    time.sleep(0.3)\n")
     host.main()
@@ -192,6 +224,15 @@ def test_a_bridge_that_cannot_listen_is_reported_and_scripts_still_load(host, fa
         find_session(tmp_path / "session.json", env={})
 
 
+def test_a_bridge_that_cannot_start_replaces_a_stale_session_file(host, fake, tmp_path):
+    write_session_file(tmp_path / "session.json", Session("127.0.0.1", 45977, "ab" * 16, 1, "0.0.0-fake"))  # last run
+    fake.config_overrides.update({"bridge_enabled": True, "port": 0, "fixed_token": "not a token"})
+    host.main()
+    assert host.status()["bridge"].startswith("failed:")
+    with pytest.raises(errors.NotRunning, match="could not start"):
+        find_session(tmp_path / "session.json", env={})
+
+
 def test_main_never_raises(host, fake):
     fake.config = lambda: "this is not json"
     assert host.main() is None
@@ -214,6 +255,29 @@ def test_print_and_uncaught_thread_exceptions_go_to_the_log(host, tmp_path):
     assert "uncaught exception in thread t24-thread" in text
 
 
+def test_stdout_is_a_text_stream_and_threads_keep_their_partial_lines(host, tmp_path):
+    host.main()
+    out = sys.stdout
+    assert isinstance(out, io.TextIOBase) and out.writable() and out.encoding == "utf-8"
+    half_written, go_on = threading.Event(), threading.Event()
+
+    def writer():
+        out.write("from A, ")  # print() writes the text and the newline separately
+        half_written.set()
+        go_on.wait(5)
+        out.write("end of A\n")
+
+    t = threading.Thread(target=writer)
+    t.start()
+    half_written.wait(5)
+    out.write("from B\n")
+    go_on.set()
+    t.join()
+    text = log_text(tmp_path)
+    assert "from A, end of A" in text and "from B" in text
+    assert "from A, from B" not in text
+
+
 def test_the_switch_interval_is_cpythons_default_unless_s9_says_otherwise(host):
     host.main()
     assert host.SWITCH_INTERVAL_S is None
@@ -229,7 +293,7 @@ def test_status_names_the_log_file(host, tmp_path):
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `cd python && uv run --python 3.14 pytest -q tests/test_host.py`
-Expected: FAIL with `14 errors`, each `ImportError: cannot import name '_host' from 'skyrim'` (the `host` fixture imports it).
+Expected: FAIL with `18 errors`, each `ImportError: cannot import name '_host' from 'skyrim'` (the `host` fixture imports it).
 
 - [ ] **Step 3: Implement the host module**
 
@@ -249,9 +313,15 @@ in name order (names starting with "_" or "." are skipped), with `setup(game)` a
 `teardown()`. Each import + setup runs on its own thread while the host thread waits up to SETUP_TIMEOUT_S:
 a script whose setup blocks is reported as "timeout: ..." and keeps running, and the next script still
 loads. setup should return quickly (a setup over SETUP_WARN_S is logged) and start a thread for long work.
+Each script gets its own Game, so a script that closes its Game (`with game:` in setup) does not close
+anyone else's.
+No game is loaded while setup runs: in the game, main() runs when the data has loaded, at the main menu,
+so a needs_game call made in setup answers NotReady. Game work belongs on a thread that setup starts and
+that first calls game.wait_ready().
 A script name must not clash with a standard-library or site-packages module: the scripts folder comes
 after them on sys.path."""
 import importlib
+import io
 import json
 import logging
 import logging.handlers
@@ -300,28 +370,38 @@ class _PluginLogHandler(logging.Handler):
             pass
 
 
-class _StreamToLog:
+class _StreamToLog(io.TextIOBase):
     """sys.stdout / sys.stderr replacement: whole lines go to a logger. In the game there is no console,
-    so without this print() would go nowhere."""
+    so without this print() would go nowhere. A text stream (encoding, writable()) for libraries that
+    inspect sys.stdout. Each thread keeps its own partial line, so print() calls from two threads (which
+    write the text and the newline separately) never mix."""
+
+    encoding = "utf-8"
+    errors = "strict"
 
     def __init__(self, logger: logging.Logger, level: int):
+        super().__init__()
         self._logger, self._level = logger, level
-        self._buf = ""
-        self._busy = threading.local()
+        self._local = threading.local()  # .buf: this thread's partial line; .busy: inside our own write
 
     def write(self, text) -> int:
-        if getattr(self._busy, "on", False):  # logging reporting its own error to stderr: do not recurse
+        local = self._local
+        if getattr(local, "busy", False):  # logging reporting its own error to stderr: do not recurse
             return len(text)
-        self._busy.on = True
+        local.busy = True
         try:
-            self._buf += str(text)
-            while "\n" in self._buf:
-                line, self._buf = self._buf.split("\n", 1)
+            buf = getattr(local, "buf", "") + str(text)
+            while "\n" in buf:
+                line, buf = buf.split("\n", 1)
                 if line:
                     self._logger.log(self._level, line)
+            local.buf = buf
         finally:
-            self._busy.on = False
+            local.busy = False
         return len(text)
+
+    def writable(self) -> bool:
+        return True
 
     def flush(self) -> None:
         pass
@@ -397,7 +477,9 @@ def _run_with_timeout(fn, thread_name: str, timeout: float) -> tuple[bool, str |
     return True, box.get("error"), box.get("traceback")
 
 
-def _load_one(name: str, game) -> str:
+def _load_one(name: str) -> str:
+    from .inprocess import connect_in_process
+
     holder: dict = {}
 
     def run():
@@ -407,7 +489,7 @@ def _load_one(name: str, game) -> str:
         if not callable(setup):
             holder["missing"] = True
             return
-        setup(game)
+        setup(connect_in_process())  # the script's own Game over _skyrim: closing it closes no one else's
 
     t0 = time.monotonic()
     finished, error, tb = _run_with_timeout(run, f"script:{name}", SETUP_TIMEOUT_S)
@@ -436,8 +518,9 @@ def _load_one(name: str, game) -> str:
 
 
 def load_scripts(game, scripts_dir) -> dict[str, str]:
-    """Import every script in `scripts_dir` and call its setup(game). Returns name -> "ok", "failed: <why>"
-    or "timeout: <why>". A failing script never stops the others."""
+    """Import every script in `scripts_dir` and call its setup() with a Game of its own. Returns name -> "ok",
+    "failed: <why>" or "timeout: <why>". A failing script never stops the others. `game` is the host's own
+    Game, kept for status and reload."""
     folder = pathlib.Path(scripts_dir)
     with _LOCK:
         _STATE["game"] = game
@@ -447,7 +530,7 @@ def load_scripts(game, scripts_dir) -> dict[str, str]:
         return {}
     if str(folder) not in sys.path:
         sys.path.append(str(folder))  # in the game it is already on the search path (PyConfig)
-    return {name: _load_one(name, game) for name in _script_names(folder)}
+    return {name: _load_one(name) for name in _script_names(folder)}
 
 
 def reload(name: str) -> str:
@@ -472,7 +555,7 @@ def reload(name: str) -> str:
         del sys.modules[key]
     importlib.invalidate_caches()
     log.info("script %s: reloading", name)
-    return _load_one(name, game)
+    return _load_one(name)
 
 
 # -- the bridge ------------------------------------------------------------------------------------------
@@ -503,6 +586,9 @@ def _start_bridge(module, cfg: dict) -> None:
         log.error("bridge: could not start: %s", e)
         with _LOCK:
             _STATE["bridge_status"] = f"failed: {e}"
+        if session_file and not isinstance(e, OSError):  # serve() writes its own on OSError ("could not listen")
+            write_inactive_session_file(session_file, f"the bridge could not start: {e}",
+                                        pid=os.getpid(), plugin_version=cfg.get("plugin_version"))
         return
     with _LOCK:
         _STATE["bridge"] = bridge
@@ -581,11 +667,11 @@ def _reset() -> None:
 - [ ] **Step 4: Run to verify they pass, on both Python versions**
 
 Run: `cd python && uv run --python 3.12 pytest -q && uv run --python 3.14 pytest -q`
-Expected: `327 passed` twice, each in about 10 s (Task 23's 313 plus this task's 14). The blocking-setup test leaves a daemon thread sleeping for 3 s after it ends; that is intended (it shows main() returning while a script is still stuck).
+Expected: `337 passed` twice, each in about 10 s (Task 23's 319 plus this task's 18). The blocking-setup test leaves a daemon thread sleeping for 3 s after it ends; that is intended (it shows main() returning while a script is still stuck).
 
 Run the host, bridge and remote tests together five times, to catch races between them:
 `for i in 1 2 3 4 5; do uv run --python 3.14 pytest -q tests/test_bridge.py tests/test_host.py tests/test_remote.py; done`
-Expected: `90 passed` five times.
+Expected: `97 passed` five times.
 
 - [ ] **Step 5: Run the drift check**
 
@@ -594,7 +680,7 @@ Expected: `gen_protocol: 3 generated files are up to date`.
 
 - [ ] **Step 6: Cross-check the whole package against the real `_skyrim`**
 
-Every Python test so far runs against `fake_skyrim`, a Python copy of the Dispatcher rules. This test runs the in-process transport, `skyrim.bridge` and `skyrim.remote` against the real module built in Task 19 (the C++ `Dispatcher` over `FakeBackend`), so the two cannot drift apart silently. It skips unless `SKYRIM_REAL_MODULE_DIR` is set.
+Every Python test so far runs against `fake_skyrim`, a Python copy of the Dispatcher rules. This test runs the in-process transport, `skyrim.bridge` and `skyrim.remote` against the real module built in Task 19 (the C++ `Dispatcher` over `FakeBackend`), so the two cannot drift apart silently. It skips unless `SKYRIM_REAL_MODULE_DIR` is set. The GIL test makes the call on a worker thread and checks, while that call is still in flight, that this thread saw it in flight and that a spinner thread advanced. (Checked while writing this plan: with the `release()` guard removed from `_skyrim.call` it fails, because the in-flight wait times out; the earlier version, which counted spins around the whole call, still passed.) The `real` fixture restores `SKYRIM_FAKE_DIR` and `sys.modules["_skyrim"]` when the file is done, so later test files see the fake again.
 
 `python/tests/test_real_module.py`:
 ```python
@@ -613,6 +699,7 @@ import time
 
 import pytest
 
+from support import wait_until
 from skyrim import _framing, bridge, errors
 from skyrim.inprocess import connect_in_process
 from skyrim.remote import connect_remote
@@ -624,15 +711,24 @@ TOKEN = "ab" * 16
 
 @pytest.fixture(scope="module")
 def real(tmp_path_factory):
-    os.environ["SKYRIM_FAKE_DIR"] = str(tmp_path_factory.mktemp("real"))
-    sys.path.insert(0, MODULE_DIR)
-    try:
-        mod = importlib.import_module("_skyrim")
-    finally:
-        sys.path.remove(MODULE_DIR)
-    assert mod.BACKEND == "fake"
-    yield mod
-    mod._fake_set_not_ready(None)
+    """The real module, imported for this file only: SKYRIM_FAKE_DIR and sys.modules["_skyrim"] are restored
+    afterwards, so later tests see the fake again."""
+    before = sys.modules.pop("_skyrim", None)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("SKYRIM_FAKE_DIR", str(tmp_path_factory.mktemp("real")))
+        sys.path.insert(0, MODULE_DIR)
+        try:
+            mod = importlib.import_module("_skyrim")
+        finally:
+            sys.path.remove(MODULE_DIR)
+        try:
+            assert mod.BACKEND == "fake"
+            yield mod
+            mod._fake_set_not_ready(None)
+        finally:
+            sys.modules.pop("_skyrim", None)
+            if before is not None:
+                sys.modules["_skyrim"] = before
 
 
 @pytest.fixture
@@ -688,25 +784,37 @@ def test_a_load_fails_calls_in_flight(game, real):
 
     t = threading.Thread(target=slow)
     t.start()
-    time.sleep(0.2)
+    wait_until(lambda: real.in_flight() == 1, what="the call to be in flight")
     real._fake_bump_loads()
     t.join(5)
     assert isinstance(out.get("e"), errors.NotReady)
+    assert out["e"].detail["dispatched"] is True
 
 
-def test_the_gil_is_released_while_waiting(game):
+def test_the_gil_is_released_while_waiting(game, real):
+    # The call runs on a worker. This thread can only see it in flight, and the spinner can only advance, while
+    # the worker is inside _skyrim.call if call released the GIL; before and after the call they always could.
     count, stop = [0], [False]
 
     def spin():
         while not stop[0]:
             count[0] += 1
 
-    t = threading.Thread(target=spin)
-    t.start()
-    game.call("Fake", "Sleep", 300)
-    stop[0] = True
-    t.join()
-    assert count[0] > 1000
+    caller = threading.Thread(target=lambda: game.call("Fake", "Sleep", 1000))
+    spinner = threading.Thread(target=spin)
+    spinner.start()
+    caller.start()
+    try:
+        wait_until(lambda: real.in_flight() == 1, what="the call to be in flight")
+        before = count[0]
+        time.sleep(0.1)
+        advanced = count[0] - before
+        assert real.in_flight() == 1  # still inside the call
+        assert advanced > 0
+    finally:
+        caller.join(5)
+        stop[0] = True
+        spinner.join()
 
 
 def test_bridge_over_the_real_module(real):

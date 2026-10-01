@@ -18,7 +18,7 @@ Adapted from: branch `plan-out-of-process`, task 13 (`task-13-python-package-bas
 - Produces (names as in the index Contracts):
   - `skyrim._framing`: `MAX_FRAME: int` (the generated `MAX_FRAME_BYTES`); `dumps(obj: dict) -> str` (the JSON text of one message, compact, non-ASCII kept; raises `EncodeError` for a body over `MAX_FRAME` bytes, text that is not valid Unicode, or anything JSON cannot hold, including NaN); `encode(obj: dict) -> bytes` (the 4-byte little-endian length plus the `dumps` text as UTF-8; same failures); `read_frame(sock, deadline: float | None = None) -> dict`. `deadline` is a `time.monotonic()` value that bounds the WHOLE frame read (header and body, however many `recv` calls), and `TimeoutError` is raised when it passes. With no deadline the call waits as long as it takes; a socket timeout is then only a wake-up tick and is retried without losing the bytes already read. Raises `ConnectionLost` on EOF, `ProtocolViolation` on an oversized header, non-UTF-8, bad JSON or a non-object payload.
   - `skyrim.errors`: `SkyrimPythonError`; `ConnectionLost`, `NotRunning`, `CallTimeout`, `ProtocolViolation`; `EncodeError` (also a `ValueError`: the request cannot be sent, nothing was sent); `HandshakeError(code, message)` with `Unauthorized`, `ProtocolMismatch`; `RemoteError(code, message, detail)` with one subclass per code: `NotReady`, `Busy`, `BadRequest`, `UnknownFunction`, `TypeMismatch`, `StaleReference`, `NotFound`, `Timeout`, `VmError`, `Unsupported`, `InternalError`. **The classes are written out in `errors.py` (so `errors.NotReady`, pickling and type checkers work), but the code-to-class mapping is the generated `REMOTE_EXCEPTIONS` / `HANDSHAKE_EXCEPTIONS` data**: at import, `errors.py` looks each named class up, sets its `code` from the table and builds the registries `_REMOTE` and `_HANDSHAKE`; a code in `protocol.json` whose class is missing is an `ImportError` naming it, and `test_generated.py` fails if a class exists that the table does not list. `remote_error_from_wire(err) -> RemoteError` (accepts any JSON value: a malformed error object gives an `InternalError` whose message says so); `handshake_error_from_wire(msg: dict) -> HandshakeError`. Every exception can be pickled and copied (`__reduce__`).
-  - `skyrim.values`: `INT_MIN`, `INT_MAX`, `FLOAT_MAX`, `MAX_ARRAY_ITEMS`, `ALIAS_TYPES`, `ELEM_TYPES` are the generated constants re-exported; frozen dataclasses `Fingerprint(base, type)`, `Form(form_id=None, form_key=None, type=None, epoch=None, fingerprint=None)`, `Alias(quest: Form, alias_id: int, alias_type="ReferenceAlias", epoch=None)`, `PArray(elem: str, items: tuple)`; `to_wire(v) -> Any`; `from_wire(j) -> Any` (arrays decode to plain `list`; a malformed form, alias or array from the server raises `ProtocolViolation`). `Form` and `Alias` validate on construction (`ValueError`): `form_id` in `0..0xFFFFFFFF`; when both `form_id` and `form_key` are given they must agree on the local id (24 bits, 12 for a `0xFE` light form) and a `0xFF` runtime id has no key; `alias_id` in `0..INT_MAX`; `alias_type` is `ReferenceAlias` or `LocationAlias`. Float rule: a float with magnitude above `3.4028235e38`, or non-finite, is `TypeMismatch`. Int rule: a scalar Python `int` is always a Papyrus Int and is range-checked (`TypeMismatch`), even where the Papyrus parameter is a Float, until the M3 signature table can tell the two apart; pass `3.0`, not `3`. Inside a list that infers as Float (or a `PArray("Float", ...)`), ints are converted with `float()` and are not range-checked. Array rule: a list or `PArray` with more than `MAX_ARRAY_ITEMS` (128) items is `TypeMismatch`, raised by `to_wire` before anything is sent.
+  - `skyrim.values`: `INT_MIN`, `INT_MAX`, `FLOAT_MAX`, `MAX_ARRAY_ITEMS`, `ALIAS_TYPES`, `ELEM_TYPES` are the generated constants re-exported; frozen dataclasses `Fingerprint(base, type)`, `Form(form_id=None, form_key=None, type=None, epoch=None, fingerprint=None)`, `Alias(quest: Form, alias_id: int, alias_type="ReferenceAlias", epoch=None)`, `PArray(elem: str, items: tuple)`; `to_wire(v) -> Any`; `from_wire(j) -> Any` (arrays decode to plain `list`; a malformed form, alias or array from the server raises `ProtocolViolation`, including a `Bool`, `Int`, `Float` or `String` array with an item of another JSON type: a `bool` is not an `Int`, and a `Float` item may be an int or a float). `Form` and `Alias` validate on construction (`ValueError`): `form_id` in `0..0xFFFFFFFF`; when both `form_id` and `form_key` are given they must agree on the local id (24 bits, 12 for a `0xFE` light form) and a `0xFF` runtime id has no key; `alias_id` in `0..INT_MAX`; `alias_type` is `ReferenceAlias` or `LocationAlias`. Float rule: a float with magnitude above `3.4028235e38`, or non-finite, is `TypeMismatch`. Int rule: a scalar Python `int` is always a Papyrus Int and is range-checked (`TypeMismatch`), even where the Papyrus parameter is a Float, until the M3 signature table can tell the two apart; pass `3.0`, not `3`. Inside a list that infers as Float (or a `PArray("Float", ...)`), ints are converted with `float()` and are not range-checked. Array rule: a list or `PArray` with more than `MAX_ARRAY_ITEMS` (128) items is `TypeMismatch`, raised by `to_wire` before anything is sent.
   - `skyrim.refs`: `parse_form_key(text) -> tuple[str, int]` (raises `ValueError`; whole-string match, so a trailing newline, an empty or space-padded plugin name, control characters and non-ASCII look-alikes are all rejected, and an `.esl` local id is at most `0xFFF`, as in `PROTOCOL.md`), `format_form_key(plugin, local_id) -> str`, `is_runtime_form_id(int) -> bool`, `is_light_form_id(int) -> bool`
   - `python/tests/support.py` (plain module; pytest's default import mode puts `tests/` on `sys.path`): `FIXTURES: pathlib.Path`, `load_fixture(name) -> dict`. Task 21 adds `wait_until`; Task 22 appends the socket test helpers.
 
@@ -359,7 +359,9 @@ def test_form_needs_id_or_key():
 
 def test_malformed_server_values_are_protocol_violations():
     for bad in ({"kind": "form"}, {"kind": "alias", "alias_id": 0}, {"kind": "alias", "quest": {"kind": "form"}, "alias_id": 0},
-                {"array": "Int", "items": 5}, {"kind": "form", "form_id": 1, "fingerprint": {"base": "x"}}):
+                {"array": "Int", "items": 5}, {"kind": "form", "form_id": 1, "fingerprint": {"base": "x"}},
+                {"array": "Float", "items": ["1.5", True]}, {"array": "Int", "items": [1, True]},
+                {"array": "String", "items": ["a", 1]}, {"array": "Bool", "items": [0]}):
         with pytest.raises(errors.ProtocolViolation):
             from_wire(bad)
 
@@ -933,6 +935,9 @@ FLOAT_MAX = _g.FLOAT_MAX_TEXT  # Papyrus Float is 32-bit; the protocol rejects a
 ALIAS_TYPES = _g.ALIAS_TYPES
 ELEM_TYPES = _g.ELEM_TYPES
 MAX_ARRAY_ITEMS = _g.MAX_ARRAY_ITEMS  # the Papyrus VM's array limit; a longer array is type_mismatch
+# What an item of a primitive array from the server must be (bool is not an Int; a Float may arrive as an int).
+_WIRE_ITEM = {"Bool": lambda v: type(v) is bool, "Int": lambda v: type(v) is int,
+              "Float": lambda v: type(v) in (int, float), "String": lambda v: type(v) is str}
 
 
 @dataclass(frozen=True)
@@ -1102,6 +1107,9 @@ def from_wire(j: Any) -> Any:
         if "array" in j:
             if j["array"] not in ELEM_TYPES or not isinstance(j.get("items", []), list):
                 raise ValueError(f"bad array {j['array']!r} / items")
+            check = _WIRE_ITEM.get(j["array"])
+            if check is not None and not all(check(i) for i in j.get("items", [])):
+                raise ValueError(f"an item of a {j['array']} array has the wrong type")
             items = [from_wire(i) for i in j.get("items", [])]
             if j["array"] == "Float":
                 items = [float(i) for i in items]

@@ -6,7 +6,7 @@ Adapted from: branch `plan-out-of-process`, task 16 (`task-16-loopback-server-io
 
 > **Depends on:** Task 22 (`connect_remote`, `find_session`, `write_session_file`, `write_inactive_session_file`) and Task 21 (`fake_skyrim.py`, the `fake` fixture). Linux only: the tests run a real bridge over the fake `_skyrim` and drive it with the real remote transport, so the whole dev path is tested end to end without the game.
 
-**What the bridge is.** A Python server that runs inside the game (Task 24 starts it when `bridge_enabled` is set) and lets another process use the same API as an in-process script. It forwards each request **text unchanged** to `backend.submit` and writes each response text back unchanged in a frame, so the C++ request parser and the Dispatcher's rules (not ready, timeouts, load cancellation, the global in-flight cap) apply exactly as they do in-process. What only a socket needs is done here: the handshake and token, framing limits, a per-connection in-flight cap (`busy`), duplicate request ids on one connection (`bad_request`; `PROTOCOL.md` puts that check here), cancelling a connection's calls when it goes away, and closing a client that stops reading. Three threads per connection: a reader (handshake, then requests), a completion thread (`backend.wait_any` over that connection's tickets, 50 ms at a time, with the GIL released in the real module) and a writer (the only thread that sends after the welcome). The Dispatcher's reaper enforces each request's `timeout_ms`; the bridge never times a call out itself.
+**What the bridge is.** A Python server that runs inside the game (Task 24 starts it when `bridge_enabled` is set) and lets another process use the same API as an in-process script. It forwards each request **text unchanged** to `backend.submit` and writes each response text back unchanged in a frame, so the C++ request parser and the Dispatcher's rules (not ready, timeouts, load cancellation, the global in-flight cap) apply exactly as they do in-process. What only a socket needs is done here: the handshake and token, framing limits, a per-connection in-flight cap (`busy`), duplicate request ids on one connection (`bad_request`; `PROTOCOL.md` puts that check here), cancelling a connection's calls when it goes away, and closing a client that stops reading. Three threads per connection: a reader (handshake, then requests), a completion thread (`backend.wait_any` over that connection's tickets, 5 ms at a time while it has any, with the GIL released in the real module; a request submitted meanwhile is not in that wait's list, so a longer poll would hold every new call behind a slow one) and a writer (the only thread that sends after the welcome). The Dispatcher's reaper enforces each request's `timeout_ms`; the bridge never times a call out itself.
 
 **Files:**
 - Create: `python/src/skyrim/bridge.py`, `python/tests/test_bridge.py`
@@ -17,7 +17,7 @@ Adapted from: branch `plan-out-of-process`, task 16 (`task-16-loopback-server-io
   - `serve(backend, *, host=HOST, port=45977, token=None, session_file=None, welcome_info, max_connections=MAX_CONNECTIONS, max_inflight_per_connection=256, hello_timeout=HELLO_TIMEOUT_MS / 1000, max_queued_bytes=MAX_QUEUED_BYTES_PER_CONNECTION) -> BridgeServer`. `backend` is anything with `submit(text) -> int`, `wait_any(tickets, timeout) -> list[tuple[int, str]]` and `cancel(ticket)`. `welcome_info` is a dict, or a function returning one, with `plugin_version`, `game_version`, `runtime` and `epoch` (a function gives each client the current epoch). Port 0 picks a free port. A token is `secrets.token_hex(16)` unless given; a given token must be 32 lowercase hex characters and `host` must be a loopback address (`ValueError` otherwise). With `session_file`, the active session file is written once listening; if the bridge cannot listen, an inactive one with the reason is written and the `OSError` is raised. The last two keyword arguments exist for tests and are not in the index Contract.
   - `class BridgeServer` with `.host`, `.port`, `.token`, `.connections() -> int`, `.close()` (stop accepting, close every connection and cancel its calls, mark the session file inactive with reason `"the bridge was closed"`), context manager.
   - `check_hello(hello: dict, token: str) -> tuple[str | None, str]` (error code or `None`, and a message) and `nesting_within(text: str, max_depth: int) -> bool` (a raw-text scan; brackets inside strings do not count).
-  - Rules: the welcome is `{**welcome_info, "type": "welcome", "protocol": [1, 0], "capabilities": <op names from OPS>}`; a hello is checked for shape (`bad_request`), then the token in constant time (`unauthorized`), then the protocol major (`protocol_mismatch`), and a refused client gets `handshake_error`, a half-close and a drain of up to 0.5 s; the first frame must arrive within the hello timeout and be at most `PRE_AUTH_FRAME_BYTES`; after the welcome a frame over `MAX_FRAME_BYTES`, not UTF-8, not a JSON object or nested deeper than `MAX_JSON_DEPTH` closes that connection only; a request id already in flight on the connection is `bad_request`, more than `max_inflight_per_connection` in flight is `busy` (both answered by the bridge in the plugin's response shape, with the request's id or 0); replies waiting to be sent over `max_queued_bytes` close the connection; every socket has `TCP_NODELAY`; non-loopback peers and connections over `max_connections` are closed at accept. The bridge logs to the `skyrim.bridge` logger (Task 24 sends it to `python.log`).
+  - Rules: the welcome is `{**welcome_info, "type": "welcome", "protocol": [1, 0], "capabilities": <op names from OPS>}`; a hello is checked for shape (`bad_request`), then the token in constant time (`unauthorized`), then the protocol major (`protocol_mismatch`), and a refused client gets `handshake_error`, a half-close and a drain of up to 0.5 s; the first frame must arrive within the hello timeout and be at most `PRE_AUTH_FRAME_BYTES`; after the welcome a frame over `MAX_FRAME_BYTES`, not UTF-8, not a JSON object or nested deeper than `MAX_JSON_DEPTH` closes that connection only; a request id already in flight on the connection is `bad_request`, more than `max_inflight_per_connection` in flight is `busy` (both answered by the bridge in the plugin's response shape, with the request's id or 0); replies waiting to be sent over `max_queued_bytes` close the connection; every socket has `TCP_NODELAY`; non-loopback peers and connections over `max_connections` are closed at accept; an error from `accept()` itself (a client that reset before it was accepted, `EMFILE`) is logged and accepting goes on after 50 ms. The depth scan (`nesting_within`) is linear in the frame size (a possessive pattern), so a hostile pre-auth frame cannot hold the GIL. The bridge logs to the `skyrim.bridge` logger (Task 24 sends it to `python.log`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -227,6 +227,55 @@ def test_depth_64_is_allowed_and_brackets_in_strings_do_not_count():
     assert nesting_within('["\\"[[[[", 1]', 1)
 
 
+def test_a_hostile_hello_is_refused_at_once_and_python_keeps_running(bridge):
+    # An unterminated string of escaped quotes, under the pre-auth limit: a backtracking scan of it would hold the GIL
+    # for seconds before the token is even checked, freezing every Python thread in the game.
+    with remote(bridge) as bystander:
+        text = ('"' + '\\"' * 32000).encode()
+        s = socket.create_connection(("127.0.0.1", bridge.port), timeout=5)
+        t0 = time.monotonic()
+        s.sendall(struct.pack("<I", len(text)) + text)
+        assert closed_by_server(s)
+        assert time.monotonic() - t0 < 0.2
+        assert bystander.call("Fake", "Echo", "still here") == "still here"
+
+
+def test_a_slow_call_does_not_hold_up_the_next_ones_on_the_same_connection(bridge, fake):
+    s = raw(bridge)
+    send(s, 1, "Never", timeout_ms=10000)
+    wait_until(lambda: fake.in_flight() == 1, what="the slow call")
+    t0 = time.monotonic()
+    for i in range(2, 22):
+        send(s, i, "Echo", i)
+        assert recv(s)["id"] == i
+    assert time.monotonic() - t0 < 0.5  # 20 calls; a 50 ms poll behind the slow call would take about 1 s
+    s.close()
+
+
+def test_an_accept_error_is_logged_and_the_bridge_keeps_accepting(bridge, caplog):
+    real = bridge._lsock
+
+    class FailsOnce:  # socket objects cannot be monkeypatched, so the listener is wrapped
+        failed = False
+
+        def accept(self):
+            if not FailsOnce.failed:
+                FailsOnce.failed = True
+                raise ConnectionResetError("a client reset before it was accepted")
+            return real.accept()
+
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+    bridge._lsock = FailsOnce()
+    with remote(bridge) as g:  # served by the accept already waiting; the next accept() fails once
+        assert g.call("Fake", "Echo", 1) == 1
+    with remote(bridge, connect_timeout=2) as g:
+        assert g.call("Fake", "Echo", 2) == 2
+    assert FailsOnce.failed
+    assert "accept failed" in caplog.text
+
+
 def test_a_client_that_stops_reading_is_closed(start, fake, caplog):
     caplog.set_level(logging.INFO, logger="skyrim.bridge")
     b = start(max_queued_bytes=256 * 1024)
@@ -378,8 +427,10 @@ Rules (protocol/PROTOCOL.md, "Dev bridge transport" and "Handshake"):
 - Replies waiting to be sent above `max_queued_bytes` mean the client stopped reading: the connection closes.
 - When a connection ends, every request it still has in flight is cancelled.
 Three threads per connection: a reader (handshake, then requests), a completion thread (wait_any on the
-connection's tickets, 50 ms at a time) and a writer (the only thread that sends after the welcome). The
-Dispatcher's reaper enforces each request's timeout_ms: the bridge never times a call out itself."""
+connection's tickets, 5 ms at a time, so a request submitted meanwhile is picked up quickly even when the
+others are slow) and a writer (the only thread that sends after the welcome). The Dispatcher's reaper enforces
+each request's timeout_ms: the bridge never times a call out itself. An error from accept() (a client that
+reset before it was accepted, no descriptors left) is logged and the bridge keeps accepting."""
 import collections
 import hmac
 import ipaddress
@@ -399,10 +450,15 @@ from .discovery import Session, write_inactive_session_file, write_session_file
 log = logging.getLogger("skyrim.bridge")
 
 _U64_MAX = 2**64 - 1
-_POLL_S = 0.05  # how long the completion thread waits on its tickets per round
+_POLL_S = 0.005  # how long the completion thread waits on its tickets per round (it releases the GIL meanwhile)
+_IDLE_S = 0.05  # how long it sleeps with no tickets (a new ticket wakes it at once)
+_ACCEPT_RETRY_S = 0.05  # after a failed accept()
 _DRAIN_S = 0.5  # after a handshake_error, how long to read and discard so the error is not lost to a reset
 _TOKEN = re.compile(r"[0-9a-f]{%d}" % _g.TOKEN_LENGTH)
-_STRUCTURE = re.compile(r'"(?:[^"\\]|\\.)*"|[\[\]{}]')  # strings (skipped whole) and brackets
+# Strings (skipped whole) and brackets. Possessive, so the scan is linear: an unterminated string is consumed to the
+# end in one pass instead of being retried from every later quote (a pre-auth frame could otherwise hold the GIL
+# for seconds).
+_STRUCTURE = re.compile(r'"(?:[^"\\]++|\\.)*+"?|[\[\]{}]', re.S)
 
 
 class _Violation(Exception):
@@ -605,7 +661,7 @@ class _Conn:
             while True:
                 with self.cond:
                     while not self.closed and not self.tickets:
-                        self.cond.wait(_POLL_S)
+                        self.cond.wait(_IDLE_S)
                     if self.closed:
                         return
                     tickets = list(self.tickets)
@@ -727,8 +783,12 @@ class BridgeServer:
         while True:
             try:
                 sock, peer = self._lsock.accept()
-            except OSError:
-                return
+            except OSError as e:
+                if self._closing:
+                    return
+                log.warning("bridge: accept failed: %s; still accepting", e)
+                time.sleep(_ACCEPT_RETRY_S)
+                continue
             if self._closing:
                 sock.close()
                 return
@@ -812,11 +872,11 @@ def serve(backend, *, host: str = _g.HOST, port: int = _g.CONFIG_KEYS["port"]["d
 - [ ] **Step 4: Run to verify they pass, repeatedly**
 
 Run: `cd python && uv run --python 3.12 pytest -q && uv run --python 3.14 pytest -q`
-Expected: `313 passed` twice, each in about 9 s (Task 22's 270 plus this task's 43; the hello fixtures add one test per `invalid` and `check` entry).
+Expected: `319 passed` twice, each in about 9 s (Task 22's 273 plus this task's 46; the hello fixtures add one test per `invalid` and `check` entry).
 
 Run the bridge tests five times and once on a single CPU, to catch races:
 `for i in 1 2 3 4 5; do uv run --python 3.14 pytest -q tests/test_bridge.py; done; taskset -c 0 uv run --python 3.12 pytest -q tests/test_bridge.py`
-Expected: `43 passed` six times, each in about 1 s. No test sleeps for luck: every wait is `wait_until` with a deadline, and the stuck-reader test confirms from the log that the cap, not some other error, closed the connection.
+Expected: `46 passed` six times, each in about 1 s. No test sleeps for luck: every wait is `wait_until` with a deadline, and the stuck-reader test confirms from the log that the cap, not some other error, closed the connection.
 
 - [ ] **Step 5: Run the drift check**
 

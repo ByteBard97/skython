@@ -8,7 +8,7 @@ New in the embedded design (no counterpart on branch `plan-out-of-process`).
 
 **What this is.** `_skyrim` is the only boundary between Python and the game (spec 4.2): request text in, response text out, plus the lifecycle state, the settings and a log line. `pyglue/src/pymodule.cpp` is the one source of the module; this task builds it on Linux as a real CPython 3.14 extension over core's `FakeBackend`, and the plugin core builds the same file into `SkyrimPythonCore.dll` over the game backend (Tasks 26-27). Every function that can wait releases the GIL (`py::call_guard<py::gil_scoped_release>`): arguments are converted to C++ before the release and results back to Python after the GIL is taken again, so only C++ work runs without it. That is what lets other Python threads (the bridge, player scripts, skyrim-dm's 66-second generation) run while one thread waits for the game (Review Focus 6). C++ exceptions reach Python as Python exceptions: `std::invalid_argument` as `ValueError` (a negative or NaN timeout), wrong argument types as `TypeError`, anything else as `RuntimeError`.
 
-`call(request, timeout)` is `submit` plus `wait`. Normally the Dispatcher's own deadline (the request's `timeout_ms`) ends a slow call first, with a `timeout` response; if the caller's `timeout` (seconds) runs out before that, `call` cancels the ticket and returns a `timeout` response for the same id with `detail.late_cancel = true`, so a caller always sees the `Timeout` class for an expired call, never `internal`.
+`call(request, timeout)` is `submit` plus `wait`. Normally the Dispatcher's own deadline (the request's `timeout_ms`) ends a slow call first, with a `timeout` response; if the caller's `timeout` (seconds) runs out before that, `call` cancels the ticket with `Dispatcher::CancelOrTake` (so a result that landed in the instant between the end of the wait and the cancel is returned, not thrown away) and otherwise returns a `timeout` response for the same id with `detail` `paused`, `menus` and `late_cancel = true` and the message `no response within <seconds, %g> s; the call was cancelled`, so a caller always sees the `Timeout` class for an expired call, never `internal`.
 
 **The fake build** (`pyglue/linux/fake_module.cpp`) adds `_fake_set_not_ready(reason | None)`, `_fake_bump_loads()` and `_fake_set_paused(flag)`, and reads two environment variables: `SKYRIM_FAKE_DIR` (the folder under which `config()` puts `python_dir`, `scripts_dir`, `site_packages_dir`, `log_dir` = `<dir>/logs` and `session_file` = `<dir>/logs/session.json`; default `<temp>/skyrim-fake`), and `SKYRIM_FAKE_INI` (ini text parsed like `SkyrimPython.ini`; `config()` reads it on every call, so a test can set `bridge_enabled = true`; the dispatcher reads `default_timeout_ms` and `max_inflight_total` from it **once, at import**, so the busy-cap test sets it for a fresh interpreter). `log(level, message)` appends `<level> <message>` to `<log_dir>/plugin.log`. The fake's backend and dispatcher are deliberately never destroyed (their threads live until the process exits), as in the game, which never finalises Python.
 
@@ -19,7 +19,7 @@ New in the embedded design (no counterpart on branch `plan-out-of-process`).
 - The build directory `pyglue/build/` is ignored by the `build/` rule in `.gitignore` (Task 0).
 
 **Interfaces:**
-- Consumes: `spy::Dispatcher` (including `BaseState()`), `spy::FakeBackend`, `spy::Ticket` (Task 18); `spy::parse_config`, `spy::config_to_json`, `spy::Config`, `spy::peek_request_id`, `spy::make_error`, `spy::dump_json` (Task 16); `spy::kProtocolMajor/Minor` (Task 12).
+- Consumes: `spy::Dispatcher` (including `BaseState()` and `CancelOrTake()`), `spy::FakeBackend`, `spy::Ticket` (Task 18); `spy::parse_config`, `spy::config_to_json`, `spy::Config`, `spy::peek_request_id`, `spy::make_error`, `spy::dump_json` (Task 16); `spy::kProtocolMajor/Minor` (Task 12).
 - Produces:
   - `pyglue/include/spy/pymodule.h`: `struct spy::ModuleHost { Dispatcher* dispatcher = nullptr; const char* backend = "game"; std::function<std::string()> config_json; std::function<void(const std::string&, const std::string&)> log; FakeBackend* fake = nullptr; }`, `void spy::InstallModuleHost(ModuleHost)` (call before the module is imported), `void spy::DefineModule(pybind11::module_&)`. Task 26 compiles `pymodule.cpp` into the plugin core with `PYBIND11_MODULE(_skyrim, m) { spy::DefineModule(m); }` and registers `PyInit__skyrim` with `PyImport_AppendInittab`.
   - The Python-visible `_skyrim` API exactly as in the index Contracts: `BACKEND`, `PROTOCOL`, `submit`, `wait`, `wait_any`, `cancel`, `call`, `state`, `config`, `log`, `in_flight`; fake build only `_fake_set_not_ready`, `_fake_bump_loads`, `_fake_set_paused`.
@@ -151,6 +151,7 @@ def test_call_whose_wait_expires_is_a_timeout_with_late_cancel():
     assert 0.15 < time.monotonic() - start < 2.0
     assert r["id"] == 7
     assert code(r) == "timeout"
+    assert "no response within 0.2 s" in r["error"]["message"]
     assert r["error"]["detail"]["late_cancel"] is True
     assert {"paused", "menus"} <= set(r["error"]["detail"])
     assert _skyrim.in_flight() == before
@@ -189,6 +190,7 @@ def test_a_load_starting_ends_calls_in_flight():
     _skyrim._fake_bump_loads()
     r = response(_skyrim.wait(t, 2.0))
     assert code(r) == "not_ready" and r["error"]["detail"]["reason"] == "loading"
+    assert r["error"]["detail"]["dispatched"] is True  # it had reached the backend: not safe to resubmit
 
 
 def test_backend_exception_is_internal_and_errors_keep_their_codes():
@@ -259,7 +261,7 @@ def test_busy_cap_from_the_fake_ini():
     assert out.stdout.strip() == "busy"
 ```
 
-`test_threads.py` holds the two tests that matter most: if `call` kept the GIL while it waits, the counting loop in the first test could not run during the 500 ms sleep (checked while writing this plan: removing the `release()` guard from `call` makes that test fail with `count` near zero).
+`test_threads.py` holds the tests that matter most. The first runs once for each function that waits (`call`, `wait`, `wait_any`): if that function kept the GIL while it waits, the counting loop could not run during the 500 ms sleep. (Checked while writing this plan: removing the `release()` guard from any one of the three makes exactly its own case fail, with `count` near zero.) `wait_any` matters as much as `call`: the bridge's completion thread sits in it for the life of every connection (Task 23). The last test is the bridge's other pattern: one thread polls `wait_any` while another cancels the same tickets.
 
 `pyglue/tests/test_threads.py`:
 ```python
@@ -267,16 +269,27 @@ def test_busy_cap_from_the_fake_ini():
 import threading
 import time
 
+import pytest
+
 import _skyrim
 from conftest import request, response
 
+# The three functions that wait for the game. The bridge's completion thread sits in wait_any for the life of every
+# connection, so each one must release the GIL, not only call.
+WAITERS = {
+    "call": lambda text: _skyrim.call(text, 5.0),
+    "wait": lambda text: _skyrim.wait(_skyrim.submit(text), 5.0),
+    "wait_any": lambda text: _skyrim.wait_any([_skyrim.submit(text)], 5.0)[0][1],
+}
 
-def test_other_python_threads_run_while_a_call_waits():
+
+@pytest.mark.parametrize("waiter", list(WAITERS))
+def test_other_python_threads_run_while_a_call_waits(waiter):
     done = threading.Event()
     result = {}
 
     def caller():
-        result["r"] = response(_skyrim.call(request(1, "Sleep", 500), 5.0))
+        result["r"] = response(WAITERS[waiter](request(1, "Sleep", 500)))
         done.set()
 
     t = threading.Thread(target=caller)
@@ -290,9 +303,36 @@ def test_other_python_threads_run_while_a_call_waits():
     t.join()
     assert result["r"]["result"] == 500
     assert elapsed > 0.3
-    # If call() held the GIL for the 500 ms, this loop could not have run during it. A free loop does millions of
+    # If the waiter held the GIL for the 500 ms, this loop could not have run during it. A free loop does millions of
     # iterations in that time; the bound is far below that to stay robust on a slow or busy machine.
     assert count > 10_000, count
+
+
+def test_cancel_while_another_thread_waits_on_the_same_tickets():
+    # The bridge's pattern: a completion thread polls wait_any while a disconnect cancels the same tickets.
+    before = _skyrim.in_flight()
+    tickets = [_skyrim.submit(request(100 + i, "Sleep", 100)) for i in range(50)]
+    cancelled = threading.Event()
+    problems = []
+
+    def poller():
+        try:
+            while True:
+                got = _skyrim.wait_any(tickets, 0.05)
+                if cancelled.is_set() and not got:
+                    return
+        except Exception as e:  # noqa: BLE001 - report everything from the thread
+            problems.append(repr(e))
+
+    t = threading.Thread(target=poller)
+    t.start()
+    for ticket in tickets:
+        _skyrim.cancel(ticket)
+    cancelled.set()
+    t.join(1.0)
+    assert not t.is_alive()
+    assert problems == []
+    assert _skyrim.in_flight() == before
 
 
 def test_sixteen_threads_two_hundred_calls_each():
@@ -358,6 +398,7 @@ void DefineModule(pybind11::module_& m);
 #include "spy/pymodule.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -401,8 +442,10 @@ std::string LateCancelReply(std::string_view request, double seconds)
         detail["menus"] = json::array();
     }
     detail["late_cancel"] = true;
+    char secs[32];
+    std::snprintf(secs, sizeof secs, "%g", seconds);  // 0.2, not 0.200000
     return dump_json(make_error(peek_request_id(request).value_or(0), ErrorCode::timeout,
-                                "no response within " + std::to_string(seconds) + " s; the call was cancelled", std::move(detail)));
+                                std::string("no response within ") + secs + " s; the call was cancelled", std::move(detail)));
 }
 }
 
@@ -438,12 +481,13 @@ void DefineModule(py::module_& m)
               Dispatcher& d = Disp();
               const Ticket t = d.Submit(request);
               if (auto text = d.Wait(t, ms)) return std::move(*text);
-              d.Cancel(t);
+              // A result that landed between the end of Wait and now is returned, not thrown away.
+              if (auto text = d.CancelOrTake(t)) return std::move(*text);
               return LateCancelReply(request, timeout);
           },
           py::arg("request"), py::arg("timeout"), release(),
-          "submit + wait. If timeout seconds pass first, the call is cancelled and a timeout response with "
-          "detail.late_cancel = true is returned.");
+          "submit + wait. If timeout seconds pass first, the call is cancelled (unless its result has just arrived) and a "
+          "timeout response with detail.late_cancel = true is returned.");
     m.def("state", [] { return dump_json(Disp().BaseState()); }, release(), "The lifecycle state as JSON text; never blocks.");
     m.def("config", [] { return Host().config_json ? Host().config_json() : std::string("{}"); }, release(),
           "The plugin's settings and paths as JSON text.");
@@ -570,7 +614,7 @@ Expected: `-- Found Python: .../cpython-3.14.../bin/python3.14 (found suitable v
 - [ ] **Step 6: Run to verify it passes**
 
 Run: `uv run --no-project --python 3.14 --with pytest python -m pytest pyglue/tests -q 2>&1 | tail -1`
-Expected: PASS, `21 passed in 1.3s` (about; the sleeps in the tests add up to a little over a second). Run it three times: the result must not change.
+Expected: PASS, `24 passed in 2.3s` (about; the sleeps in the tests add up to about two seconds). Run it three times: the result must not change.
 
 Run: `cmake -S pyglue/linux -B pyglue/build/warn -DCMAKE_BUILD_TYPE=Debug -DPython_EXECUTABLE="$(uv python find 3.14)" -DCMAKE_CXX_FLAGS="-Wall -Wextra" >/dev/null && cmake --build pyglue/build/warn -j --clean-first 2>&1 | grep -c "warning:"`
 Expected: `0`. (`pyglue/build/warn/` sits inside the ignored build directory, like `core/build/asan`.)

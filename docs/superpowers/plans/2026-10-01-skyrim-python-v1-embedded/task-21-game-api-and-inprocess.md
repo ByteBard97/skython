@@ -16,10 +16,10 @@ Adapted from: branch `plan-out-of-process`, task 14 (`task-14-python-discovery-a
 **Interfaces:**
 - Consumes: Task 20 (`_framing.dumps`, `errors`, `values`), `skyrim._protocol_generated` (Task 12: `OP_*`, `OPS`, `BATCHABLE_OPS`, `PROTOCOL_MAJOR/MINOR`, `PROTOCOL_VERSION`, `MIN_TIMEOUT_MS`, `MAX_TIMEOUT_MS`, `CONFIG_KEYS`, `CODE_*`, `DEFAULT_ALIAS_TYPE`, and the client defaults `CALL_TIMEOUT_S`, `RETRY_NOT_READY_S`, `READY_TIMEOUT_S`, `GRACE_S`), the golden `requests.json` (Task 11), and the `_skyrim` API from the index Contracts (`BACKEND`, `PROTOCOL`, `call`, `config`, `state`; the fake implements all of it).
 - Produces:
-  - `skyrim.game`: `class Transport(Protocol)` with `welcome: dict`, `closed: bool`, `request(op: str, args: dict, wait_s: float) -> dict` (sends `{"type": "request", "id", "op", "args"}` with an id the transport chooses; returns the decoded response object; raises `EncodeError` with nothing sent, `ConnectionLost`, `CallTimeout` or `ProtocolViolation`; never interprets `ok`), `close() -> None`. `class Game(transport, *, call_timeout=CALL_TIMEOUT_S, retry_not_ready: bool | float = False)` with `call(script, function, *args, timeout=None, require_unpaused=False)`, `call_method(obj, script, function, *args, timeout=None, require_unpaused=False)`, `get_property(obj, script, prop)`, `set_property(obj, script, prop, value)`, `batch() -> Batch`, `resolve(*, form_key=None, form_id=None, editor_id=None) -> Form`, `form(form_key) -> Form`, `alias(quest, alias_id, alias_type="ReferenceAlias") -> Alias`, `state() -> dict` (decodes `player`), `wait_ready(timeout=READY_TIMEOUT_S) -> dict`, `close()`; attributes `transport`, `welcome`, `epoch` (from the welcome, fixed), property `closed` (the transport's); context manager. `retry_not_ready=True` means `RETRY_NOT_READY_S`. `call_timeout` must be a positive finite number (`ValueError`). `Batch` with `call`, `call_method`, `get_property`, `set_property` (each returns the batch and takes `timeout=`) and `run(stop_on_error=True, timeout=None) -> list`. Timeout rules (unchanged from branch task 14): a call's `timeout` is seconds, positive and finite, sent as whole milliseconds rounded up (`0.0004` is `1`) and at most `MAX_TIMEOUT_MS`, else `ValueError` before anything is sent; the Game waits `timeout + GRACE_S` for a call with a timeout and `call_timeout` for one without; a batch sends the explicit `run(timeout=)`, else the sum of its step timeouts (the plugin's 5 s default for a step with none), else nothing and waits `max(call_timeout, 5 s per step + GRACE_S)`.
+  - `skyrim.game`: `class Transport(Protocol)` with `welcome: dict`, `closed: bool`, `request(op: str, args: dict, wait_s: float) -> dict` (sends `{"type": "request", "id", "op", "args"}` with an id the transport chooses; returns the decoded response object; raises `EncodeError` with nothing sent, `ConnectionLost`, `CallTimeout` or `ProtocolViolation`; never interprets `ok`), `close() -> None`. `class Game(transport, *, call_timeout=CALL_TIMEOUT_S, retry_not_ready: bool | float = False)` with `call(script, function, *args, timeout=None, require_unpaused=False)`, `call_method(obj, script, function, *args, timeout=None, require_unpaused=False)`, `get_property(obj, script, prop)`, `set_property(obj, script, prop, value)`, `batch() -> Batch`, `resolve(*, form_key=None, form_id=None, editor_id=None) -> Form`, `form(form_key) -> Form`, `alias(quest, alias_id, alias_type="ReferenceAlias") -> Alias`, `state() -> dict` (decodes `player`), `wait_ready(timeout=READY_TIMEOUT_S) -> dict` (polls `state()`; when `timeout` passes first it raises `NotReady` with `detail` = the last state plus `reason: "wait_ready timed out"`, in both modes, never `CallTimeout`), `close()`; attributes `transport`, `welcome`, `epoch` (from the welcome, fixed), property `closed` (the transport's); context manager. `retry_not_ready=True` means `RETRY_NOT_READY_S`; a `NotReady` whose `detail.dispatched` is true (a world reset ended the call after it reached the game, so its effect may have happened) is raised at once, never resubmitted. `call_timeout` must be a positive finite number (`ValueError`). `Batch` with `call`, `call_method`, `get_property`, `set_property` (each returns the batch and takes `timeout=`) and `run(stop_on_error=True, timeout=None) -> list`. Timeout rules (unchanged from branch task 14): a call's `timeout` is seconds, positive and finite, sent as whole milliseconds rounded up (`0.0004` is `1`) and at most `MAX_TIMEOUT_MS`, else `ValueError` before anything is sent; the Game waits `timeout + GRACE_S` for a call with a timeout and `call_timeout` for one without; a batch always sends `timeout_ms`: the explicit `run(timeout=)` (over `MAX_TIMEOUT_MS` is `ValueError`), else the sum of its step timeouts (the plugin's 5 s default for a step with none) capped at `MAX_TIMEOUT_MS`, and waits that plus `GRACE_S`.
   - `skyrim.inprocess`: `class InProcessTransport(module=None)` (imports `_skyrim` when `module` is not given; `ProtocolMismatch` when `module.PROTOCOL`'s major differs; `welcome = {"type": "welcome", "protocol", "plugin_version", "game_version", "runtime"}` from `_skyrim.config()`, `"epoch"` from `_skyrim.state()`, `"capabilities"` = the op names in `OPS`, `"backend"` = `_skyrim.BACKEND`; request ids from a lock-protected counter starting at 1; a response that is not a JSON object or carries another id is `ProtocolViolation`; after `close()` every request is `ConnectionLost`); `connect_in_process(*, module=None, call_timeout=CALL_TIMEOUT_S, retry_not_ready=False) -> Game`. Task 22's `skyrim.connect()` calls `connect_in_process` when `_skyrim.BACKEND == "game"`.
   - `skyrim` (package): exports `Game`, `Batch`, `Transport`, `InProcessTransport`, `connect_in_process`, the errors and the value types.
-  - `python/tests/fake_skyrim.py` (for Tasks 21-24): `class FakeSkyrim(handler=None, *, root=None, config=None, default_timeout_ms=5000, max_inflight_total=1024)`, a module-like object with the Contract's `_skyrim` API: `BACKEND = "fake"`, `PROTOCOL`, `submit`, `wait`, `wait_any`, `cancel`, `call`, `state`, `config` (the generated ini defaults plus `python_dir`, `scripts_dir`, `site_packages_dir`, `log_dir`, `session_file` under `root`, `plugin_version "0.0.0-fake"`, `game_version "0.0.0"`, `runtime "fake"`, then `config` overrides), `log`, `in_flight`, `_fake_set_not_ready`, `_fake_bump_loads`, `_fake_set_paused`; plus for tests `requests` (every well-formed request object), `logs` (`(level, message)` pairs), `handler_calls`, `late_results`, `epoch`, `menus`, `base_state()`, `close()` (stops every waiting handler). Dispatcher rules it follows: bad request text → `bad_request` at once (id peeked, else 0); a `needs_game` op while not ready, or with `require_unpaused` while paused → `not_ready` at once with `detail {reason, paused, menus}`; more than `max_inflight_total` in flight → `busy`; deadline `args.timeout_ms` (valid range) else `default_timeout_ms` → `timeout` (a batch's detail carries `completed` and `results` from the last `ctx.progress`); `_fake_bump_loads()` → every in-flight `needs_game` request `not_ready` reason `loading`; a handler exception → `internal`; `cancel` erases the ticket (a later `wait` returns `None` at once) and the late result is counted in `late_results`; `call` that outlives its wait cancels and answers `timeout` with `detail {"late_cancel": true}`. A handler is `handler(op, args, ctx) -> result` run on its own daemon thread; it raises `FakeRemoteError(code, message="", detail=None)` to answer an error; `ctx.cancelled()`, `ctx.wait(seconds | None) -> bool` (True when stopped early), `ctx.progress(results)`, `ctx.fake`. The default handler `fake_handler` serves `game.state` (`base_state()` plus `"backend": "fake"`), `papyrus.batch` (runs its steps through itself, honouring `stop_on_error`) and `papyrus.call_static` on script `Fake`: `Echo(x)`, `Sleep(ms)`, `Fail(code, message)`, `Throw()`, `Never()`, `Count()`, the same functions as core's `FakeBackend` (Task 18); anything else is `unsupported`.
+  - `python/tests/fake_skyrim.py` (for Tasks 21-24): `class FakeSkyrim(handler=None, *, root=None, config=None, default_timeout_ms=5000, max_inflight_total=1024)`, a module-like object with the Contract's `_skyrim` API: `BACKEND = "fake"`, `PROTOCOL`, `submit`, `wait`, `wait_any`, `cancel`, `call`, `state`, `config` (the generated ini defaults plus `python_dir`, `scripts_dir`, `site_packages_dir`, `log_dir`, `session_file` under `root`, `plugin_version "0.0.0-fake"`, `game_version "0.0.0"`, `runtime "fake"`, then `config` overrides), `log`, `in_flight`, `_fake_set_not_ready`, `_fake_bump_loads`, `_fake_set_paused`; plus for tests `requests` (every well-formed request object), `logs` (`(level, message)` pairs), `handler_calls`, `late_results`, `epoch`, `menus`, `base_state()`, `close()` (stops every waiting handler). Dispatcher rules it follows: bad request text → `bad_request` at once (id peeked, else 0); a `needs_game` op while not ready, or with `require_unpaused` while paused → `not_ready` at once with `detail {reason, paused, menus}`; more than `max_inflight_total` in flight → `busy`; `timeout_ms` and `require_unpaused` are read only when the op's `OPS[op]["args"]` lists them; deadline `args.timeout_ms` (valid range) else `default_timeout_ms` → `timeout` with `detail {paused, menus}` (a batch's detail also carries `completed` and `results` from the last `ctx.progress`); `_fake_bump_loads()` (a world reset) → every in-flight `needs_game` request `not_ready` with `detail {reason, paused, menus, dispatched: true}`, reason the current not-ready reason, else `loading`; a handler exception → `internal`; `cancel` erases the ticket (a later `wait` returns `None` at once) and the late result is counted in `late_results`; `call` that outlives its wait cancels (returning the response instead if it has just arrived) and answers `timeout` with `detail {paused, menus, late_cancel: true}`. A handler is `handler(op, args, ctx) -> result` run on its own daemon thread; it raises `FakeRemoteError(code, message="", detail=None)` to answer an error; `ctx.cancelled()`, `ctx.wait(seconds | None) -> bool` (True when stopped early), `ctx.progress(results)`, `ctx.fake`. The default handler `fake_handler` serves `game.state` (`base_state()` plus `"backend": "fake"`), `papyrus.batch` (runs its steps through itself, honouring `stop_on_error`) and `papyrus.call_static` on script `Fake`: `Echo(x)`, `Sleep(ms)`, `Fail(code, message)`, `Throw()`, `Never()`, `Count()`, the same functions as core's `FakeBackend` (Task 18); another `Fake` function is `unknown_function` and any other op or script is `unsupported`, as in `FakeBackend`.
   - `python/tests/conftest.py`: fixture `fake` (a `FakeSkyrim(root=tmp_path)` installed as `sys.modules["_skyrim"]`, closed afterwards) and fixture `game` (`connect_in_process()` over it). Task 22 appends its socket fixtures to this file.
   - `python/tests/support.py`: adds `wait_until(predicate, timeout=5.0, what="the condition")` (polls with a deadline, raises `AssertionError`).
 
@@ -61,10 +61,14 @@ Dispatcher (Task 18) over FakeBackend:
 - more than max_inflight_total requests in flight answers busy;
 - every request has a deadline (args.timeout_ms, else default_timeout_ms) after which it completes with
   timeout (a batch's detail carries "completed" and "results" from its last progress report);
-- _fake_bump_loads() fails every in-flight needs_game request with not_ready, reason "loading";
+- timeout_ms and require_unpaused are read only when the op's table entry lists them as arguments;
+- _fake_bump_loads() (a world reset: a save load or a quit to the main menu) fails every in-flight needs_game
+  request with not_ready, reason the not-ready reason of that moment (else "loading"), detail.dispatched = true;
+- every timeout and not_ready detail carries paused and menus;
 - cancel() erases a ticket, a later wait on it returns None, and its late result is dropped and counted in
   late_results;
-- call() that outlives its wait cancels the ticket and answers timeout with detail.late_cancel = true.
+- call() that outlives its wait cancels the ticket (or returns the result that has just arrived) and answers
+  timeout with detail.late_cancel = true, plus paused and menus.
 Handlers run on their own daemon threads, so blocking handlers behave like slow game calls.
 
 Use the `fake` fixture in conftest.py: it installs an instance as sys.modules["_skyrim"] and closes it
@@ -165,6 +169,7 @@ def fake_handler(op: str, args: dict, ctx: Ctx):
             return None
         if fn == "Count":
             return fake.handler_calls
+        raise FakeRemoteError(_g.CODE_UNKNOWN_FUNCTION, f"Fake has no function {fn}")
     raise FakeRemoteError(_g.CODE_UNSUPPORTED, f"the fake backend has no {op} {args.get('script')}.{args.get('function')}")
 
 
@@ -212,8 +217,9 @@ class FakeSkyrim:
             self.requests.append(obj)
             op, args = obj["op"], obj["args"]
             needs_game = _g.OPS[op]["needs_game"]
+            declared = {name for name, _type, _required in _g.OPS[op]["args"]}  # other keys in args are ignored
             reason = self._not_ready
-            if reason is None and self._paused and args.get("require_unpaused") is True:
+            if reason is None and self._paused and "require_unpaused" in declared and args.get("require_unpaused") is True:
                 reason = "paused"
             if needs_game and reason is not None:
                 detail = {"reason": reason, "paused": self._paused, "menus": list(self.menus)}
@@ -222,7 +228,7 @@ class FakeSkyrim:
             if self._in_flight() >= self.max_inflight_total:
                 self._finish_now(ticket, req_id, _response(req_id, False, _g.CODE_BUSY, message="too many requests in flight"))
                 return ticket
-            timeout_ms = args.get("timeout_ms")
+            timeout_ms = args.get("timeout_ms") if "timeout_ms" in declared else None
             if type(timeout_ms) is not int or not _g.MIN_TIMEOUT_MS <= timeout_ms <= _g.MAX_TIMEOUT_MS:
                 timeout_ms = self.default_timeout_ms
             entry = _Entry(req_id, op, needs_game, time.monotonic() + timeout_ms / 1000, self._loads)
@@ -249,12 +255,19 @@ class FakeSkyrim:
         text = self.wait(ticket, timeout)
         if text is not None:
             return text
-        self.cancel(ticket)
+        with self._cond:  # like Dispatcher::CancelOrTake: a result that has just arrived is returned
+            entry = self._entries.pop(ticket, None)
+            if entry is not None:
+                entry.stop.set()
+                self._cond.notify_all()
+                if entry.response is not None:
+                    return entry.response
+            detail = {"paused": self._paused, "menus": list(self.menus), "late_cancel": True}
         try:
             req_id = _peek_id(json.loads(request))
         except (TypeError, ValueError):
             req_id = 0
-        return _response(req_id, False, _g.CODE_TIMEOUT, {"late_cancel": True}, f"no result within {timeout:g} s")
+        return _response(req_id, False, _g.CODE_TIMEOUT, detail, f"no response within {timeout:g} s; the call was cancelled")
 
     def state(self) -> str:
         return json.dumps(self.base_state())
@@ -359,12 +372,14 @@ class FakeSkyrim:
         for entry in self._entries.values():
             if entry.response is not None:
                 continue
+            detail = {"paused": self._paused, "menus": list(self.menus)}
             if entry.needs_game and entry.loads != self._loads:
-                entry.response = _response(entry.req_id, False, _g.CODE_NOT_READY, {"reason": "loading"}, "a load started")
+                reason = self._not_ready or "loading"
+                detail.update(reason=reason, dispatched=True)  # every entry here has reached its handler
+                entry.response = _response(entry.req_id, False, _g.CODE_NOT_READY, detail, f"not ready: {reason}")
             elif now >= entry.deadline:
-                detail = {}
                 if entry.progress is not None:
-                    detail = {"completed": len(entry.progress), "results": entry.progress}
+                    detail.update(completed=len(entry.progress), results=entry.progress)
                 entry.response = _response(entry.req_id, False, _g.CODE_TIMEOUT, detail, "the call did not finish in time")
             else:
                 continue
@@ -488,7 +503,8 @@ def test_an_expired_wait_is_timeout_with_late_cancel_and_nothing_is_left_in_flig
         with pytest.raises(errors.Timeout) as ei:
             game.call("Fake", "Never")  # no timeout_ms: the fake's 5 s default would fire later
         assert time.monotonic() - t0 < 2
-    assert ei.value.detail == {"late_cancel": True}
+    assert ei.value.detail["late_cancel"] is True
+    assert {"paused", "menus"} <= set(ei.value.detail)  # like the real module's late-cancel reply
     assert fake.in_flight() == 0
 
 
@@ -520,6 +536,16 @@ def test_timeout_ms_is_the_deadline(fake):
     t0 = time.monotonic()
     resp = json.loads(fake.call(fake_call("Never", timeout_ms=100), 5.0))
     assert resp["error"]["code"] == "timeout" and time.monotonic() - t0 < 2
+    assert {"paused", "menus"} <= set(resp["error"]["detail"])
+
+
+def test_timeout_ms_and_require_unpaused_count_only_where_the_op_declares_them(fake):
+    fake._fake_set_paused(True)
+    fake.handler = lambda op, args, ctx: ctx.wait(0.3) or "done"
+    text = req("papyrus.get_property", object={"kind": "form", "form_id": 20}, script="ObjectReference", property="X",
+               timeout_ms=50, require_unpaused=True)
+    resp = json.loads(fake.call(text, 5.0))
+    assert resp["ok"] is True and resp["result"] == "done"  # neither refused as paused nor timed out after 50 ms
 
 
 def test_a_batch_timeout_reports_its_progress(fake):
@@ -527,7 +553,9 @@ def test_a_batch_timeout_reports_its_progress(fake):
              {"op": "papyrus.call_static", "args": {"script": "Fake", "function": "Never", "args": []}}]
     resp = json.loads(fake.call(req("papyrus.batch", calls=calls, timeout_ms=200), 5.0))
     assert resp["error"]["code"] == "timeout"
-    assert resp["error"]["detail"] == {"completed": 1, "results": [{"ok": True, "result": 1}]}
+    detail = resp["error"]["detail"]
+    assert detail["completed"] == 1 and detail["results"] == [{"ok": True, "result": 1}]
+    assert {"paused", "menus"} <= set(detail)
 
 
 def test_busy_at_the_in_flight_cap(tmp_path):
@@ -547,6 +575,14 @@ def test_a_load_fails_calls_in_flight_with_not_ready_loading(fake):
     fake._fake_bump_loads()
     resp = json.loads(fake.wait(ticket, 1.0))
     assert resp["error"]["code"] == "not_ready" and resp["error"]["detail"]["reason"] == "loading"
+    assert resp["error"]["detail"]["dispatched"] is True  # it had reached the backend
+    assert {"paused", "menus"} <= set(resp["error"]["detail"])
+    # A quit to the main menu also counts: the reason is the one of that moment.
+    ticket = fake.submit(fake_call("Never", req_id=2))
+    wait_until(lambda: fake.handler_calls == 2, what="the second call to start")
+    fake._fake_set_not_ready("no_game")
+    fake._fake_bump_loads()
+    assert json.loads(fake.wait(ticket, 1.0))["error"]["detail"]["reason"] == "no_game"
 
 
 def test_cancel_erases_the_ticket_and_the_late_result_is_counted(fake):
@@ -570,6 +606,7 @@ def test_wait_any_returns_the_done_ones_as_soon_as_one_is_done(fake):
 def test_handler_errors_map_to_codes(fake):
     err = json.loads(fake.call(fake_call("Throw"), 1.0))["error"]
     assert err["code"] == "internal" and "Fake.Throw" in err["message"]
+    assert json.loads(fake.call(fake_call("Nope"), 1.0))["error"]["code"] == "unknown_function"  # as FakeBackend
 
     def refuse(op, args, ctx):
         raise FakeRemoteError("vm_error", "refused", {"x": 1})
@@ -624,7 +661,7 @@ import time
 import pytest
 
 from fake_skyrim import FakeRemoteError
-from support import load_fixture
+from support import load_fixture, wait_until
 from skyrim import _protocol_generated as g
 from skyrim import errors
 from skyrim.game import Game
@@ -715,6 +752,26 @@ def test_retry_not_ready_until_ok(fake):
     assert count["n"] == 3
 
 
+def test_retry_not_ready_never_resubmits_a_call_a_load_ended_after_dispatch(fake):
+    # The call may already have had its effect (an AddItem ran) when the load cancelled it: retrying could repeat it.
+    out = {}
+
+    def caller():
+        with connect_in_process(retry_not_ready=5.0) as game:
+            try:
+                game.call("Fake", "Never", timeout=3)
+            except Exception as e:  # noqa: BLE001 - checked below
+                out["e"] = e
+
+    t = threading.Thread(target=caller)
+    t.start()
+    wait_until(lambda: fake.handler_calls == 1, what="the call to reach the backend")
+    fake._fake_bump_loads()
+    t.join(10)
+    assert isinstance(out.get("e"), errors.NotReady) and out["e"].detail["dispatched"] is True
+    assert len(fake.requests) == 1  # not resubmitted
+
+
 def test_answers_that_finish_out_of_order_reach_the_right_callers(game, fake):
     def handler(op, args, ctx):
         n = args["args"][0]
@@ -797,8 +854,8 @@ def test_the_timeout_range_is_the_protocols_one_hour(game, fake):
         game.call("X", "Y", timeout=0.001)
     with pytest.raises(ValueError, match="3600000"):
         game.call("X", "Y", timeout=3600.001)
-    with pytest.raises(ValueError):  # a batch whose step timeouts add up to more than an hour
-        game.batch().call("A", "b", timeout=3000).call("C", "d", timeout=600).call("E", "f", timeout=1).run()
+    with pytest.raises(ValueError):  # an explicit batch timeout over the hour; step timeouts that add up to more are capped
+        game.batch().call("A", "b").run(timeout=3600.001)
     assert [r["args"]["timeout_ms"] for r in fake.requests] == [3_600_000, 1]
 
 
@@ -828,21 +885,23 @@ def test_batch_wait_covers_the_default_step_timeouts(fake):
         assert game.batch().call("Utility", "RandomInt", 1, 6).run() == [3]
         with pytest.raises(errors.Timeout) as ei:  # single calls still use call_timeout
             game.call("Utility", "RandomInt", 1, 6)
-        assert ei.value.detail == {"late_cancel": True}
+        assert ei.value.detail["late_cancel"] is True
 
 
 def test_batch_timeout_is_the_sum_of_the_step_timeouts(game, fake):
     fake.handler = results({"results": []})
     game.batch().call("A", "b", timeout=2).call("C", "d").call_method(Form(form_id=1), "E", "f", timeout=0.5).run()
     game.batch().call("A", "b", timeout=2).run(timeout=9)
-    game.batch().call("A", "b").run()
+    game.batch().call("A", "b").call("C", "d").run()
+    game.batch().call("A", "b", timeout=3000).call("C", "d", timeout=3000).run()
     with pytest.raises(ValueError):
         game.batch().call("A", "b", timeout=0)
     sent = [r["args"] for r in fake.requests]
     assert sent[0]["timeout_ms"] == 2000 + 5000 + 500
     assert all("timeout_ms" not in c["args"] for c in sent[0]["calls"])
     assert sent[1]["timeout_ms"] == 9000
-    assert "timeout_ms" not in sent[2]
+    assert sent[2]["timeout_ms"] == 2 * 5000  # no timeouts at all: still the sum, so the plugin waits as long as we do
+    assert sent[3]["timeout_ms"] == g.MAX_TIMEOUT_MS  # the sum is capped at the protocol maximum
 
 
 # -- results ---------------------------------------------------------------------------------------------
@@ -873,6 +932,14 @@ def test_wait_ready_polls_state(game, fake):
     states = iter([False, False, True])
     fake.handler = lambda op, args, ctx: {"interactive": next(states), "player": None, "epoch": 1}
     assert game.wait_ready(timeout=5)["interactive"] is True
+
+
+def test_wait_ready_gives_up_with_not_ready_not_call_timeout(game, fake):
+    fake._fake_set_not_ready("no_game")
+    with pytest.raises(errors.NotReady) as ei:  # CallTimeout means the bridge did not answer; this is the game
+        game.wait_ready(timeout=0.3)
+    assert ei.value.detail["reason"] == "wait_ready timed out"
+    assert ei.value.detail["interactive"] is False
 
 
 def test_game_epoch_is_the_welcome_value_only(game, fake):
@@ -1085,14 +1152,16 @@ class Game:
         return self.transport.closed
 
     # -- plumbing -------------------------------------------------------------------------------
-    def _request(self, op: str, args: dict, timeout: float | None = None, min_wait: float = 0.0) -> Any:
-        wait = max(self._call_timeout if timeout is None else timeout + _GRACE, min_wait)
+    def _request(self, op: str, args: dict, timeout: float | None = None) -> Any:
+        wait = self._call_timeout if timeout is None else timeout + _GRACE
         deadline = time.monotonic() + self._retry_not_ready
         while True:
             try:
                 return _result(self.transport.request(op, args, wait), op)
-            except errors.NotReady:
-                if time.monotonic() >= deadline:
+            except errors.NotReady as e:
+                # A call a world reset ended after it reached the game (detail.dispatched) may have had its effect
+                # already: never resubmit it. A refusal before dispatch is safe to retry.
+                if e.detail.get("dispatched") or time.monotonic() >= deadline:
                     raise
                 time.sleep(0.25)
 
@@ -1151,14 +1220,17 @@ class Game:
         return st
 
     def wait_ready(self, timeout: float = _g.READY_TIMEOUT_S) -> dict:
-        """Block until a save is loaded and no loading screen is up."""
+        """Block until a save is loaded and no loading screen is up. If that takes longer than `timeout`, raise
+        NotReady with detail reason "wait_ready timed out" plus the last state (in both modes; CallTimeout means
+        the bridge itself did not answer)."""
         deadline = time.monotonic() + timeout
         while True:
             st = self.state()
             if st.get("interactive"):
                 return st
             if time.monotonic() >= deadline:
-                raise errors.CallTimeout(f"game not interactive after {timeout:.0f}s (last state: {st})")
+                raise errors.NotReady(_g.CODE_NOT_READY, f"game not interactive after {timeout:g} s",
+                                      {**st, "reason": "wait_ready timed out"})
             time.sleep(0.25)
 
     def close(self) -> None:
@@ -1175,8 +1247,8 @@ class Batch:
     """Several papyrus.* steps in one request, run in order. Not a transaction (spec 4.3).
 
     Each step method takes an optional `timeout` (seconds). The plugin applies one timeout to the whole
-    batch, so run() sends the SUM of the step timeouts (5 s for a step with none, the plugin's default)
-    unless you pass run(timeout=...), and waits at least that long for the response."""
+    batch, so run() always sends one: run(timeout=...) if given, else the SUM of the step timeouts (5 s for
+    a step with none, the plugin's default), capped at MAX_TIMEOUT_MS; it waits that long plus GRACE_S."""
 
     def __init__(self, game: Game):
         self._game = game
@@ -1208,14 +1280,10 @@ class Batch:
         if not self._calls:
             return []
         args: dict[str, Any] = {"calls": self._calls, "stop_on_error": stop_on_error}
-        min_wait = 0.0
-        if timeout is None and any(t is not None for t in self._step_timeouts):
-            timeout = sum(_STEP_TIMEOUT if t is None else t for t in self._step_timeouts)
-        if timeout is not None:
-            args["timeout_ms"] = _timeout_ms(timeout)
-        else:  # nothing explicit: the plugin's own default applies, so wait for every step to use its default
-            min_wait = len(self._calls) * _STEP_TIMEOUT + _GRACE
-        out = _expect_dict(self._game._request(_g.OP_PAPYRUS_BATCH, args, timeout, min_wait), "papyrus.batch result")
+        if timeout is None:  # without one the plugin would give the whole batch a single step's 5 s default
+            timeout = min(sum(_STEP_TIMEOUT if t is None else t for t in self._step_timeouts), _g.MAX_TIMEOUT_MS / 1000)
+        args["timeout_ms"] = _timeout_ms(timeout)
+        out = _expect_dict(self._game._request(_g.OP_PAPYRUS_BATCH, args, timeout), "papyrus.batch result")
         results = out.get("results")
         if not isinstance(results, list) or not all(isinstance(r, dict) for r in results):
             raise errors.ProtocolViolation(f"papyrus.batch result has no list of result objects: {out!r}")
@@ -1306,7 +1374,7 @@ __version__ = "0.1.0"
 - [ ] **Step 5: Run to verify they pass, on both Python versions**
 
 Run: `cd python && uv run --python 3.12 pytest -q && uv run --python 3.14 pytest -q`
-Expected: `213 passed` twice, each in about 5 s (Task 20's 143 plus this task's 70; the request-fixture replay adds one test per entry in `requests.json`). No test depends on wall-clock luck: every wait is bounded by a deadline, and the one call with a 1 ms timeout (`test_tiny_timeout_is_one_millisecond_not_zero`) checks only what was sent. To check for flakiness on a slow machine, run the two new files on one CPU a few times: `for i in 1 2 3; do taskset -c 0 uv run --python 3.14 pytest -q tests/test_game.py tests/test_inprocess.py; done` prints `70 passed` three times.
+Expected: `216 passed` twice, each in about 5 s (Task 20's 143 plus this task's 73; the request-fixture replay adds one test per entry in `requests.json`). No test depends on wall-clock luck: every wait is bounded by a deadline, and the one call with a 1 ms timeout (`test_tiny_timeout_is_one_millisecond_not_zero`) checks only what was sent. To check for flakiness on a slow machine, run the two new files on one CPU a few times: `for i in 1 2 3; do taskset -c 0 uv run --python 3.14 pytest -q tests/test_game.py tests/test_inprocess.py; done` prints `73 passed` three times.
 
 Design notes the tests pin: `Game` owns no I/O and never sees request ids (the transport chooses them); an oversize or unencodable request is `EncodeError` before `_skyrim` sees anything (`_framing.dumps` runs first); `InProcessTransport.request` blocks in `_skyrim.call`, which in the real module releases the GIL, so 16 threads can wait at once (`test_sixteen_threads_calling_at_once_get_their_own_answers`); a call whose wait runs out leaves nothing in flight (`_skyrim.call` cancels its ticket).
 

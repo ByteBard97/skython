@@ -1004,7 +1004,7 @@ def connect(session=None, **kw) -> Game:
 - [ ] **Step 5: Run to verify they pass, on both Python versions**
 
 Run: `cd python && uv run --python 3.12 pytest -q && uv run --python 3.14 pytest -q`
-Expected: `270 passed` twice, each in about 8 s (Task 21's 213 plus this task's 57). Every wait is bounded by a deadline; the slow-handshake tests take about 0.5 s each by design. To check for flakiness, run the new files a few times, once on a single CPU: `for i in 1 2 3; do uv run --python 3.14 pytest -q tests/test_discovery.py tests/test_remote.py; done; taskset -c 0 uv run --python 3.14 pytest -q tests/test_remote.py` prints `57 passed` three times, then `33 passed`.
+Expected: `273 passed` twice, each in about 8 s (Task 21's 216 plus this task's 57). Every wait is bounded by a deadline; the slow-handshake tests take about 0.5 s each by design. To check for flakiness, run the new files a few times, once on a single CPU: `for i in 1 2 3; do uv run --python 3.14 pytest -q tests/test_discovery.py tests/test_remote.py; done; taskset -c 0 uv run --python 3.14 pytest -q tests/test_remote.py` prints `57 passed` three times, then `33 passed`.
 
 Design notes the tests pin (from the 2026-09-30 review, unchanged): the handshake and every later `recv` share one deadline model (`_framing.read_frame(sock, deadline)`); the reader thread never uses a deadline, and the socket timeout set after the handshake (`send_timeout`) bounds `sendall` only; a send that times out may have written half a frame, so the connection is closed and never reused; `_fail_all` and `close()` both close the socket; a request is encoded before its future is registered, so `EncodeError` leaves nothing behind.
 
