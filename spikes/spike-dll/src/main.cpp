@@ -259,7 +259,7 @@ std::string S2(int n)
         liveOk == 0 ? "true" : "false", elapsedMs));
 
     // Phase D: the plugin owns the arguments. Utility.RandomInt(5, 5) always returns 5; each callback records its
-    // result and THEN deletes that call's args object (never before the callback). A refused dispatch deletes at once.
+    // result and THEN deletes that call's args object (never before the callback). The spike deletes on a refused dispatch only because it is throwaway; the plugin keeps the args on a false return (R37).
     constexpr int kD = 1000;
     const int cD0 = CountedArgs::ctor, dD0 = CountedArgs::dtor;
     for (int base = 0; base < kD; base += kChunk) {
@@ -321,7 +321,7 @@ std::string S2(int n)
     const bool threadPhase = verdictNote == "ok" && st->nestedDone == n && st->nestedInts == n &&
         st->nestedFailed == 0 && st->outerFailed == 0 && st->latentRefused == 0 && latentOk;
     const bool ownsOk = liveOk == 0;
-    const char* failPathOwner = st->failedFalse == 0 ? "n/a(no dispatch returned false)" : liveFail == 0 ? "vm" : "CALLER(Tasks 27/29 must delete on false)";
+    const char* failPathOwner = st->failedFalse == 0 ? "n/a(no dispatch returned false)" : liveFail == 0 ? "vm" : "NOT_MEASURED (Tasks 27/29 keep on false, R37)";
     return std::format(
         "S2 {} note={} n={} nested_done={} nested_ints={} outer_failed={} nested_failed={} elapsed_ms={} "
         "main_tid={} first_cb_tid={} cb_on_main={} cb_off_main={} first_nested_tid={} nested_on_main={} nested_off_main={} "

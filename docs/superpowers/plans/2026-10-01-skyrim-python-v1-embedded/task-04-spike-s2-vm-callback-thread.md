@@ -234,7 +234,7 @@ std::string S2(int n)
         liveOk == 0 ? "true" : "false", elapsedMs));
 
     // Phase D: the plugin owns the arguments. Utility.RandomInt(5, 5) always returns 5; each callback records its
-    // result and THEN deletes that call's args object (never before the callback). A refused dispatch deletes at once.
+    // result and THEN deletes that call's args object (never before the callback). The spike deletes on a refused dispatch only because it is throwaway; the plugin keeps the args on a false return (R37).
     constexpr int kD = 1000;
     const int cD0 = CountedArgs::ctor, dD0 = CountedArgs::dtor;
     for (int base = 0; base < kD; base += kChunk) {
@@ -296,7 +296,7 @@ std::string S2(int n)
     const bool threadPhase = verdictNote == "ok" && st->nestedDone == n && st->nestedInts == n &&
         st->nestedFailed == 0 && st->outerFailed == 0 && st->latentRefused == 0 && latentOk;
     const bool ownsOk = liveOk == 0;
-    const char* failPathOwner = st->failedFalse == 0 ? "n/a(no dispatch returned false)" : liveFail == 0 ? "vm" : "CALLER(Tasks 27/29 must delete on false)";
+    const char* failPathOwner = st->failedFalse == 0 ? "n/a(no dispatch returned false)" : liveFail == 0 ? "vm" : "NOT_MEASURED (Tasks 27/29 keep on false, R37)";
     return std::format(
         "S2 {} note={} n={} nested_done={} nested_ints={} outer_failed={} nested_failed={} elapsed_ms={} "
         "main_tid={} first_cb_tid={} cb_on_main={} cb_off_main={} first_nested_tid={} nested_on_main={} nested_off_main={} "
@@ -330,7 +330,7 @@ SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/S
 python3 spikes/spike_client.py s2 1000
 python3 spikes/spike_client.py s2 10000
 ```
-Expected PASS (first line of the run): `S2 PASS note=ok n=1000 nested_done=1000 nested_ints=1000 outer_failed=0 nested_failed=0 ... latent=10/10 ... args_live_after_settle=2010 vm_frees_args=false ... D PASS done=1000/1000 mismatches=0 refused=0 exceptions=0 args_ctor_d=1000 args_dtor_d=1000 ...` (the VM does not free the arguments: the plugin does, in the callback, and phase D proves that is safe), with `first_cb_tid`, `first_nested_tid` and `first_latent_tid` recorded next to `main_tid`. The 10000-call run and the RSS check below were not run on the box; only n=1000 was. The client's receive timeout is 180 s; the DLL bounds itself (each 100-call chunk must finish in 30 s). `S2 NOT_RUN (PAUSED)` means a menu is open: close it and retry.
+Expected PASS (first line of the run): `S2 PASS note=ok n=1000 nested_done=1000 nested_ints=1000 outer_failed=0 nested_failed=0 ... latent=10/10 ... args_live_after_settle=<the success-path args count; 2010 in the recorded run> vm_frees_args=false ... D PASS done=1000/1000 mismatches=0 refused=0 exceptions=0 args_ctor_d=1000 args_dtor_d=1000 ...` (the VM does not free the arguments: the plugin does, in the callback, and phase D proves that is safe), with `first_cb_tid`, `first_nested_tid` and `first_latent_tid` recorded next to `main_tid`. The 10000-call run and the RSS check below were not run on the box; only n=1000 was. The client's receive timeout is 180 s; the DLL bounds itself (each 100-call chunk must finish in 30 s). `S2 NOT_RUN (PAUSED)` means a menu is open: close it and retry.
 
 PASS criteria (all must hold):
 1. every nested dispatch completed (`nested_done == n`, `nested_ints == n`) with no refused dispatch;
@@ -359,4 +359,4 @@ git add spikes && git commit -m "test(spike): S2 VM callback thread, nested disp
 
 > **Measured on the box (2026-10-01, Windows-native), ruling R35:** the original phase C (a script that does not exist) crashed the engine at `SkyrimSE.exe+1447D3E` (null deref inside `DispatchStaticCall`), and so did an existing script with a missing function (`Utility.NoSuchFn`). The code above is the safe version: phase A/B results are logged before phase C (`spike: S2 AB ...`), and `s2mode1` probes a wrong argument type/count on an existing native, which the VM accepts (`Dispatch*` returned true, no crash). Never `Dispatch*Call` an unvalidated class or function.
 
-> **Phase D, measured on the box (2026-10-01, R36):** the VM never destroys `IFunctionArguments` (phases A and B: `args_ctor=2010`, `args_dtor=0`), so the plugin owns them. Phase D deletes each call's args object inside its callback, after the result is read: `D PASS done=1000/1000 mismatches=0 refused=0 exceptions=0 args_ctor_d=1000 args_dtor_d=1000`, no crash. Phase C is now opt-in (`s2mode0`/`s2mode1`), off by default, because an unresolvable target crashes the engine. The overall S2 PASS is `threadPhase && dPass`. Tasks 27 and 29: free the `DynArgs` in the callback, after reading the result, and delete at once when `Dispatch*` returns false.
+> **Phase D, measured on the box (2026-10-01, R36):** the VM never destroys `IFunctionArguments` (phases A and B: `args_ctor=2010`, `args_dtor=0`), so the plugin owns them. Phase D deletes each call's args object inside its callback, after the result is read: `D PASS done=1000/1000 mismatches=0 refused=0 exceptions=0 args_ctor_d=1000 args_dtor_d=1000`, no crash. Phase C is now opt-in (`s2mode0`/`s2mode1`), off by default, because an unresolvable target crashes the engine. The overall S2 PASS is `threadPhase && dPass`. Tasks 27 and 29: free the `DynArgs` in the callback, after reading the result, and keep the args on a false return, log once, leak (controller ruling R37).
