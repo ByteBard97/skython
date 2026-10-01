@@ -76,9 +76,3 @@ Expected: no output, exit status 0.
 git add core/CMakeLists.txt core/tests/main.cpp core/src/version.cpp
 git commit -m "build(core): pure C++20 core library scaffold with doctest"
 ```
-</content>
-</invoke>
-<invoke name="Bash">
-<parameter name="command">W=/tmp/claude-1000/-home-geoff-projects-games-skyrim-skyrim-python/deae5291-8793-4315-a833-6e1a352deb09/scratchpad/w13; S=$W/../repo; P=/home/geoff/projects/games/skyrim/skyrim-python/docs/superpowers/plans/2026-10-01-skyrim-python-v1-embedded; cd $S && python3 $W/extract.py $P/task-13-core-scaffold.md . && cmake -S core -B core/build -DCMAKE_BUILD_TYPE=Debug >/dev/null && cmake --build core/build -j 2>&1 | tail -2 && ctest --test-dir core/build --output-on-failure | tail -3 && core/build/spy_core_tests | tail -3; echo '#include "spy/protocol_generated.h"' | g++ -std=c++20 -fsyntax-only -Icore/include -x c++ - && echo hdr-ok</parameter>
-<parameter name="description">Apply and verify Task 13 in scratch repo</parameter>
-</invoke>

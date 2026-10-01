@@ -313,5 +313,3 @@ git status --short | grep cpython && echo "STOP: third_party/cpython must not be
 git commit -m "chore: bootstrap repo with vendored headers, pybind11, pinned CommonLibSSE-NG and CPython fetch script"
 ```
 Expected: the `grep cpython` prints nothing; the commit succeeds. Do not push.
-</content>
-</invoke>

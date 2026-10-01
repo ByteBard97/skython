@@ -246,5 +246,3 @@ Rules (each is pinned by a test):
 4. ESP authoring tool for `SkyrimPythonTest.esp` (M1.5): Mutagen, the Creation Kit, or xEdit.
 5. Which repo owns skyrim-dm's production shell quest and its Papyrus script (skyrim-python's M1.5 test ESP or skyrim-dm's `game/` drafts).
 6. Interaction with other mods that embed CPython in-process: none known today; the plugin refuses to share a `python314.dll` from another path (section 6).
-</content>
-</invoke>
