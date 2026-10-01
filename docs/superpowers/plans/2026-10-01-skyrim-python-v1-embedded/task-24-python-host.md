@@ -13,7 +13,7 @@
 - **A disabled bridge writes an inactive session file** (reason `bridge_enabled is false in SkyrimPython.ini`), so `skyrim.connect()` on Linux says why instead of following a stale port from an earlier run. A bridge that cannot listen is reported in `status()` and the log; the scripts still load.
 
 **Files:**
-- Create: `python/src/skyrim/_host.py`, `python/tests/test_host.py`
+- Create: `python/src/skyrim/_host.py`, `python/tests/test_host.py`, `python/tests/test_real_module.py` (Step 6: the package against the real `_skyrim` from Task 19)
 
 **Interfaces:**
 - Consumes: the `_skyrim` API from the index Contracts (`config`, `state`, `log`, plus what `connect_in_process` and `serve` use), Task 23 (`skyrim.bridge.serve`), Task 22 (`skyrim.discovery.write_inactive_session_file`), Task 21 (`skyrim.inprocess.connect_in_process`), and in the tests the `fake` fixture (`FakeSkyrim` with `config_overrides`, `epoch`, `logs`, `requests`), `support.wait_until`, `connect_remote`, `find_session`.
@@ -592,9 +592,162 @@ Expected: `90 passed` five times.
 Run: `python3 tools/gen_protocol.py --check`
 Expected: `gen_protocol: 3 generated files are up to date`.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Cross-check the whole package against the real `_skyrim`**
+
+Every Python test so far runs against `fake_skyrim`, a Python copy of the Dispatcher rules. This test runs the in-process transport, `skyrim.bridge` and `skyrim.remote` against the real module built in Task 19 (the C++ `Dispatcher` over `FakeBackend`), so the two cannot drift apart silently. It skips unless `SKYRIM_REAL_MODULE_DIR` is set.
+
+`python/tests/test_real_module.py`:
+```python
+"""The skyrim package against the REAL _skyrim (C++ Dispatcher + FakeBackend, Task 19), not fake_skyrim.
+
+Skipped unless SKYRIM_REAL_MODULE_DIR names the folder holding the built _skyrim*.so
+(pyglue/build after Task 19). It pins fake_skyrim's behaviour to the real Dispatcher's.
+"""
+import importlib
+import json
+import os
+import socket
+import sys
+import threading
+import time
+
+import pytest
+
+from skyrim import _framing, bridge, errors
+from skyrim.inprocess import connect_in_process
+from skyrim.remote import connect_remote
+
+MODULE_DIR = os.environ.get("SKYRIM_REAL_MODULE_DIR")
+pytestmark = pytest.mark.skipif(not MODULE_DIR, reason="SKYRIM_REAL_MODULE_DIR not set")
+TOKEN = "ab" * 16
+
+
+@pytest.fixture(scope="module")
+def real(tmp_path_factory):
+    os.environ["SKYRIM_FAKE_DIR"] = str(tmp_path_factory.mktemp("real"))
+    sys.path.insert(0, MODULE_DIR)
+    try:
+        mod = importlib.import_module("_skyrim")
+    finally:
+        sys.path.remove(MODULE_DIR)
+    assert mod.BACKEND == "fake"
+    yield mod
+    mod._fake_set_not_ready(None)
+
+
+@pytest.fixture
+def game(real):
+    with connect_in_process(module=real) as g:
+        yield g
+
+
+def test_round_trips(game):
+    assert game.call("Fake", "Echo", 7) == 7
+    assert game.call("Fake", "Echo", "hé") == "hé"
+    assert game.call("Fake", "Echo", [1, 2, 3]) == [1, 2, 3]
+    assert game.state()["backend"] == "fake"
+
+
+def test_errors_map_to_the_same_classes(game):
+    with pytest.raises(errors.NotFound):
+        game.call("Fake", "Fail", "not_found", "nope")
+    with pytest.raises(errors.InternalError):
+        game.call("Fake", "Throw")
+    with pytest.raises(errors.UnknownFunction):
+        game.call("Fake", "Nope")
+    with pytest.raises(errors.TypeMismatch):
+        game.call("Fake", "Echo", 2**31)
+
+
+def test_timeout_carries_game_state(game):
+    with pytest.raises(errors.Timeout) as e:
+        game.call("Fake", "Never", timeout=0.3)
+    assert {"paused", "menus"} <= set(e.value.detail)
+
+
+def test_not_ready_then_ready(game, real):
+    real._fake_set_not_ready("loading")
+    try:
+        with pytest.raises(errors.NotReady) as e:
+            game.call("Fake", "Echo", 1)
+        assert e.value.detail["reason"] == "loading"
+        assert game.state()["backend"] == "fake"     # game.state still answers
+    finally:
+        real._fake_set_not_ready(None)
+    assert game.call("Fake", "Echo", 1) == 1
+
+
+def test_a_load_fails_calls_in_flight(game, real):
+    out = {}
+
+    def slow():
+        try:
+            out["v"] = game.call("Fake", "Sleep", 1500, timeout=5)
+        except Exception as exc:  # noqa: BLE001
+            out["e"] = exc
+
+    t = threading.Thread(target=slow)
+    t.start()
+    time.sleep(0.2)
+    real._fake_bump_loads()
+    t.join(5)
+    assert isinstance(out.get("e"), errors.NotReady)
+
+
+def test_the_gil_is_released_while_waiting(game):
+    count, stop = [0], [False]
+
+    def spin():
+        while not stop[0]:
+            count[0] += 1
+
+    t = threading.Thread(target=spin)
+    t.start()
+    game.call("Fake", "Sleep", 300)
+    stop[0] = True
+    t.join()
+    assert count[0] > 1000
+
+
+def test_bridge_over_the_real_module(real):
+    srv = bridge.serve(real, port=0, token=TOKEN,
+                       welcome_info={"plugin_version": "0.0.0-fake", "game_version": "0.0.0", "runtime": "fake", "epoch": 0})
+    try:
+        with connect_remote(port=srv.port, token=TOKEN) as g:
+            assert g.call("Fake", "Echo", [1.5, 2.5]) == [1.5, 2.5]
+            with pytest.raises(errors.Timeout):
+                g.call("Fake", "Never", timeout=0.3)
+        # A client that disconnects with calls in flight leaves nothing behind.
+        s = socket.create_connection(("127.0.0.1", srv.port))
+        s.sendall(_framing.encode({"type": "hello", "protocol": [1, 0], "token": TOKEN, "client": "t"}))
+        assert _framing.read_frame(s, time.monotonic() + 3)["type"] == "welcome"
+        for i in range(1, 6):
+            s.sendall(_framing.encode({"type": "request", "id": i, "op": "papyrus.call_static",
+                                       "args": {"script": "Fake", "function": "Never", "args": [], "timeout_ms": 60000}}))
+        deadline = time.monotonic() + 3
+        while real.in_flight() < 5 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert real.in_flight() >= 5
+        s.close()
+        deadline = time.monotonic() + 3
+        while real.in_flight() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert real.in_flight() == 0
+    finally:
+        srv.close()
+```
+
+Run (the module is the one Task 19 built; rebuild it first if `core/` or `pyglue/` changed):
+```bash
+cmake --build pyglue/build -j
+(cd python && SKYRIM_REAL_MODULE_DIR="$PWD/../pyglue/build" uv run --python 3.14 pytest tests/test_real_module.py -q)
+(cd python && uv run --python 3.12 pytest tests/test_real_module.py -q)
+```
+Expected: `7 passed` on 3.14; `7 skipped` on 3.12 (the module is built for 3.14 only). If a test fails here but its `fake_skyrim` counterpart passes, the fake has drifted from the real Dispatcher: fix `fake_skyrim.py` (Task 21) to match the C++ behaviour, never the other way round.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add python/src/skyrim/_host.py python/tests/test_host.py
+git add python/src/skyrim/_host.py python/tests/test_host.py python/tests/test_real_module.py
 git commit -m "feat(python): skyrim._host: python.log, player script loader with timeouts and reload, dev bridge startup"
 ```
