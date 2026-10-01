@@ -164,7 +164,7 @@ void NoteThread(S2State& st, std::atomic_int& on, std::atomic_int& off, std::str
     if (first.empty()) first = Tid();
 }
 
-std::atomic_bool g_s2NullCb{false};  // DEVIATION: phase C passes a real callback unless "s2nullcb" was sent
+std::atomic_int g_s2Mode{0};  // phase C probe: 0 = existing script, missing function; 1 = existing native, wrong argument count
 constexpr int kChunk = 100;  // dispatches per main-thread task: 10,000 in one task can hit VM stack limits
 
 void DispatchChunk(const std::shared_ptr<S2State>& st, int count)
@@ -248,19 +248,29 @@ std::string S2(int n)
     const int cC = CountedArgs::ctor, dC = CountedArgs::dtor;
     const int ctorOk = cC - c0, dtorOk = dC - d0;
     const int liveOk = ctorOk - dtorOk;
+    // Logged BEFORE phase C: a failed-dispatch probe crashed the engine once (SkyrimSE.exe+1447D3E), and this must survive that.
+    Log(std::format("spike: S2 AB main_tid={} nested_done={}/{} nested_ints={} outer_failed={} nested_failed={} latent={}/{} latent_refused={} "
+        "cb_first_tid={} cb_on_main={} cb_off_main={} nested_first_tid={} nested_on_main={} nested_off_main={} latent_first_tid={} latent_on_main={} latent_off_main={} "
+        "args_ctor_ok={} args_dtor_ok={} live_ok={} owner_ok_path={} elapsed_ms={}",
+        mainTid, st->nestedDone.load(), n, st->nestedInts.load(), st->outerFailed.load(), st->nestedFailed.load(), st->latentDone.load(), kLatent,
+        st->latentRefused.load(), st->firstCbTid, st->cbOnMain.load(), st->cbOffMain.load(), st->firstNestedTid, st->nestedOnMain.load(),
+        st->nestedOffMain.load(), st->firstLatentTid, st->latentOnMain.load(), st->latentOffMain.load(), ctorOk, dtorOk, liveOk,
+        liveOk == 0 ? "vm" : "NOT_FREED", elapsedMs));
 
-    // Phase C: the FAILED-dispatch path. A script that does not exist makes Dispatch* return false.
-    // Does the VM still destroy the arguments object, or must the caller?
-    Log(std::string("spike: S2 phase C starting, null callback=") + (g_s2NullCb ? "yes" : "no"));
-    (void)OnMainThread([st](std::function<void(std::string)> finish) {
+    // Phase C: the FAILED-dispatch path, probed SAFELY. A script that does not exist crashed the engine
+    // (SkyrimSE.exe+1447D3E, null deref inside DispatchStaticCall), so the target must resolve: mode 0 is an existing
+    // script with a missing function, mode 1 an existing native with the wrong argument count.
+    // Does the VM still destroy the arguments object when Dispatch* returns false, or must the caller?
+    const int mode = g_s2Mode.load();
+    Log(std::format("spike: S2 phase C starting, mode={}", mode));
+    (void)OnMainThread([st, mode](std::function<void(std::string)> finish) {
         auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
-        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> none;
-        if (!g_s2NullCb) none = RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor>{ new Functor([](Var) {}) };
         for (int i = 0; i < 100; ++i) {
-            if (vm->DispatchStaticCall(RE::BSFixedString("SpikeNoSuchScript"), RE::BSFixedString("NoSuchFn"), NoArgs(), none))
-                st->failedTrue.fetch_add(1);
-            else
-                st->failedFalse.fetch_add(1);
+            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{ new Functor([](Var) {}) };
+            const bool ok = mode == 0
+                ? vm->DispatchStaticCall(RE::BSFixedString("Utility"), RE::BSFixedString("NoSuchFn"), NoArgs(), cb)
+                : vm->DispatchStaticCall(RE::BSFixedString("Utility"), RE::BSFixedString("RandomInt"), FloatArg(1.0f), cb);
+            (ok ? st->failedTrue : st->failedFalse).fetch_add(1);
         }
         finish("posted");
     }, std::chrono::seconds(10));
@@ -298,7 +308,7 @@ std::string Handle(const std::string& line)
     if (line == "py_init") return py::Init(g_dataLoaded.load());
     if (line == "py_status") return py::Status();
     if (line.rfind("py_exec ", 0) == 0) return py::Exec(line.substr(8));
-    if (line == "s2nullcb") { g_s2NullCb = true; return "OK null callback in phase C"; }
+    if (line == "s2mode0" || line == "s2mode1") { g_s2Mode = line.back() - '0'; return "OK s2 phase C mode " + line.substr(6); }
     if (line.rfind("s2", 0) == 0) return S2(ParseInt(line.size() > 3 ? line.substr(3) : "", 1000));
     return "ERR unknown command";
 }

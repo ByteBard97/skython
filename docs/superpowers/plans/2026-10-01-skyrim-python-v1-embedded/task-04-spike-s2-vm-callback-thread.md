@@ -139,6 +139,7 @@ void NoteThread(S2State& st, std::atomic_int& on, std::atomic_int& off, std::str
     if (first.empty()) first = Tid();
 }
 
+std::atomic_int g_s2Mode{0};  // phase C probe: 0 = existing script, missing function; 1 = existing native, wrong argument count
 constexpr int kChunk = 100;  // dispatches per main-thread task: 10,000 in one task can hit VM stack limits
 
 void DispatchChunk(const std::shared_ptr<S2State>& st, int count)
@@ -196,6 +197,7 @@ std::string S2(int n)
     }
     const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
 
+    Log("spike: S2 phase A done");
     // Phase B: a LATENT function. Utility.Wait suspends the script stack, so its callback is
     // not guaranteed to run inline on the dispatching thread the way a native's may.
     constexpr int kLatent = 10;
@@ -213,6 +215,7 @@ std::string S2(int n)
     }, std::chrono::seconds(10));
     const bool latentOk = lr == "posted" && WaitUntil([&] { return st->latentDone.load() >= kLatent; }, std::chrono::seconds(20));
 
+    Log("spike: S2 phase B done");
     // Settle, then take the success-path verdict BEFORE phase C starts. The VM may free an arguments
     // object when the stack is torn down, just after the callback fires; without the settle, late
     // destructions from phases A and B would land in phase C's bucket.
@@ -220,17 +223,29 @@ std::string S2(int n)
     const int cC = CountedArgs::ctor, dC = CountedArgs::dtor;
     const int ctorOk = cC - c0, dtorOk = dC - d0;
     const int liveOk = ctorOk - dtorOk;
+    // Logged BEFORE phase C: a failed-dispatch probe crashed the engine once (SkyrimSE.exe+1447D3E), and this must survive that.
+    Log(std::format("spike: S2 AB main_tid={} nested_done={}/{} nested_ints={} outer_failed={} nested_failed={} latent={}/{} latent_refused={} "
+        "cb_first_tid={} cb_on_main={} cb_off_main={} nested_first_tid={} nested_on_main={} nested_off_main={} latent_first_tid={} latent_on_main={} latent_off_main={} "
+        "args_ctor_ok={} args_dtor_ok={} live_ok={} owner_ok_path={} elapsed_ms={}",
+        mainTid, st->nestedDone.load(), n, st->nestedInts.load(), st->outerFailed.load(), st->nestedFailed.load(), st->latentDone.load(), kLatent,
+        st->latentRefused.load(), st->firstCbTid, st->cbOnMain.load(), st->cbOffMain.load(), st->firstNestedTid, st->nestedOnMain.load(),
+        st->nestedOffMain.load(), st->firstLatentTid, st->latentOnMain.load(), st->latentOffMain.load(), ctorOk, dtorOk, liveOk,
+        liveOk == 0 ? "vm" : "NOT_FREED", elapsedMs));
 
-    // Phase C: the FAILED-dispatch path. A script that does not exist makes Dispatch* return false.
-    // Does the VM still destroy the arguments object, or must the caller?
-    (void)OnMainThread([st](std::function<void(std::string)> finish) {
+    // Phase C: the FAILED-dispatch path, probed SAFELY. A script that does not exist crashed the engine
+    // (SkyrimSE.exe+1447D3E, null deref inside DispatchStaticCall), so the target must resolve: mode 0 is an existing
+    // script with a missing function, mode 1 an existing native with the wrong argument count.
+    // Does the VM still destroy the arguments object when Dispatch* returns false, or must the caller?
+    const int mode = g_s2Mode.load();
+    Log(std::format("spike: S2 phase C starting, mode={}", mode));
+    (void)OnMainThread([st, mode](std::function<void(std::string)> finish) {
         auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
-        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> none;
         for (int i = 0; i < 100; ++i) {
-            if (vm->DispatchStaticCall(RE::BSFixedString("SpikeNoSuchScript"), RE::BSFixedString("NoSuchFn"), NoArgs(), none))
-                st->failedTrue.fetch_add(1);
-            else
-                st->failedFalse.fetch_add(1);
+            RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{ new Functor([](Var) {}) };
+            const bool ok = mode == 0
+                ? vm->DispatchStaticCall(RE::BSFixedString("Utility"), RE::BSFixedString("NoSuchFn"), NoArgs(), cb)
+                : vm->DispatchStaticCall(RE::BSFixedString("Utility"), RE::BSFixedString("RandomInt"), FloatArg(1.0f), cb);
+            (ok ? st->failedTrue : st->failedFalse).fetch_add(1);
         }
         finish("posted");
     }, std::chrono::seconds(10));
@@ -259,6 +274,7 @@ std::string S2(int n)
 ```
 And in `Handle`, before the fallback:
 ```cpp
+    if (line == "s2mode0" || line == "s2mode1") { g_s2Mode = line.back() - '0'; return "OK s2 phase C mode " + line.substr(6); }
     if (line.rfind("s2", 0) == 0) return S2(ParseInt(line.size() > 3 ? line.substr(3) : "", 1000));
 ```
 API names to confirm by grepping `plugin/extern/CommonLibSSE-NG` before building (record findings in `docs/PINS.md`): `RE::UI::GameIsPaused`, `Variable::SetSInt/SetFloat/IsInt`, `IFunctionArguments` (its virtual destructor and whether `operator()` is `const`), `BSScrapArray::resize`, and that `DispatchStaticCall` accepts a `BSFixedString` first/second argument and a non-const `BSTSmartPointer<IStackCallbackFunctor>&`. Fix compile errors by matching the header, not by guessing.
@@ -302,3 +318,5 @@ Fill the S2 row in `spikes/RESULTS.md`: date, PASS/FAIL, the full output line (t
 ```bash
 git add spikes && git commit -m "test(spike): S2 VM callback thread, nested dispatch, latent callback, argument ownership"
 ```
+
+> **Measured on the box (2026-10-01, Windows-native), ruling R35:** the original phase C (a script that does not exist) crashed the engine at `SkyrimSE.exe+1447D3E` (null deref inside `DispatchStaticCall`), and so did an existing script with a missing function (`Utility.NoSuchFn`). The code above is the safe version: phase A/B results are logged before phase C (`spike: S2 AB ...`), and `s2mode1` probes a wrong argument type/count on an existing native, which the VM accepts (`Dispatch*` returned true, no crash). Never `Dispatch*Call` an unvalidated class or function.
