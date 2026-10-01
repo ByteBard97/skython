@@ -255,3 +255,111 @@ def test_status_names_the_log_file(host, tmp_path):
     host.main()
     assert host.status()["log_file"] == str(tmp_path / "logs" / "python.log")
     assert json.dumps(host.status())  # plain data, so it can be sent over the bridge later
+
+
+def test_a_log_dir_that_cannot_be_created_does_not_stop_scripts_or_the_bridge(host, fake, tmp_path):
+    blocker = tmp_path / "not_a_dir"
+    blocker.write_text("a regular file")
+    fake.config_overrides.update({"log_dir": str(blocker / "logs"), "bridge_enabled": True, "port": 0})
+    script(tmp_path, "t24_ok", ECHO_SETUP)
+    host.main()
+    st = host.status()
+    assert st["log_file"] is None
+    assert st["scripts"] == {"t24_ok": "ok"}
+    assert st["bridge"].startswith("listening on 127.0.0.1:")
+    assert any(level == "error" and "log" in msg for level, msg in fake.logs), "the failure reaches the plugin log"
+
+
+def test_a_startup_failure_leaves_an_inactive_session_file(host, fake, tmp_path, monkeypatch):
+    write_session_file(tmp_path / "session.json", Session("127.0.0.1", 45977, "ab" * 16, 1, "0.0.0-fake"))  # last run
+    from skyrim import inprocess
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("no connection for you")
+
+    monkeypatch.setattr(inprocess, "connect_in_process", broken)
+    assert host.main() is None
+    with pytest.raises(errors.NotRunning, match="could not start: no connection for you"):
+        find_session(tmp_path / "session.json", env={})
+
+
+def test_a_setup_that_finishes_after_its_timeout_is_recorded_and_torn_down_on_reload(host, fake, tmp_path):
+    script(tmp_path, "t24_late", """
+    import time
+
+    def setup(game):
+        time.sleep(0.8)
+
+    def teardown():
+        import _skyrim
+        _skyrim.log("info", "late teardown")
+    """)
+    host.main()
+    assert host.status()["scripts"]["t24_late"].startswith("timeout:")
+    wait_until(lambda: host.status()["scripts"]["t24_late"] == "ok", what="the late setup to finish", timeout=5)
+    host.reload("t24_late")
+    assert ("info", "late teardown") in fake.logs
+
+
+def test_a_failed_reimport_does_not_run_the_old_teardown_twice(host, fake, tmp_path):
+    body = """
+    def setup(game):
+        pass
+
+    def teardown():
+        import _skyrim
+        _skyrim.log("info", "teardown ran")
+    """
+    script(tmp_path, "t24_twice", body)
+    host.main()
+    script(tmp_path, "t24_twice", "raise RuntimeError('broken now')  # a different size\n")
+    assert host.reload("t24_twice").startswith("failed: RuntimeError")
+    assert host.reload("t24_twice").startswith("failed: RuntimeError")
+    assert fake.logs.count(("info", "teardown ran")) == 1
+
+
+def test_reload_drops_only_modules_from_the_scripts_folder(host, fake, tmp_path):
+    import skyrim
+    package = sys.modules["skyrim"]
+    script(tmp_path, "skyrim", "X = 1\n")  # clashes with the package: must never drop it
+    script(tmp_path, "t24_keep", ECHO_SETUP)
+    host.main()
+    outside = types_module("t24_keep.outside", "/somewhere/else/outside.py")
+    sys.modules["t24_keep.outside"] = outside
+    host.reload("skyrim")
+    assert sys.modules["skyrim"] is package and skyrim is package
+    host.reload("t24_keep")
+    assert sys.modules["t24_keep.outside"] is outside
+
+
+def types_module(name, file):
+    import types
+    m = types.ModuleType(name)
+    m.__file__ = file
+    return m
+
+
+def test_concurrent_reloads_never_run_setup_twice_at_once(host, fake, tmp_path):
+    script(tmp_path, "t24_conc", """
+    import builtins, time
+
+    def setup(game):
+        builtins.t24_active = getattr(builtins, "t24_active", 0) + 1
+        builtins.t24_max = max(getattr(builtins, "t24_max", 0), builtins.t24_active)
+        time.sleep(0.1)
+        builtins.t24_active -= 1
+    """)
+    host.main()
+    import builtins
+    builtins.t24_max = 0
+    try:
+        threads = [threading.Thread(target=host.reload, args=("t24_conc",)) for _ in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert builtins.t24_max == 1
+    finally:
+        for attr in ("t24_active", "t24_max"):
+            if hasattr(builtins, attr):
+                delattr(builtins, attr)

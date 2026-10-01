@@ -114,7 +114,15 @@ def test_the_gil_is_released_while_waiting(game, real):
         while not stop[0]:
             count[0] += 1
 
-    caller = threading.Thread(target=lambda: game.call("Fake", "Sleep", 1000))
+    result = {}
+
+    def work():
+        try:
+            result["value"] = game.call("Fake", "Sleep", 1000)
+        except Exception as exc:  # noqa: BLE001
+            result["error"] = exc
+
+    caller = threading.Thread(target=work)
     spinner = threading.Thread(target=spin)
     spinner.start()
     caller.start()
@@ -129,6 +137,8 @@ def test_the_gil_is_released_while_waiting(game, real):
         caller.join(5)
         stop[0] = True
         spinner.join()
+    assert "error" not in result, result.get("error")
+    assert not caller.is_alive() and "value" in result
 
 
 def test_bridge_over_the_real_module(real):

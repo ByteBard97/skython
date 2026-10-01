@@ -288,12 +288,120 @@ def test_status_names_the_log_file(host, tmp_path):
     host.main()
     assert host.status()["log_file"] == str(tmp_path / "logs" / "python.log")
     assert json.dumps(host.status())  # plain data, so it can be sent over the bridge later
+
+
+def test_a_log_dir_that_cannot_be_created_does_not_stop_scripts_or_the_bridge(host, fake, tmp_path):
+    blocker = tmp_path / "not_a_dir"
+    blocker.write_text("a regular file")
+    fake.config_overrides.update({"log_dir": str(blocker / "logs"), "bridge_enabled": True, "port": 0})
+    script(tmp_path, "t24_ok", ECHO_SETUP)
+    host.main()
+    st = host.status()
+    assert st["log_file"] is None
+    assert st["scripts"] == {"t24_ok": "ok"}
+    assert st["bridge"].startswith("listening on 127.0.0.1:")
+    assert any(level == "error" and "log" in msg for level, msg in fake.logs), "the failure reaches the plugin log"
+
+
+def test_a_startup_failure_leaves_an_inactive_session_file(host, fake, tmp_path, monkeypatch):
+    write_session_file(tmp_path / "session.json", Session("127.0.0.1", 45977, "ab" * 16, 1, "0.0.0-fake"))  # last run
+    from skyrim import inprocess
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("no connection for you")
+
+    monkeypatch.setattr(inprocess, "connect_in_process", broken)
+    assert host.main() is None
+    with pytest.raises(errors.NotRunning, match="could not start: no connection for you"):
+        find_session(tmp_path / "session.json", env={})
+
+
+def test_a_setup_that_finishes_after_its_timeout_is_recorded_and_torn_down_on_reload(host, fake, tmp_path):
+    script(tmp_path, "t24_late", """
+    import time
+
+    def setup(game):
+        time.sleep(0.8)
+
+    def teardown():
+        import _skyrim
+        _skyrim.log("info", "late teardown")
+    """)
+    host.main()
+    assert host.status()["scripts"]["t24_late"].startswith("timeout:")
+    wait_until(lambda: host.status()["scripts"]["t24_late"] == "ok", what="the late setup to finish", timeout=5)
+    host.reload("t24_late")
+    assert ("info", "late teardown") in fake.logs
+
+
+def test_a_failed_reimport_does_not_run_the_old_teardown_twice(host, fake, tmp_path):
+    body = """
+    def setup(game):
+        pass
+
+    def teardown():
+        import _skyrim
+        _skyrim.log("info", "teardown ran")
+    """
+    script(tmp_path, "t24_twice", body)
+    host.main()
+    script(tmp_path, "t24_twice", "raise RuntimeError('broken now')  # a different size\n")
+    assert host.reload("t24_twice").startswith("failed: RuntimeError")
+    assert host.reload("t24_twice").startswith("failed: RuntimeError")
+    assert fake.logs.count(("info", "teardown ran")) == 1
+
+
+def test_reload_drops_only_modules_from_the_scripts_folder(host, fake, tmp_path):
+    import skyrim
+    package = sys.modules["skyrim"]
+    script(tmp_path, "skyrim", "X = 1\n")  # clashes with the package: must never drop it
+    script(tmp_path, "t24_keep", ECHO_SETUP)
+    host.main()
+    outside = types_module("t24_keep.outside", "/somewhere/else/outside.py")
+    sys.modules["t24_keep.outside"] = outside
+    host.reload("skyrim")
+    assert sys.modules["skyrim"] is package and skyrim is package
+    host.reload("t24_keep")
+    assert sys.modules["t24_keep.outside"] is outside
+
+
+def types_module(name, file):
+    import types
+    m = types.ModuleType(name)
+    m.__file__ = file
+    return m
+
+
+def test_concurrent_reloads_never_run_setup_twice_at_once(host, fake, tmp_path):
+    script(tmp_path, "t24_conc", """
+    import builtins, time
+
+    def setup(game):
+        builtins.t24_active = getattr(builtins, "t24_active", 0) + 1
+        builtins.t24_max = max(getattr(builtins, "t24_max", 0), builtins.t24_active)
+        time.sleep(0.1)
+        builtins.t24_active -= 1
+    """)
+    host.main()
+    import builtins
+    builtins.t24_max = 0
+    try:
+        threads = [threading.Thread(target=host.reload, args=("t24_conc",)) for _ in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert builtins.t24_max == 1
+    finally:
+        for attr in ("t24_active", "t24_max"):
+            if hasattr(builtins, attr):
+                delattr(builtins, attr)
 ```
 
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `cd python && uv run --python 3.14 pytest -q tests/test_host.py`
-Expected: FAIL with `18 errors`, each `ImportError: cannot import name '_host' from 'skyrim'` (the `host` fixture imports it).
+Expected: FAIL with `24 errors`, each `ImportError: cannot import name '_host' from 'skyrim'` (the `host` fixture imports it).
 
 - [ ] **Step 3: Implement the host module**
 
@@ -344,6 +452,7 @@ LOG_MAX_BYTES = 1024 * 1024
 LOG_BACKUPS = 3
 
 _LOCK = threading.RLock()
+_RELOAD_LOCK = threading.Lock()  # one reload at a time: no two setups of the same script at once
 _STATE: dict = {}
 
 
@@ -429,6 +538,20 @@ def _setup_logging(module, log_dir) -> str:
     return path
 
 
+def _setup_plugin_log_only(module) -> None:
+    """Fallback when python.log cannot be opened: WARNING and above still reach the plugin's own log."""
+    root = logging.getLogger()
+    for h in list(root.handlers):
+        if getattr(h, "_skyrim_host", False):
+            root.removeHandler(h)
+            h.close()
+    ph = _PluginLogHandler(module)
+    ph.setFormatter(logging.Formatter("python: %(name)s: %(message)s"))
+    ph._skyrim_host = True
+    root.addHandler(ph)
+    root.setLevel(logging.INFO)
+
+
 def _install_hooks() -> None:
     def excepthook(exc_type, exc, tb):
         log.error("uncaught exception", exc_info=(exc_type, exc, tb))
@@ -482,38 +605,66 @@ def _load_one(name: str) -> str:
 
     holder: dict = {}
 
-    def run():
-        module = importlib.import_module(name)
-        holder["module"] = module
-        setup = getattr(module, "setup", None)
-        if not callable(setup):
-            holder["missing"] = True
-            return
-        setup(connect_in_process())  # the script's own Game over _skyrim: closing it closes no one else's
+    def final_status() -> str:
+        if "error" in holder:
+            return f"failed: {holder['error']}"
+        if holder.get("missing"):
+            return "failed: no setup(game) function"
+        return "ok"
+
+    def report(status: str, took: float, late: bool) -> None:
+        suffix = " (finished after its timeout)" if late else ""
+        if status.startswith("failed: no setup"):
+            log.error("script %s: %s", name, status)
+        elif status.startswith("failed"):
+            log.error("script %s %s%s\n%s", name, status, suffix, holder.get("traceback"))
+        elif took > SETUP_WARN_S:
+            log.warning("script %s: setup took %.1f s%s; setup(game) should return quickly and start a thread "
+                        "for long work", name, took, suffix)
+        else:
+            log.info("script %s: ok%s", name, suffix)
 
     t0 = time.monotonic()
-    finished, error, tb = _run_with_timeout(run, f"script:{name}", SETUP_TIMEOUT_S)
-    took = time.monotonic() - t0
-    if not finished:
-        status = f"timeout: setup still running after {SETUP_TIMEOUT_S:g} s"
-        log.error("script %s: %s (it keeps running; the other scripts still load)", name, status)
-    elif error is not None:
-        status = f"failed: {error}"
-        log.error("script %s %s\n%s", name, status, tb)
-    elif holder.get("missing"):
-        status = "failed: no setup(game) function"
-        log.error("script %s: %s", name, status)
-    else:
-        status = "ok"
-        if took > SETUP_WARN_S:
-            log.warning("script %s: setup took %.1f s; setup(game) should return quickly and start a thread "
-                        "for long work", name, took)
-        else:
-            log.info("script %s: ok", name)
+
+    def run():
+        try:
+            module = importlib.import_module(name)
+            with _LOCK:  # recorded as soon as it imports, so a later reload can tear it down
+                _STATE["modules"][name] = module
+            setup = getattr(module, "setup", None)
+            if not callable(setup):
+                holder["missing"] = True
+            else:
+                setup(connect_in_process())  # the script's own Game: closing it closes no one else's
+        except BaseException as e:  # noqa: BLE001 - SystemExit from a script is a failure, not an exit
+            holder["error"] = f"{type(e).__name__}: {e}"
+            holder["traceback"] = traceback.format_exc()
+        with _LOCK:
+            holder["done"] = True
+            if holder.get("timed_out"):  # the host gave up on it earlier: record how it ended
+                status = final_status()
+                _STATE["scripts"][name] = status
+            else:
+                return
+        report(status, time.monotonic() - t0, late=True)
+
+    t = threading.Thread(target=run, name=f"script:{name}", daemon=True)
+    t.start()
+    t.join(SETUP_TIMEOUT_S)
     with _LOCK:
-        _STATE["scripts"][name] = status
-        if "module" in holder:
-            _STATE["modules"][name] = holder["module"]
+        if not holder.get("done"):
+            holder["timed_out"] = True
+            status = f"timeout: setup still running after {SETUP_TIMEOUT_S:g} s"
+            _STATE["scripts"][name] = status
+            timed_out = True
+        else:
+            status = final_status()
+            _STATE["scripts"][name] = status
+            timed_out = False
+    if timed_out:
+        log.error("script %s: %s (it keeps running; the other scripts still load)", name, status)
+    else:
+        report(status, time.monotonic() - t0, late=False)
     return status
 
 
@@ -533,29 +684,43 @@ def load_scripts(game, scripts_dir) -> dict[str, str]:
     return {name: _load_one(name) for name in _script_names(folder)}
 
 
+def _drop_script_modules(name: str, folder: pathlib.Path) -> None:
+    """Forget `name` and `name.*` from sys.modules, but only modules that came from the scripts folder."""
+    root = folder.resolve()
+    for key in [k for k in sys.modules if k == name or k.startswith(name + ".")]:
+        file = getattr(sys.modules[key], "__file__", None)
+        try:
+            inside = bool(file) and pathlib.Path(file).resolve().is_relative_to(root)
+        except (OSError, ValueError):
+            inside = False
+        if inside:
+            del sys.modules[key]
+
+
 def reload(name: str) -> str:
     """Development aid, best effort (spec 4.10): teardown(), forget the script's modules, import it again
     and call setup(game). State in C extensions or in threads teardown() did not stop is not reset."""
-    with _LOCK:
-        game = _STATE["game"]
-        module = _STATE["modules"].get(name)
-        folder = _STATE.get("scripts_dir")
-    if game is None or folder is None:
-        return "failed: no scripts have been loaded yet"
-    if name not in _script_names(folder):
-        return f"failed: no script named {name!r} in {folder}"
-    teardown = getattr(module, "teardown", None) if module is not None else None
-    if callable(teardown):
-        finished, error, tb = _run_with_timeout(teardown, f"script-teardown:{name}", SETUP_TIMEOUT_S)
-        if not finished:
-            log.error("script %s: teardown still running after %g s; reloading anyway", name, SETUP_TIMEOUT_S)
-        elif error is not None:
-            log.error("script %s: teardown failed: %s; reloading anyway\n%s", name, error, tb)
-    for key in [k for k in sys.modules if k == name or k.startswith(name + ".")]:
-        del sys.modules[key]
-    importlib.invalidate_caches()
-    log.info("script %s: reloading", name)
-    return _load_one(name)
+    with _RELOAD_LOCK:
+        with _LOCK:
+            game = _STATE["game"]
+            folder = _STATE.get("scripts_dir")
+        if game is None or folder is None:
+            return "failed: no scripts have been loaded yet"
+        if name not in _script_names(folder):
+            return f"failed: no script named {name!r} in {folder}"
+        with _LOCK:
+            module = _STATE["modules"].pop(name, None)  # a failed re-import must not leave it to be torn down again
+        teardown = getattr(module, "teardown", None) if module is not None else None
+        if callable(teardown):
+            finished, error, tb = _run_with_timeout(teardown, f"script-teardown:{name}", SETUP_TIMEOUT_S)
+            if not finished:
+                log.error("script %s: teardown still running after %g s; reloading anyway", name, SETUP_TIMEOUT_S)
+            elif error is not None:
+                log.error("script %s: teardown failed: %s; reloading anyway\n%s", name, error, tb)
+        _drop_script_modules(name, folder)
+        importlib.invalidate_caches()
+        log.info("script %s: reloading", name)
+        return _load_one(name)
 
 
 # -- the bridge ------------------------------------------------------------------------------------------
@@ -596,21 +761,49 @@ def _start_bridge(module, cfg: dict) -> None:
 
 
 # -- entry points ----------------------------------------------------------------------------------------
+def _write_startup_failure(cfg: dict, why: str) -> None:
+    """Replace a stale session file from the last run with one that says why there is no bridge."""
+    from .discovery import write_inactive_session_file
+
+    session_file = cfg.get("session_file") or None
+    if not session_file:
+        return
+    try:
+        write_inactive_session_file(session_file, f"skyrim._host could not start: {why}",
+                                    pid=os.getpid(), plugin_version=cfg.get("plugin_version"))
+    except Exception:  # noqa: BLE001
+        log.exception("could not write the inactive session file")
+
+
 def _main() -> None:
     import _skyrim
 
     from .inprocess import connect_in_process
 
     cfg = json.loads(_skyrim.config())
+    log_file = None
+    try:
+        log_file = _setup_logging(_skyrim, cfg["log_dir"])
+    except Exception as e:  # noqa: BLE001 - no python.log: keep going with the plugin log only
+        _setup_plugin_log_only(_skyrim)
+        log.error("python.log could not be opened (%s); logging to the plugin log only", e)
     with _LOCK:
         _STATE["config"] = cfg
-        _STATE["log_file"] = _setup_logging(_skyrim, cfg["log_dir"])
-    _install_hooks()
+        _STATE["log_file"] = log_file
+    try:
+        _install_hooks()
+    except Exception:  # noqa: BLE001
+        log.exception("could not route print and uncaught exceptions into the log; going on without")
     if SWITCH_INTERVAL_S is not None:
         sys.setswitchinterval(SWITCH_INTERVAL_S)
     log.info("skyrim._host: Python %s, plugin %s, game %s (%s), switch interval %g s", sys.version.split()[0],
              cfg.get("plugin_version"), cfg.get("game_version"), cfg.get("runtime"), sys.getswitchinterval())
-    game = connect_in_process(module=_skyrim)
+    try:
+        game = connect_in_process(module=_skyrim)
+    except Exception as e:  # noqa: BLE001
+        log.exception("could not connect in process")
+        _write_startup_failure(cfg, str(e))
+        return
     with _LOCK:
         _STATE["game"] = game
     _start_bridge(_skyrim, cfg)  # before the scripts, so a slow script never delays the developer's tools
@@ -667,11 +860,11 @@ def _reset() -> None:
 - [ ] **Step 4: Run to verify they pass, on both Python versions**
 
 Run: `cd python && uv run --python 3.12 pytest -q && uv run --python 3.14 pytest -q`
-Expected: `337 passed` twice, each in about 10 s (Task 23's 319 plus this task's 18). The blocking-setup test leaves a daemon thread sleeping for 3 s after it ends; that is intended (it shows main() returning while a script is still stuck).
+Expected: `397 passed, 7 skipped` twice, each in about 15 s (373 before this task plus its 24 host tests; the 7 skipped are test_real_module.py). The blocking-setup test leaves a daemon thread sleeping for 3 s after it ends; that is intended (it shows main() returning while a script is still stuck).
 
 Run the host, bridge and remote tests together five times, to catch races between them:
 `for i in 1 2 3 4 5; do uv run --python 3.14 pytest -q tests/test_bridge.py tests/test_host.py tests/test_remote.py; done`
-Expected: `97 passed` five times.
+Expected: `107 passed` five times.
 
 - [ ] **Step 5: Run the drift check**
 
@@ -800,7 +993,15 @@ def test_the_gil_is_released_while_waiting(game, real):
         while not stop[0]:
             count[0] += 1
 
-    caller = threading.Thread(target=lambda: game.call("Fake", "Sleep", 1000))
+    result = {}
+
+    def work():
+        try:
+            result["value"] = game.call("Fake", "Sleep", 1000)
+        except Exception as exc:  # noqa: BLE001
+            result["error"] = exc
+
+    caller = threading.Thread(target=work)
     spinner = threading.Thread(target=spin)
     spinner.start()
     caller.start()
@@ -815,6 +1016,8 @@ def test_the_gil_is_released_while_waiting(game, real):
         caller.join(5)
         stop[0] = True
         spinner.join()
+    assert "error" not in result, result.get("error")
+    assert not caller.is_alive() and "value" in result
 
 
 def test_bridge_over_the_real_module(real):
