@@ -203,6 +203,4 @@ std::string_view value_kind(const Value& v)
     return names[v.v.index()];
 }
 
-bool is_valid_form_key(std::string_view) { return true; }  // replaced in Task 15
-bool form_key_matches_id(std::string_view, std::uint32_t) { return true; }  // replaced in Task 15
 }
