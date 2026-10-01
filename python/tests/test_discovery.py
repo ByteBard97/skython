@@ -116,3 +116,34 @@ def test_an_inactive_session_file_names_its_reason(tmp_path):
     assert "port" not in data and "token" not in data
     with pytest.raises(NotRunning, match="not running: bridge_enabled is false"):
         find_session(p, env={})
+
+
+# -- fix round 1: strict session file contents ---------------------------------------------------------------
+@pytest.mark.parametrize("port", [1.5, 45977.0, [1], {"a": 1}])
+def test_a_port_must_be_an_int_or_a_digit_string(tmp_path, port):
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"port": port, "token": TOK}))
+    with pytest.raises(NotRunning, match="port"):
+        find_session(p, env={})
+
+
+def test_a_digit_string_port_is_accepted(tmp_path):
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"port": "4500", "token": TOK}))
+    assert find_session(p, env={}).port == 4500
+
+
+@pytest.mark.parametrize("token", [None, 12345, ["x"], ""])
+def test_a_token_must_be_a_string(tmp_path, token):
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"port": 4500, "token": token}))
+    with pytest.raises(NotRunning, match="token"):
+        find_session(p, env={})
+
+
+@pytest.mark.parametrize("text", ["[]", "42", "null", '"x"'])
+def test_a_session_file_that_is_not_an_object_is_not_running(tmp_path, text):
+    p = tmp_path / "s.json"
+    p.write_text(text)
+    with pytest.raises(NotRunning, match="not a JSON object"):
+        find_session(p, env={})

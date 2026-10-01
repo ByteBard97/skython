@@ -354,6 +354,37 @@ def test_an_inactive_session_file_names_its_reason(tmp_path):
     assert "port" not in data and "token" not in data
     with pytest.raises(NotRunning, match="not running: bridge_enabled is false"):
         find_session(p, env={})
+
+
+# -- fix round 1: strict session file contents ---------------------------------------------------------------
+@pytest.mark.parametrize("port", [1.5, 45977.0, [1], {"a": 1}])
+def test_a_port_must_be_an_int_or_a_digit_string(tmp_path, port):
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"port": port, "token": TOK}))
+    with pytest.raises(NotRunning, match="port"):
+        find_session(p, env={})
+
+
+def test_a_digit_string_port_is_accepted(tmp_path):
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"port": "4500", "token": TOK}))
+    assert find_session(p, env={}).port == 4500
+
+
+@pytest.mark.parametrize("token", [None, 12345, ["x"], ""])
+def test_a_token_must_be_a_string(tmp_path, token):
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"port": 4500, "token": token}))
+    with pytest.raises(NotRunning, match="token"):
+        find_session(p, env={})
+
+
+@pytest.mark.parametrize("text", ["[]", "42", "null", '"x"'])
+def test_a_session_file_that_is_not_an_object_is_not_running(tmp_path, text):
+    p = tmp_path / "s.json"
+    p.write_text(text)
+    with pytest.raises(NotRunning, match="not a JSON object"):
+        find_session(p, env={})
 ```
 
 `python/tests/test_remote.py`:
@@ -461,6 +492,14 @@ def test_bad_timeouts_are_value_errors_not_hangs(server):
                {"send_timeout": None}, {"call_timeout": 0}):
         with pytest.raises(ValueError):
             connect(server, **kw)
+
+
+def test_a_bad_retry_not_ready_leaves_no_socket_and_no_reader_thread(server, sockets):
+    with pytest.raises(ValueError):
+        connect(server, retry_not_ready=-1)
+    assert sockets and all(s.fileno() == -1 for s in sockets)
+    wait_until(lambda: not [t for t in threading.enumerate() if t.name == "skyrim-remote-reader"],
+               what="the reader thread to end")
 
 
 def test_retry_not_ready_until_ok():
@@ -683,6 +722,70 @@ def test_connect_with_an_explicit_session_is_remote_even_inside_the_game(server,
             assert isinstance(game.transport, RemoteTransport)
     finally:
         f.close()
+
+
+def test_a_send_that_timed_out_closes_the_stream_before_a_queued_sender_can_write():
+    """Sender A's sendall times out holding the send lock; sender B is queued on that lock. B must get
+    ConnectionLost and write nothing: A marks the transport closed before releasing the lock."""
+    a_in_send, b_queued = threading.Event(), threading.Event()
+    writes = []
+    done = threading.Event()
+
+    class Sock:
+        def settimeout(self, t): pass
+        def gettimeout(self): return None
+        def shutdown(self, how): done.set()
+        def close(self): done.set()
+        def recv(self, n):
+            done.wait(30)
+            return b""
+
+        def sendall(self, data):
+            writes.append(data)
+            a_in_send.set()
+            assert b_queued.wait(5)
+            time.sleep(0.2)  # let B block on the lock
+            raise TimeoutError
+
+    t = RemoteTransport(Sock(), {"epoch": 1}, send_timeout=1)
+    results = {}
+
+    class SlowLock:
+        """Sender A dawdles when it takes the state lock after its timeout: if the send lock were already
+        released, B would write in that window."""
+        def __init__(self, inner): self._inner = inner
+
+        def __enter__(self):
+            if threading.current_thread().name == "sender-a":
+                time.sleep(0.5)
+            return self._inner.__enter__()
+
+        def __exit__(self, *exc): return self._inner.__exit__(*exc)
+
+    t._lock = SlowLock(t._lock)
+
+    def a():
+        try:
+            t.request("X", {}, 5)
+        except Exception as e:  # noqa: BLE001
+            results["a"] = e
+
+    def b():
+        a_in_send.wait(5)
+        b_queued.set()
+        try:
+            t.request("X", {}, 5)
+        except Exception as e:  # noqa: BLE001
+            results["b"] = e
+
+    ts = [threading.Thread(target=a, name="sender-a"), threading.Thread(target=b)]
+    for x in ts:
+        x.start()
+    for x in ts:
+        x.join(10)
+    assert isinstance(results.get("a"), errors.ConnectionLost)
+    assert isinstance(results.get("b"), errors.ConnectionLost)
+    assert len(writes) == 1, "a second frame was written onto the half-written stream"
 ```
 
 - [ ] **Step 3: Run to verify they fail**
@@ -718,11 +821,11 @@ class Session:
 
 
 def _port(value, source: str) -> int:
-    try:
-        port = int(value)
-    except (TypeError, ValueError):
-        raise NotRunning(f"{source} is not a port number: {value!r}") from None
-    if isinstance(value, bool) or not 1 <= port <= _PORT_MAX:
+    if isinstance(value, bool) or not (isinstance(value, int) or (isinstance(value, str) and value.isascii()
+                                                                    and value.isdigit())):
+        raise NotRunning(f"{source} is not a port number: {value!r}")
+    port = int(value)
+    if not 1 <= port <= _PORT_MAX:
         raise NotRunning(f"{source} is not a port number (1-{_PORT_MAX}): {value!r}")
     return port
 
@@ -734,13 +837,18 @@ def _read(path: Path, host: str) -> Session:
         raise NotRunning(f"no session file at {path}; is the game running with the dev bridge enabled?") from None
     except (OSError, ValueError) as e:
         raise NotRunning(f"session file {path} is unreadable: {e}") from None
-    if isinstance(data, dict) and data.get("active") is False:
+    if not isinstance(data, dict):
+        raise NotRunning(f"session file {path} is unreadable: it is not a JSON object")
+    if data.get("active") is False:
         raise NotRunning(f"session file {path} says the bridge is not running: {data.get('reason', 'no reason given')}")
     try:
-        port = _port(data["port"], f"the port in session file {path}")
-        return Session(host, port, str(data["token"]), data.get("pid"), data.get("plugin_version"))
-    except (KeyError, TypeError, AttributeError) as e:
+        raw_port, token = data["port"], data["token"]
+    except KeyError as e:
         raise NotRunning(f"session file {path} is unreadable: missing {e}") from None
+    port = _port(raw_port, f"the port in session file {path}")
+    if not isinstance(token, str) or not token:
+        raise NotRunning(f"session file {path} is unreadable: the token is not a non-empty string")
+    return Session(host, port, token, data.get("pid"), data.get("plugin_version"))
 
 
 def find_session(session=None, *, host: str = _g.HOST, port: int | None = None, token: str | None = None,
@@ -880,7 +988,10 @@ class RemoteTransport:
                 reason = str(e) or type(e).__name__
             else:
                 return
-        self._fail_all(reason)  # outside the send lock, so other senders wake up and see `closed`
+            # Mark closed BEFORE releasing the send lock, so a queued sender sees it and writes nothing.
+            with self._lock:
+                self.closed = True
+        self._fail_all(reason)  # outside the send lock: closes the socket, fails the waiting callers
         raise errors.ConnectionLost(reason)
 
     def request(self, op: str, args: dict, wait_s: float) -> dict:
@@ -965,7 +1076,11 @@ def connect_remote(session=None, *, host: str = _g.HOST, port: int | None = None
     except BaseException:
         sock.close()
         raise
-    return Game(transport, call_timeout=call_timeout, retry_not_ready=retry_not_ready)
+    try:
+        return Game(transport, call_timeout=call_timeout, retry_not_ready=retry_not_ready)
+    except BaseException:
+        transport.close()  # a bad Game argument must not leak the socket or the reader thread
+        raise
 ```
 
 Replace the package's `__init__.py` with:

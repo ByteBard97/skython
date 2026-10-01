@@ -22,11 +22,11 @@ class Session:
 
 
 def _port(value, source: str) -> int:
-    try:
-        port = int(value)
-    except (TypeError, ValueError):
-        raise NotRunning(f"{source} is not a port number: {value!r}") from None
-    if isinstance(value, bool) or not 1 <= port <= _PORT_MAX:
+    if isinstance(value, bool) or not (isinstance(value, int) or (isinstance(value, str) and value.isascii()
+                                                                    and value.isdigit())):
+        raise NotRunning(f"{source} is not a port number: {value!r}")
+    port = int(value)
+    if not 1 <= port <= _PORT_MAX:
         raise NotRunning(f"{source} is not a port number (1-{_PORT_MAX}): {value!r}")
     return port
 
@@ -38,13 +38,18 @@ def _read(path: Path, host: str) -> Session:
         raise NotRunning(f"no session file at {path}; is the game running with the dev bridge enabled?") from None
     except (OSError, ValueError) as e:
         raise NotRunning(f"session file {path} is unreadable: {e}") from None
-    if isinstance(data, dict) and data.get("active") is False:
+    if not isinstance(data, dict):
+        raise NotRunning(f"session file {path} is unreadable: it is not a JSON object")
+    if data.get("active") is False:
         raise NotRunning(f"session file {path} says the bridge is not running: {data.get('reason', 'no reason given')}")
     try:
-        port = _port(data["port"], f"the port in session file {path}")
-        return Session(host, port, str(data["token"]), data.get("pid"), data.get("plugin_version"))
-    except (KeyError, TypeError, AttributeError) as e:
+        raw_port, token = data["port"], data["token"]
+    except KeyError as e:
         raise NotRunning(f"session file {path} is unreadable: missing {e}") from None
+    port = _port(raw_port, f"the port in session file {path}")
+    if not isinstance(token, str) or not token:
+        raise NotRunning(f"session file {path} is unreadable: the token is not a non-empty string")
+    return Session(host, port, token, data.get("pid"), data.get("plugin_version"))
 
 
 def find_session(session=None, *, host: str = _g.HOST, port: int | None = None, token: str | None = None,

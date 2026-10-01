@@ -103,6 +103,14 @@ def test_bad_timeouts_are_value_errors_not_hangs(server):
             connect(server, **kw)
 
 
+def test_a_bad_retry_not_ready_leaves_no_socket_and_no_reader_thread(server, sockets):
+    with pytest.raises(ValueError):
+        connect(server, retry_not_ready=-1)
+    assert sockets and all(s.fileno() == -1 for s in sockets)
+    wait_until(lambda: not [t for t in threading.enumerate() if t.name == "skyrim-remote-reader"],
+               what="the reader thread to end")
+
+
 def test_retry_not_ready_until_ok():
     count = {"n": 0}
 
@@ -323,3 +331,67 @@ def test_connect_with_an_explicit_session_is_remote_even_inside_the_game(server,
             assert isinstance(game.transport, RemoteTransport)
     finally:
         f.close()
+
+
+def test_a_send_that_timed_out_closes_the_stream_before_a_queued_sender_can_write():
+    """Sender A's sendall times out holding the send lock; sender B is queued on that lock. B must get
+    ConnectionLost and write nothing: A marks the transport closed before releasing the lock."""
+    a_in_send, b_queued = threading.Event(), threading.Event()
+    writes = []
+    done = threading.Event()
+
+    class Sock:
+        def settimeout(self, t): pass
+        def gettimeout(self): return None
+        def shutdown(self, how): done.set()
+        def close(self): done.set()
+        def recv(self, n):
+            done.wait(30)
+            return b""
+
+        def sendall(self, data):
+            writes.append(data)
+            a_in_send.set()
+            assert b_queued.wait(5)
+            time.sleep(0.2)  # let B block on the lock
+            raise TimeoutError
+
+    t = RemoteTransport(Sock(), {"epoch": 1}, send_timeout=1)
+    results = {}
+
+    class SlowLock:
+        """Sender A dawdles when it takes the state lock after its timeout: if the send lock were already
+        released, B would write in that window."""
+        def __init__(self, inner): self._inner = inner
+
+        def __enter__(self):
+            if threading.current_thread().name == "sender-a":
+                time.sleep(0.5)
+            return self._inner.__enter__()
+
+        def __exit__(self, *exc): return self._inner.__exit__(*exc)
+
+    t._lock = SlowLock(t._lock)
+
+    def a():
+        try:
+            t.request("X", {}, 5)
+        except Exception as e:  # noqa: BLE001
+            results["a"] = e
+
+    def b():
+        a_in_send.wait(5)
+        b_queued.set()
+        try:
+            t.request("X", {}, 5)
+        except Exception as e:  # noqa: BLE001
+            results["b"] = e
+
+    ts = [threading.Thread(target=a, name="sender-a"), threading.Thread(target=b)]
+    for x in ts:
+        x.start()
+    for x in ts:
+        x.join(10)
+    assert isinstance(results.get("a"), errors.ConnectionLost)
+    assert isinstance(results.get("b"), errors.ConnectionLost)
+    assert len(writes) == 1, "a second frame was written onto the half-written stream"

@@ -89,7 +89,10 @@ class RemoteTransport:
                 reason = str(e) or type(e).__name__
             else:
                 return
-        self._fail_all(reason)  # outside the send lock, so other senders wake up and see `closed`
+            # Mark closed BEFORE releasing the send lock, so a queued sender sees it and writes nothing.
+            with self._lock:
+                self.closed = True
+        self._fail_all(reason)  # outside the send lock: closes the socket, fails the waiting callers
         raise errors.ConnectionLost(reason)
 
     def request(self, op: str, args: dict, wait_s: float) -> dict:
@@ -174,4 +177,8 @@ def connect_remote(session=None, *, host: str = _g.HOST, port: int | None = None
     except BaseException:
         sock.close()
         raise
-    return Game(transport, call_timeout=call_timeout, retry_not_ready=retry_not_ready)
+    try:
+        return Game(transport, call_timeout=call_timeout, retry_not_ready=retry_not_ready)
+    except BaseException:
+        transport.close()  # a bad Game argument must not leak the socket or the reader thread
+        raise
