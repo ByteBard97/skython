@@ -245,7 +245,7 @@ bool form_key_matches_id(std::string_view, std::uint32_t) { return true; }  // r
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `cmake --build core/build -j && core/build/spy_core_tests`
-Expected: PASS, `[doctest] test cases:  22 |  22 passed | 0 failed | 0 skipped` and `[doctest] assertions: 162 | 162 passed | 0 failed |` (Tasks 14 and 15 together). Before the two stubs are deleted the link fails with `multiple definition of spy::is_valid_form_key`; that is expected and is why the deletion is part of this step.
+Expected: PASS, `[doctest] test cases:  23 |  23 passed | 0 failed | 0 skipped` and `[doctest] assertions: 167 | 167 passed | 0 failed |` (Tasks 14 and 15 together). Before the two stubs are deleted the link fails with `multiple definition of spy::is_valid_form_key`; that is expected and is why the deletion is part of this step.
 
 - [ ] **Step 5: Commit**
 
