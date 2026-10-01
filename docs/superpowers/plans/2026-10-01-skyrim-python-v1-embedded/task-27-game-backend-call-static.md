@@ -10,7 +10,7 @@ Adapted from: branch `plan-out-of-process`, task 17a (`task-17a-dispatch-skeleto
 >
 > **STOP and ask the owner (do not improvise) if:** S2, S4 or S9 is FAIL; a name in the Verify list does not exist and no obvious equivalent is found; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s; the log shows a runtime other than AE 1.6.1170.
 >
-> **Verify (grep `plugin/extern/CommonLibSSE-NG`; `API-VERIFICATION.md` has already checked these at the pin):** `VirtualMachine::GetScriptObjectType(BSFixedString, BSTSmartPointer<ObjectTypeInfo>&)`; `ObjectTypeInfo::GetParent`, `GetNumMemberFuncs`, `GetMemberFuncIter`, `GetNumGlobalFuncs`, `GetGlobalFuncIter`; `IFunction::GetName`, `GetParamCount`, `GetParam(i, BSFixedString&, TypeInfo&)`; `Variable::GetType`, `IsBool/IsInt/IsFloat/IsString`, `SetSInt/SetFloat/SetBool/SetString`, `IsNoneObject`; `DispatchStaticCall(BSFixedString, BSFixedString, IFunctionArguments*, BSTSmartPointer<IStackCallbackFunctor>&)` (non-const lvalue callback); `RE::UI::GameIsPaused()`; `RE::Calendar::GetDaysPassed()`.
+> **Verify (grep `plugin/extern/CommonLibSSE-NG`; `API-VERIFICATION.md` has already checked these at the pin):** `VirtualMachine::GetScriptObjectType(BSFixedString, BSTSmartPointer<ObjectTypeInfo>&)`; `ObjectTypeInfo::GetParent`, `GetNumMemberFuncs`, `GetMemberFuncIter`, `GetNumGlobalFuncs`, `GetGlobalFuncIter`; `IFunction::GetName`, `GetParamCount`, `GetParam(i, BSFixedString&, TypeInfo&)`; `Variable::GetType`, `IsBool/IsInt/IsFloat/IsString`, `SetSInt/SetFloat/SetBool/SetString`, `IsNoneObject`; `DispatchStaticCall(BSFixedString, BSFixedString, IFunctionArguments*, BSTSmartPointer<IStackCallbackFunctor>&)` (non-const lvalue callback); `IStackCallbackFunctor::CanSave() const` (virtual, not pure); `RE::UI::GameIsPaused()`; `RE::Calendar::GetDaysPassed()`.
 
 **Files:**
 - Replace: `plugin/src/GameBackend.h`, `plugin/src/GameBackend.cpp` (Task 26 created interim versions with the same names; this task overwrites both files whole)
@@ -26,24 +26,25 @@ Adapted from: branch `plan-out-of-process`, task 17a (`task-17a-dispatch-skeleto
 - Consumes (core, Tasks 14-18): `spy::Value`, `FormRef`, `Fingerprint`, `form_ref_to_json`, `value_kind` (`spy/values.h`); `is_runtime_form_id`, `format_form_key` (`spy/refs.h`); `CallArgs`, `parse_call_args` (`spy/requests.h`); `ProtocolError`, `ErrorCode`, `json` (`spy/errors.h`); `OpResult`, `Done`, `Cancelled`, `Progress`, `Backend`, `Dispatcher`, `DispatcherOptions` (`spy/dispatcher.h`); `Config` (`spy/config.h`).
 - Consumes (plugin, Task 25): `spy::log::Info/Warn/Error/Debug`, `spy::settings::Get()`, and these lifecycle wrappers in `Lifecycle.h`: `spy::life::Epoch()`, `GameLoaded()`, `Loading()`, `Paused()`, `OpenMenus()`, `LoadsStarted()`, `NotReadyReason(bool require_unpaused) -> std::optional<std::string>`, `BaseState() -> json` (`LifecycleState::base_state()`). If Task 25 spelled any of these differently, use its names; do not add a second lifecycle.
 - Consumes (Task 26): `spy::InstallModuleHost(ModuleHost)` call site; `livetest/conftest.py` fixtures `session` and `game` (a `skyrim.Game` connected through the bridge); `livetest/support.py` `raw_connect(session) -> socket`, `rpc(sock, op, args=None, req_id=1, timeout=30.0) -> dict`, `encode`, `read_frame`.
-- Consumes from spikes: S2 (Task 4: the VM takes ownership of the `IFunctionArguments` passed to a dispatch; which thread runs the callback; whether a failed dispatch frees the arguments). If S2 showed the VM does **not** free them on a failed dispatch, `CallStatic` must `delete args` in the failure branch.
+- Consumes from spikes: S2 (Task 4, measured; index Global Constraints, Papyrus dispatch rules): the VM never frees the `IFunctionArguments` passed to a dispatch, so the plugin owns them: the `Callback` holds the call's `DynArgs` and deletes it after reading the result, never earlier (phase D, 1000/1000); when `Dispatch*Call` returns false the args are kept, not freed, and logged once (ruling R37: unmeasured, the callback might still fire); the callback may run on the main thread or a VM thread.
 - Produces:
   - `spy::game::Backend() -> spy::Backend&` (the `GameBackend` singleton) and `spy::game::GetDispatcher() -> spy::Dispatcher&` (built on first use from `settings::Get()`: `default_timeout_ms`, `max_inflight_total`, and `on_late` logging each dropped late result with `log::Warn`; reaper started; immortal).
   - `spy::ops::Run(const std::string& op, const json& args, Done, Cancelled, Progress)` (main thread only; never throws), `spy::ops::AddStateExtras(json&)` (main thread), `spy::ops::WithGameState(json detail) -> json`, `spy::ops::NotReady(const std::string& reason) -> OpResult`.
   - `spy::pv::*` and `spy::sig::*` declarations (final headers; bodies arrive in Tasks 27-29 as named in the headers). `pv::FloatToJson(float)` is core's float encoder (`value_to_json`): shortest round-trip text, a non-finite Float becomes `null` (`PROTOCOL.md`); every Float leaving the plugin goes through it. `sig::FindProperty` returns the whole `PropertyTypeInfo` (Task 30 refuses full properties).
-  - `game.state` result keys: `data_ready, game_loaded, loading, interactive, paused, menus, epoch, player, game_days_passed, diagnostics{late_results_dropped, in_flight}` (`player` and `game_days_passed` are `null` unless a game is loaded). `Backend::BaseState()`, which `_skyrim.state()` and every `timeout`/`not_ready` detail read, carries the same keys **without** `player` and `game_days_passed`: it never blocks, so it cannot read the engine, and it leaves the keys out rather than report a wrong `null`.
+  - `game.state` result keys: `data_ready, game_loaded, loading, interactive, paused, menus, epoch, player, game_days_passed, diagnostics{late_results_dropped, in_flight}` (Task 31 adds `max_task_drain_ms` and `max_task_drain_count` to `diagnostics`; `player` and `game_days_passed` are `null` unless a game is loaded). `Backend::BaseState()`, which `_skyrim.state()` and every `timeout`/`not_ready` detail read, carries the same keys **without** `player` and `game_days_passed`: it never blocks, so it cannot read the engine, and it leaves the keys out rather than report a wrong `null`.
 
 Rules this task implements (spec 4.3-4.5):
 - `GameBackend::Run` never blocks the caller (a Python thread inside `_skyrim.submit`): it queues exactly one `AddTask` and returns. The queued task checks `cancelled()` first (timed out, cancelled or a load started while queued) and does nothing if so.
 - `game.state` is answered **immediately** from `life::BaseState()` when no game is loaded or a save is loading. Only when a game is loaded does it queue one `AddTask` for `player` and `game_days_passed`, and that task rechecks `Loading()` before touching the engine.
 - Main thread: recheck readiness, find the function, check every argument against the declared parameter types (no default values: the count must match), dispatch.
-- VM callback: **primitives and `None` are converted on the VM thread** (no engine state). An object result or an array of objects costs one more `AddTask`, because turning a Form into a reference calls `LookupByID`/`GetFile`. No Python runs on any of these threads (Global Constraints).
+- VM callback: it owns the call's `DynArgs` and deletes it after reading the result (S2); on a false `Dispatch*Call` return the dispatch site keeps the args and logs once (R37). It overrides `CanSave()` to return false (ruling R38, as SkyrimPlatform does): our functor is never written into a save. **Primitives and `None` are converted on the VM thread** (no engine state). An object result or an array of objects costs one more `AddTask`, because turning a Form into a reference calls `LookupByID`/`GetFile`. No Python runs on any of these threads (Global Constraints).
 - Readiness at submit, deadlines, `busy`, load cancellation and late-result counting are the Dispatcher's (Task 18); this task does not duplicate them.
 - Member functions are looked up in the script's empty state only.
 
 **Known limits (Task 32 puts them in the README):**
 - Papyrus runtime errors are invisible: the VM callback gets only a result `Variable`. A script error inside the called function is logged by the game to `Papyrus.0.log`; the caller sees `None` or, if no callback fires, `Timeout`. `VmError` means only "the VM refused to dispatch".
-- The functor does not override `CanSave()`; latent calls in flight when the player saves may be dropped by the VM (surfaces as `Timeout`).
+- The functor returns false from `CanSave()`: a save made while a call is in flight does not record our callback. After loading that save the call never completes in the loaded game; the caller sees `NotReady` (the load cancels it) or `Timeout`. Task 31's live test "save during a latent call" pins this.
+- A `DynArgs` whose callback never fires (the VM dropped the call, or a refused dispatch whose callback never comes) is never freed: about 100 bytes each (Task 4's estimate). Freeing it in the `Callback` destructor instead is unmeasured (SkyrimPlatform comparison, Top 3, deferred).
 - A call made while the game is paused waits: Papyrus does not advance. Use `require_unpaused` or a generous timeout.
 
 - [ ] **Step 1: Write the live tests first** (they fail until the plugin is rebuilt)
@@ -530,7 +531,10 @@ OpResult NotReady(const std::string& reason);
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
 #include <atomic>
+#include <memory>
+#include <mutex>
 #include <thread>
+#include <utility>
 
 namespace spy::ops {
 namespace {
@@ -540,7 +544,8 @@ std::atomic<std::thread::id> g_mainThread{};  // written on the main thread by R
 
 RE::BSScript::Internal::VirtualMachine* VM() { return RE::BSScript::Internal::VirtualMachine::GetSingleton(); }
 
-// Arguments for one dispatch. The VM takes ownership of this object (spike S2, Task 4).
+// Arguments for one dispatch. The VM never frees them (spike S2, Task 4): the Callback owns this object and deletes
+// it after reading the result. On a false Dispatch*Call return it is kept (R37), see KeptOnRefusal.
 class DynArgs final : public RE::BSScript::IFunctionArguments
 {
 public:
@@ -571,12 +576,26 @@ void Convert(const Done& done, const Variable& result)
     }
 }
 
+// A refused dispatch (Dispatch*Call returned false): the args are NOT freed, because the callback might still fire
+// (unmeasured, R37); if it does, it frees them. With FindFunction and BindArgs first, a refusal is not expected.
+void KeptOnRefusal(const std::string& qualified)
+{
+    static std::once_flag once;
+    std::call_once(once, [&] {
+        log::Warn("ops: the VM refused a dispatch (" + qualified + "); its arguments are kept, not freed (R37). "
+                  "Logged once; later refusals leak silently.");
+    });
+}
+
 class Callback final : public RE::BSScript::IStackCallbackFunctor
 {
 public:
-    explicit Callback(Done d) : done_(std::move(d)) {}
+    Callback(Done d, DynArgs* args) : done_(std::move(d)), args_(args) {}
     void operator()(Variable result) override
     {
+        // This call's arguments (S2: the VM never frees them). Freed when this scope ends, after the result was read
+        // and converted or queued; `result` is our own copy. The destructor does not free them (see Known limits).
+        std::unique_ptr<DynArgs> owned{std::exchange(args_, nullptr)};
         // Primitives and None touch no engine state: convert here, on whatever thread the VM called us on.
         // Objects (forms, aliases, arrays of them) need LookupByID/GetFile: main thread only.
         if (!pv::NeedsMainThread(result) || std::this_thread::get_id() == g_mainThread.load())
@@ -585,9 +604,13 @@ public:
         SKSE::GetTaskInterface()->AddTask([done, result] { Convert(done, result); });
     }
     void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
+    // Never written into a save (as SkyrimPlatform does): a save during a latent call does not record this functor,
+    // and after loading that save the call ends NotReady or Timeout (Task 31 tests it). R38.
+    bool CanSave() const override { return false; }
 
 private:
     Done done_;
+    DynArgs* args_;  // owned; freed in operator()
 };
 
 // The main thread's own view; life::Paused() is what the Dispatcher saw at submit.
@@ -605,11 +628,12 @@ void CallStatic(const CallArgs& c, const Done& done)
     const auto qualified = c.script + "." + c.function;
     auto fn = sig::FindFunction(c.script, c.function, false);
     auto vars = sig::BindArgs(*fn, c.args, qualified);
-    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{new Callback(done)};
     auto* args = new DynArgs(std::move(vars));
-    // S2 (Task 4) recorded who frees `args` when Dispatch returns false; add `delete args;` below only if the VM does not.
-    if (!VM()->DispatchStaticCall(RE::BSFixedString(c.script), RE::BSFixedString(c.function), args, cb))
+    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{new Callback(done, args)};  // cb owns args
+    if (!VM()->DispatchStaticCall(RE::BSFixedString(c.script), RE::BSFixedString(c.function), args, cb)) {
+        KeptOnRefusal(qualified);  // never `delete args` here (R37)
         done(OpResult::Err(ErrorCode::vm_error, "the VM refused the call to " + qualified));
+    }
 }
 }
 
@@ -811,7 +835,7 @@ unset SINCE
 ```
 (Two `remote_build.sh` calls: the script fetches one DLL per call, and `deploy.sh` refuses a core DLL older than the loader. `livetest/scripts` exists since Task 26.)
 
-Expected at the main menu: `test_m1_mainmenu.py`: `3 passed`. After the save is loaded: `test_m1_calls.py` passes (all tests; `test_odd_timeout_values_never_hang_or_crash` counts 6). Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure: nothing ran. The core log shows one `game backend: late result dropped: ...` warning per dropped late result (from `on_late`). This is the first time a Papyrus call travels from Linux through the dev bridge, `_skyrim`, the Dispatcher and the VM. If `StringUtil` fails, SKSE's script is not loaded: check `Scripts/StringUtil.pex` and substitute, recording which. If `Utility.RandomInt` fails with `vm_error`, read `Papyrus.0.log` and STOP: the argument-ownership result from S2 does not hold here. If `test_timeout_carries_game_state` fails only because `paused`/`menus` are missing from the timeout detail, the Dispatcher (Task 18) is not adding `BaseState()`'s `paused` and `menus` to timeout errors as spec 4.1 requires: fix it there, not here.
+Expected at the main menu: `test_m1_mainmenu.py`: `3 passed`. After the save is loaded: `test_m1_calls.py` passes (all tests; `test_odd_timeout_values_never_hang_or_crash` counts 6). Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure: nothing ran. The core log shows one `game backend: late result dropped: ...` warning per dropped late result (from `on_late`). This is the first time a Papyrus call travels from Linux through the dev bridge, `_skyrim`, the Dispatcher and the VM. If `StringUtil` fails, SKSE's script is not loaded: check `Scripts/StringUtil.pex` and substitute, recording which. If `Utility.RandomInt` fails with `vm_error`, read `Papyrus.0.log` and STOP: S2 saw no refused dispatch for a validated target, so a refusal here means the dispatch rules from S2 do not hold (the log has one `ops: the VM refused a dispatch` warning; the args were kept, R37). If `test_timeout_carries_game_state` fails only because `paused`/`menus` are missing from the timeout detail, the Dispatcher (Task 18) is not adding `BaseState()`'s `paused` and `menus` to timeout errors as spec 4.1 requires: fix it there, not here.
 
 - [ ] **Step 8: Commit**
 

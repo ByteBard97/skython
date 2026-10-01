@@ -84,9 +84,9 @@ The bridge listens on `127.0.0.1` only, checks a token on every connection, and 
 - `game.batch().run()` without a timeout gives the batch 5 s per step in total (capped at one hour); pass `timeout=` for a tighter bound.
 - Arrays of objects can be returned but not sent. An array argument holds at most 128 elements (`TypeMismatch`); results are passed through whatever their length.
 - Alias references work as call targets and results; alias *arguments* have no live test until M1.5 (no vanilla function takes one).
-- Latent calls in flight when the player saves may be dropped by the VM (surfaces as `Timeout`).
+- A call in flight when the player saves is not written into the save: after loading that save the call ends `NotReady` or `Timeout`, never completes (the plugin's VM callback returns false from `CanSave()`).
 - A crash in native code inside the process (the plugin, or a compiled extension in a wheel) takes the game down; pure-Python exceptions do not.
-- Script reload (`skyrim._host.reload(name)`) is best effort: state held in C extensions or in threads a script did not stop in `teardown()` survives it.
+- Script reload (`skyrim._host.reload(name)`) is best effort: state held in C extensions survives it, and threads a script did not stop in `teardown()` keep running, but their `Game` is closed (calls raise `ConnectionLost`).
 - Throughput: a call takes about [p50_ms] ms (2-3 frames); a CPU-bound Python thread raises a call's p99 latency from [no-spin p99] to [spin p99] ms. Full figures: `livetest/results/throughput.json`.
 
 ## Build and test

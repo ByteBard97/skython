@@ -18,7 +18,7 @@ Adapted from: branch `plan-out-of-process`, task 17c (`task-17c-call-method-alia
 - Modify: `livetest/test_m1_calls.py` (append)
 
 **Interfaces:**
-- Consumes: Tasks 27-28 (`pv::ResolveForm`, `BindObject`, `FindBound`, `Describe`, `sig::FindFunction`, `sig::BindArgs`, `sig::IsA`, `Callback`, `DynArgs`, `PausedNow`, `PausedError`), spikes S4 (Task 6) and S7 (Task 9), core Task 14 (`AliasRef`, `alias_ref_to_json`, `form_ref_from_json`, `form_ref_to_json`) and Task 16 (`parse_call_args`).
+- Consumes: Tasks 27-28 (`pv::ResolveForm`, `BindObject`, `FindBound`, `Describe`, `sig::FindFunction`, `sig::BindArgs`, `sig::IsA`, `Callback` (owns and frees its `DynArgs`, `CanSave()` false), `DynArgs`, `KeptOnRefusal`, `PausedNow`, `PausedError`), spikes S4 (Task 6) and S7 (Task 9), core Task 14 (`AliasRef`, `alias_ref_to_json`, `form_ref_from_json`, `form_ref_to_json`) and Task 16 (`parse_call_args`).
 - Produces: `pv::ResolveAlias`, `pv::DescribeAlias`, `pv::ResolveTarget`; `ops::Run` serves `form.resolve` and `papyrus.call_method`; alias references work as call targets, arguments and results; the live proof that a form argument reaches the game as that form (`test_form_argument_arrives`).
 
 Rules this task implements:
@@ -281,10 +281,12 @@ void CallMethod(const CallArgs& c, const Done& done)
     auto fn = sig::FindFunction(c.script, c.function, true);
     auto target = pv::ResolveTarget(*c.object, c.script);
     auto vars = sig::BindArgs(*fn, c.args, qualified);
-    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{new Callback(done)};
-    auto* args = new DynArgs(std::move(vars));  // S2 (Task 4): who frees it if the dispatch fails; same rule as CallStatic
-    if (!VM()->DispatchMethodCall(target.object, RE::BSFixedString(c.function), args, cb))
+    auto* args = new DynArgs(std::move(vars));
+    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{new Callback(done, args)};  // cb owns args (S2)
+    if (!VM()->DispatchMethodCall(target.object, RE::BSFixedString(c.function), args, cb)) {
+        KeptOnRefusal(qualified);  // never `delete args` here (R37); same rule as CallStatic
         done(OpResult::Err(ErrorCode::vm_error, "the VM refused the call to " + qualified + " on " + target.desc));
+    }
 }
 ```
 In `Run`, add before the `unsupported` fallthrough:

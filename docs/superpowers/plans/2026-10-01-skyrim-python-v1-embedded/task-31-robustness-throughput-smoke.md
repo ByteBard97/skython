@@ -1,6 +1,6 @@
 # Task 31: Robustness, throughput and the in-process smoke script
 
-Adapted from: branch `plan-out-of-process`, task 19 (`task-19-robustness-and-throughput-baseline.md`). The robustness tests and the throughput curve are kept and now run through the dev bridge. New here: an in-process smoke script that makes the same calls from inside the game (the shipping mode) and records which transport it used and how the host loaded every script (including Task 26's deliberately broken `livetest_broken`), and throughput with and without a CPU-spinning Python thread inside the game (GIL hand-off cost, Review Focus 6).
+Adapted from: branch `plan-out-of-process`, task 19 (`task-19-robustness-and-throughput-baseline.md`). The robustness tests and the throughput curve are kept and now run through the dev bridge. New here: an in-process smoke script that makes the same calls from inside the game (the shipping mode) and records which transport it used and how the host loaded every script (including Task 26's deliberately broken `livetest_broken`), and throughput with and without a CPU-spinning Python thread inside the game (GIL hand-off cost, Review Focus 6). Added by ruling R38 (`.superpowers/sdd/README/skyrimplatform-comparison.md`, Tops 2 and 6): a live test that saves and loads while a latent call is in flight (Task 27's VM callback returns false from `CanSave()`), and a burst of `max_inflight_total` requests at once with the longest time our queued tasks held the main thread in one frame.
 
 > Part of the [skyrim-python v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), sections 4.5, 4.10, 8. Steps use checkbox (`- [ ]`) syntax.
 
@@ -15,12 +15,15 @@ Adapted from: branch `plan-out-of-process`, task 19 (`task-19-robustness-and-thr
 - Unchanged: `livetest/scripts/livetest_broken/__init__.py` exists since Task 26 (its message is asserted by Task 26's `test_m1_bridge.py`); do not create or edit it here.
 - Create: `livetest/smoke.py` (Linux side: reads the smoke results, sends commands through a control file)
 - Create: `livetest/test_m1_robustness.py`, `livetest/test_m1_throughput.py`, `livetest/results/.gitkeep`
+- Modify: `plugin/src/GameBackend.cpp` (Task 27's file: a passive drain meter around each queued task body and two more `diagnostics` keys, Step 3b)
 
 **Interfaces:**
-- Consumes: the live plugin from Task 30; `skyrim` (Tasks 20-22: `Game`, `errors`, `values.Form`, `values.Fingerprint`); `_skyrim.config()["log_dir"]` and `_skyrim.log(level, msg)` (Task 19 contract); `skyrim._host` loads each package in `scripts/` and calls `setup(game)` on the host thread, `teardown()` on reload (Task 24); `tools/deploy.sh ... --scripts DIR` (Task 26); `livetest/support.py` (`raw_connect`, `rpc`, `read_frame`, `send_request`, `fresh`) and fixtures `session`, `game` (Tasks 26-27); `tools/launch_game.sh` touches `$SKYRIM_PYTHON_STATE/launch.stamp` (Task 1), which `support.fresh` reads; `tools/env.sh` exports `SKYRIM_PYTHON_LOG` (`python.log`, in the folder that also holds the smoke files: index Fixed paths); `skyrim._host.status()["scripts"]` (Task 24).
+- Consumes: the live plugin from Task 30; `skyrim` (Tasks 20-22: `Game`, `errors`, `values.Form`, `values.Fingerprint`); `_skyrim.config()["log_dir"]` and `_skyrim.log(level, msg)` (Task 19 contract); `skyrim._host` loads each package in `scripts/` and calls `setup(game)` on the host thread, `teardown()` on reload (Task 24); `tools/deploy.sh ... --scripts DIR` (Task 26); `livetest/support.py` (`raw_connect`, `rpc`, `read_frame`, `send_request`, `fresh`) and fixtures `session`, `game` (Tasks 26-27); `tools/launch_game.sh` touches `$SKYRIM_PYTHON_STATE/launch.stamp` (Task 1), which `support.fresh` reads; `tools/env.sh` exports `SKYRIM_PYTHON_LOG` (`python.log`, in the folder that also holds the smoke files: index Fixed paths); `skyrim._host.status()["scripts"]` (Task 24); Task 27's `GameBackend.cpp` and its VM callback (`CanSave()` false); `tools/box/box_console.sh` and `box_quit.sh` (Task 1b: DevBench `save`/`load`, crash-log check).
 - Produces:
   - In the game's Python log folder (`.../SKSE/SkyrimPython/`): `livetest_smoke.json` (`{status: "pass"|"fail", checks: [{name, ok, error?}], backend, transport, scripts, thread, switch_interval_s, time}`; `backend` is `_skyrim.BACKEND`, `transport` the class name of the script's `game.transport`, `scripts` the host's `status()["scripts"]` for this run), and the control pair `livetest_control.json` (`{seq, cmd, ...}`, written by Linux) / `livetest_reply.json` (`{seq, result}`, written by the script). Commands: `spin_on`, `spin_off` (reply carries `spin_loops`), `bench` (`calls`; reply `{calls, seconds, per_s, p50_ms, p99_ms, spinning}`).
-  - `livetest/results/throughput.json`: `date`, `game_version`, `runtime`, `sequential_calls`, `sequential_seconds`, `sequential_per_s`, `p50_ms`, `p99_ms`, `curve` of `{depth, calls, seconds, per_s, busy}` for depths 1, 8, 32, 128, 256, plus `spin`: `{switch_interval_s, calls, remote: {no_spin: {per_s, p50_ms, p99_ms}, spin: {...}}, inprocess: {no_spin: {...}, spin: {...}}, spin_loops, fps_observed_spin}` (both `no_spin`/`spin` pairs use the same number of calls, measured back to back). Frame time is not measured here: frame stalls are pinned by spike S9 (Task 5) only.
+  - `livetest/results/throughput.json`: `date`, `game_version`, `runtime`, `sequential_calls`, `sequential_seconds`, `sequential_per_s`, `p50_ms`, `p99_ms`, `curve` of `{depth, calls, seconds, per_s, busy}` for depths 1, 8, 32, 128, 256, plus `spin`: `{switch_interval_s, calls, remote: {no_spin: {per_s, p50_ms, p99_ms}, spin: {...}}, inprocess: {no_spin: {...}, spin: {...}}, spin_loops, fps_observed_spin}` (both `no_spin`/`spin` pairs use the same number of calls, measured back to back). The throughput test does not measure frame time (frame stalls under a spinning thread are pinned by spike S9, Task 5); the burst test does, for our own tasks.
+  - `game.state` `diagnostics` gains `max_task_drain_ms` (float) and `max_task_drain_count` (int): since launch, the longest run of our queued task bodies within one frame and the most bodies in one run (Step 3b). Task 27's `late_results_dropped` and `in_flight` are unchanged.
+  - `livetest/results/burst.json`: `date`, `requested`, `per_connection`, `connections`, `ok`, `busy`, `seconds`, `max_task_drain_ms`, `max_task_drain_count`, `max_task_drain_ms_before`, `s9_frame_ms`, `worst_frame_ms_estimate` (= `s9_frame_ms` + `max_task_drain_ms`).
 
 - [ ] **Step 1: The in-process scripts**
 
@@ -280,6 +283,9 @@ def command(cmd: str, timeout: float = 300.0, **kw) -> dict:
 `livetest/test_m1_robustness.py`:
 ```python
 import os
+import pathlib
+import subprocess
+import threading
 import time
 
 import pytest
@@ -293,6 +299,10 @@ PLAYER = Form(form_id=0x14)
 IRON_SWORD = "Skyrim.esm|0x012EB7"
 MANUAL = os.environ.get("SPY_MANUAL") == "1"
 manual = pytest.mark.skipif(not MANUAL, reason="manual test: run with SPY_MANUAL=1 and `pytest -s`, with someone at the keyboard")
+BOX = os.environ.get("SPY_BOX") == "1"
+box = pytest.mark.skipif(not BOX, reason="box test: run with SPY_BOX=1 (game on the Windows box, DevBench answering)")
+BOX_CONSOLE = pathlib.Path(__file__).resolve().parent.parent / "tools" / "box" / "box_console.sh"
+SAVE_DURING_CALL = "skypy_r38_savecall"  # a new save of our own; never an existing one (Task 1b deploy safety)
 
 
 @pytest.fixture(autouse=True)
@@ -385,6 +395,41 @@ def test_paused_game_reports_state_and_honours_require_unpaused(session):
     s.close()
 
 
+def box_console(command: str) -> str:
+    # DevBench reroutes `save <name>` and `load <name>` to its game tool; typed raw they would deadlock (Task 1b).
+    r = subprocess.run([str(BOX_CONSOLE), command], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, f"box_console.sh {command!r} failed: {r.stdout}{r.stderr}"
+    return r.stdout
+
+
+@box
+def test_save_during_a_latent_call_then_load(session, game):
+    """R38: Task 27's VM callback returns false from CanSave(). A save taken while our Utility.Wait is suspended in
+    the VM must not record the callback; loading that save ends the call NotReady (the load cancels it) or Timeout,
+    never a crash, and the game keeps running."""
+    outcome = {}
+
+    def call():
+        try:
+            outcome["result"] = game.call("Utility", "Wait", 5.0, timeout=30)
+        except Exception as e:  # recorded, asserted below
+            outcome["error"] = e
+
+    t = threading.Thread(target=call, name="latent-call", daemon=True)
+    t.start()
+    time.sleep(0.5)
+    assert diagnostics(session)["in_flight"] >= 1, "the 5 s wait is not in flight"
+    box_console(f"save {SAVE_DURING_CALL}")
+    box_console(f"load {SAVE_DURING_CALL}")
+    t.join(60)
+    assert not t.is_alive(), "the call neither returned nor raised within 60 s"
+    assert "result" not in outcome, ("the 5 s wait finished before the load started (two DevBench round trips took too "
+                                     "long): a setup problem, not a product result. Retry; do not reinterpret it.")
+    assert isinstance(outcome["error"], (errors.NotReady, errors.Timeout)), outcome
+    game.wait_ready(timeout=180)  # the loaded game is up
+    assert 1 <= game.call("Utility", "RandomInt", 1, 6) <= 6
+
+
 @manual
 def test_inflight_call_is_failed_when_a_save_starts_loading(session):
     s = raw_connect(session)
@@ -395,7 +440,7 @@ def test_inflight_call_is_failed_when_a_save_starts_loading(session):
     assert r["ok"] is False and r["error"]["code"] == "not_ready" and r["error"]["detail"]["reason"] == "loading", r
     s.close()
 ```
-(Task 27 already pins an out-of-range Int and a timed-out call's late result; they are not repeated here.) The two manual tests meet the spec's `require_unpaused` and load-cancellation checks without blocking an unattended run. If `paused` is stale or wrong, `life::Paused()` (Task 25) is read at the wrong moment: record that in `spikes/RESULTS.md` and read `RE::UI::GameIsPaused()` where it is used.
+(Task 27 already pins an out-of-range Int and a timed-out call's late result; they are not repeated here.) `test_save_during_a_latent_call_then_load` differs from the manual load test: its point is a **save** taken while our callback is suspended in the VM (`CanSave()` false, Task 27), then a load of that save. It runs only with `SPY_BOX=1`, through `tools/box/box_console.sh` (DevBench, Task 1b). The window is tight: both DevBench round trips must start the load within the 5 s wait; if the call returns `None` the test fails with a setup message: retry, never reinterpret. The save `skypy_r38_savecall` is a new file on the box: add `C:\Users\geoff\Documents\My Games\Skyrim Special Edition\Saves\skypy_r38_savecall.ess` (and its `.skse` co-save) to `tools/box/box_teardown_list.sh`'s list in this task's commit; never save over another save. The two manual tests meet the spec's `require_unpaused` and load-cancellation checks without blocking an unattended run. If `paused` is stale or wrong, `life::Paused()` (Task 25) is read at the wrong moment: record that in `spikes/RESULTS.md` and read `RE::UI::GameIsPaused()` where it is used.
 
 - [ ] **Step 3: The throughput baseline, with and without a spinning Python thread**
 
@@ -413,8 +458,13 @@ import pytest
 
 from skyrim import errors
 from smoke import command, wait_smoke
+from support import raw_connect, read_frame, rpc, send_request
 
 RESULTS = pathlib.Path(__file__).parent / "results" / "throughput.json"
+BURST_RESULTS = pathlib.Path(__file__).parent / "results" / "burst.json"
+BURST_TOTAL = int(os.environ.get("SPY_BURST", "1024"))           # the dev ini's max_inflight_total (Task 25)
+BURST_PER_CONNECTION = int(os.environ.get("SPY_BURST_PER_CONN", "256"))  # the dev ini's max_inflight_per_connection
+S9_FRAME_MS = float(os.environ.get("SPY_S9_FRAME_MS", "46.1"))   # spikes/RESULTS.md S9 row: baseline median frame, box
 SEQUENTIAL = int(os.environ.get("SPY_SEQ", "500"))   # 2-3 frames per call: 500 calls take 20-40 s
 SPIN_CALLS = int(os.environ.get("SPY_SPIN_CALLS", "300"))
 CALLS_PER_DEPTH = 2000
@@ -503,15 +553,129 @@ def test_throughput_baseline(game):
     RESULTS.parent.mkdir(exist_ok=True)
     RESULTS.write_text(json.dumps(out, indent=2) + "\n")
     print(json.dumps(out, indent=2))
+
+
+def drain_diagnostics(session) -> dict:
+    s = raw_connect(session)
+    try:
+        return rpc(s, "game.state")["result"]["diagnostics"]
+    finally:
+        s.close()
+
+
+def test_burst_worst_frame(session, game):
+    """R38 (comparison Top 6): max_inflight_total requests at once. Records the longest time our queued task bodies
+    held the main thread in one frame (Step 3b's drain meter), and the worst frame estimated from it."""
+    before = drain_diagnostics(session)
+    n_conn = -(-BURST_TOTAL // BURST_PER_CONNECTION)  # the bridge caps each connection: spread over several
+    counts = [min(BURST_PER_CONNECTION, BURST_TOTAL - i * BURST_PER_CONNECTION) for i in range(n_conn)]
+    socks = [raw_connect(session) for _ in range(n_conn)]
+    try:
+        t0 = time.perf_counter()
+        for s, count in zip(socks, counts):
+            for i in range(count):
+                send_request(s, "papyrus.call_static",
+                             {"script": "Utility", "function": "RandomInt", "args": [1, 6], "timeout_ms": 60000},
+                             req_id=i + 1)
+        replies = []
+        for s, count in zip(socks, counts):
+            s.settimeout(90)
+            replies += [read_frame(s) for _ in range(count)]
+        secs = time.perf_counter() - t0
+    finally:
+        for s in socks:
+            s.close()
+    ok = sum(1 for r in replies if r["ok"])
+    busy = sum(1 for r in replies if not r["ok"] and r["error"]["code"] == "busy")
+    assert ok + busy == BURST_TOTAL, [r for r in replies if not r["ok"] and r["error"]["code"] != "busy"][:5]
+    time.sleep(0.5)
+    # One more task in a later frame closes the burst's last drain (the meter folds a run when the next one starts).
+    assert 1 <= game.call("Utility", "RandomInt", 1, 6) <= 6
+    after = drain_diagnostics(session)
+    out = {
+        "date": datetime.datetime.now().isoformat(timespec="seconds"),
+        "requested": BURST_TOTAL, "per_connection": BURST_PER_CONNECTION, "connections": n_conn,
+        "ok": ok, "busy": busy, "seconds": round(secs, 3),
+        "max_task_drain_ms": after["max_task_drain_ms"], "max_task_drain_count": after["max_task_drain_count"],
+        "max_task_drain_ms_before": before["max_task_drain_ms"],
+        "s9_frame_ms": S9_FRAME_MS,
+        "worst_frame_ms_estimate": round(S9_FRAME_MS + after["max_task_drain_ms"], 2),
+    }
+    BURST_RESULTS.parent.mkdir(exist_ok=True)
+    BURST_RESULTS.write_text(json.dumps(out, indent=2) + "\n")
+    print(json.dumps(out, indent=2))
 ```
 There is no pass threshold in v1 beyond "every call succeeds, with and without the spinner": this records the baseline M2 and skyrim-dm budget against. Read the curve, not one number: if `per_s` stops growing with depth, frames or the GIL are the limit (this test does not tell which; spike S9's frame-time record does). Compare `p50_ms` with the frame time (16.7 ms at 60 fps): 2-3 frames is expected. Compare `spin.*.spin.p99_ms` with `no_spin.p99_ms`: the difference is what a busy Python thread (skyrim-dm's 66-second generation) costs a delivery call, which spike S9 (Task 5) measured first; if it is more than about `switch_interval_s` × 2 per call, note it for skyrim-dm (it can lower its own work's priority by sleeping between batches).
+
+`test_burst_worst_frame` has no pass threshold: it records. `max_task_drain_ms` is the time our task bodies (lookup, argument check, dispatch) held the main thread in the worst frame; the VM's own work for those calls runs in Papyrus's per-frame budget, not in our tasks, and other plugins' tasks between ours split a run, so `worst_frame_ms_estimate` is an estimate (S9's baseline frame plus our longest drain), not a sampled frame time. If `max_task_drain_ms_before` is already the maximum, the burst was not the worst drain since launch: say so in the report. **The cap may be lowered from this number:** if `worst_frame_ms_estimate` exceeds the baseline by more than about one frame, report it to the owner with a proposed `max_inflight_total` (the drain scales with the count: `max_task_drain_ms / max_task_drain_count` per task); the owner sets the value in Task 25's ini defaults, not this task.
+
+- [ ] **Step 3b: The drain meter (passive; no task re-queues itself, Global Constraint 29)**
+
+SKSE runs every queued task in one go each frame, so our task bodies cluster by frame: spike S9's frame-sampling idea, applied to our own tasks without adding any. In `plugin/src/GameBackend.cpp` (Task 27), add inside the anonymous namespace, after `Internal()`:
+```cpp
+// Task 31 (ruling R38): how long our queued task bodies hold the main thread in one frame. Bodies that start less than
+// kGap after the previous one ended belong to the same run (one frame's drain). A run is folded into the two maxima
+// when the next run starts, so the latest run shows up after one more task. Main thread only (writes); the maxima are
+// atomics because BaseState() reads them from any thread. No I/O, no allocation.
+class DrainMeter
+{
+public:
+    void Begin()
+    {
+        const auto now = Clock::now();
+        if (count_ == 0 || now - lastEnd_ > kGap) {
+            Fold();
+            start_ = now;
+            count_ = 0;
+        }
+        ++count_;
+    }
+    void End() { lastEnd_ = Clock::now(); }
+    double MaxMs() const { return maxMs_.load(); }
+    std::uint32_t MaxCount() const { return maxCount_.load(); }
+
+private:
+    using Clock = std::chrono::steady_clock;
+    static constexpr auto kGap = std::chrono::milliseconds(1);
+    void Fold()
+    {
+        if (count_ == 0) return;
+        const double ms = std::chrono::duration<double, std::milli>(lastEnd_ - start_).count();
+        if (ms > maxMs_.load()) maxMs_.store(ms);
+        if (count_ > maxCount_.load()) maxCount_.store(count_);
+    }
+    Clock::time_point start_{}, lastEnd_{};
+    std::uint32_t count_ = 0;
+    std::atomic<double> maxMs_{0.0};
+    std::atomic<std::uint32_t> maxCount_{0};
+};
+
+DrainMeter& Meter()
+{
+    static auto* meter = new DrainMeter();  // immortal, like the dispatcher
+    return *meter;
+}
+
+struct Measured
+{
+    Measured() { Meter().Begin(); }
+    ~Measured() { Meter().End(); }
+};
+```
+Add `#include <atomic>` and `#include <chrono>` to the includes. Make `Measured measured;` the first statement of **both** `AddTask` lambdas in `GameBackend` (the one in `Run`, before `if (cancelled()) return;`, and the one in `State`). In `WithDiagnostics`, extend the object:
+```cpp
+        s["diagnostics"] = {{"late_results_dropped", d.LateResults()}, {"in_flight", d.InFlight()},
+                            {"max_task_drain_ms", Meter().MaxMs()}, {"max_task_drain_count", Meter().MaxCount()}};
+```
+Task 27's `test_state_shape_is_stable` checks only the two keys it knows, so it still passes.
 
 - [ ] **Step 4: Run**
 
 Loading a save is manual (press Continue); every wait is bounded and ignores logs from an earlier run (`SINCE=`).
 ```bash
 mkdir -p livetest/results && touch livetest/results/.gitkeep
-tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package --scripts livetest/scripts
+tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll  # Step 3b changed the core
+tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --python --package --scripts livetest/scripts
 tools/launch_game.sh
 source tools/env.sh
 export SINCE="$SKYRIM_PYTHON_STATE/launch.stamp"
@@ -525,9 +689,14 @@ grep '\[error\]' "$SKSE_LOG_DIR/SkyrimPython.log" | grep -v livetest_broken || e
 SKYRIM_LIVE=1 SPY_MANUAL=1 uv run --project python pytest livetest/test_m1_robustness.py -q -s -rs -k "paused or save_starts_loading"
 unset SINCE
 ```
+The save-during-a-call test needs the game on the Windows box (index: where the game runs) with DevBench answering and the bridge reachable from Linux (`tools/box/box_tunnel.sh`, Task 1b); then, with a save loaded:
+```bash
+SKYRIM_LIVE=1 SPY_BOX=1 uv run --project python pytest livetest/test_m1_robustness.py -q -s -rs -k save_during_a_latent_call
+tools/box/box_quit.sh   # must print NO_NEW_CRASH_LOG and CLEAN_EXIT
+```
 (`--scripts livetest/scripts` deploys both `livetest_smoke` and Task 26's `livetest_broken`; `tools/teardown_list.sh` lists them for removal later, with the owner's approval.)
 
-Expected: all pass; the two manual tests are skipped in the first run. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. The `grep` prints `no unexpected errors` (only the deliberate `livetest_broken` failure may log at error level; refused handshakes, bad frames and dropped connections are warnings or info). The game is still responsive afterwards. The manual run passes when a human opens a pausing menu, closes it, and loads a save as prompted.
+Expected: all pass; the two manual tests and the box test are skipped in the first run. `livetest/results/burst.json` is written (record `max_task_drain_ms` and `worst_frame_ms_estimate` in the report). With `SPY_BOX=1` the save-during-a-call test passes and `box_quit.sh` prints `NO_NEW_CRASH_LOG`; a crash or a hang there is a STOP. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. The `grep` prints `no unexpected errors` (only the deliberate `livetest_broken` failure may log at error level; refused handshakes, bad frames and dropped connections are warnings or info). The game is still responsive afterwards. The manual run passes when a human opens a pausing menu, closes it, and loads a save as prompted.
 
 - [ ] **Step 5: Commit**
 
