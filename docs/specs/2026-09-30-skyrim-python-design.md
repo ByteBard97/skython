@@ -164,7 +164,7 @@ Rules (each is pinned by a test):
 ### 4.7 Python package `skyrim`
 - Pure Python ≥3.12 (CPython 3.14 in the game). No runtime dependencies.
 - **Sync API** (fits skyrim-dm): `game = skyrim.connect()`; calls block until the result. In-process, each call is `_skyrim.submit` plus a GIL-released wait; remotely, `skyrim.remote` sends a frame and a reader thread completes a future. Event callbacks run on a separate dispatch thread in both modes.
-- `skyrim.connect(session=..., host=..., port=..., token=...)`: in the game returns the in-process `Game`; elsewhere resolves discovery (4.2), handshakes and checks protocol compatibility.
+- `skyrim.connect(session=..., host=..., port=..., token=...)`: in the game, with no bridge argument, returns the in-process `Game`; given any bridge argument (`session`, `host`, `port`, `token`, ...) or outside the game, it resolves discovery (4.2), handshakes over the bridge and checks protocol compatibility.
 - **v1 call surface (M1-M2):** `game.call(script, function, *args, timeout=5.0, require_unpaused=False)`, `game.call_method(obj, script, function, *args, ...)`, `game.get_property` / `set_property`, `game.batch()`, `game.form("Skyrim.esm|0x1A69F")`, `game.resolve(...)`, `game.state()`, `game.wait_ready()`, `quest.alias(n)`, `game.wait_for(predicate, timeout)`, event helpers (`game.on_death(actor, fn)`, `game.on_mod_event(name, fn)`, `game.on_channel(channel, fn)`). Generated per-class methods arrive with `pscgen` in M3.
 - Typed exceptions (4.2). The sync API can retry `NotReady` for a bounded time (`retry_not_ready=True`).
 - `skyrim._host` (in-game only): logging to `Documents/My Games/<game>/SKSE/SkyrimPython/python.log`, the script loader (4.10), and the bridge when enabled.
