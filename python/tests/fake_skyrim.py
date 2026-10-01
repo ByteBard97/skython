@@ -65,6 +65,7 @@ class Ctx:
 class _Entry:
     def __init__(self, req_id: int, op: str, needs_game: bool, deadline: float, loads: int):
         self.req_id, self.op, self.needs_game, self.deadline, self.loads = req_id, op, needs_game, deadline, loads
+        self.dispatched = False  # the handler has started
         self.response: str | None = None
         self.progress: list | None = None
         self.stop = threading.Event()
@@ -138,7 +139,7 @@ class FakeSkyrim:
         self.logs: list[tuple[str, str]] = []
         self.handler_calls = 0
         self.late_results = 0
-        self.epoch = 1
+        self._epoch_base = 0
         self.menus: list[str] = []
         self._not_ready: str | None = None
         self._paused = False
@@ -146,6 +147,15 @@ class FakeSkyrim:
         self._tickets = itertools.count(1)
         self._entries: dict[int, _Entry] = {}
         self._cond = threading.Condition()
+
+    @property
+    def epoch(self) -> int:
+        """Like FakeBackend::BaseState: the number of loads so far (0 at the start); tests may set it."""
+        return self._epoch_base + self._loads
+
+    @epoch.setter
+    def epoch(self, value: int) -> None:
+        self._epoch_base = value - self._loads
 
     # -- the _skyrim API ------------------------------------------------------------------------
     def submit(self, request: str) -> int:
@@ -176,7 +186,7 @@ class FakeSkyrim:
                 self._finish_now(ticket, req_id, _response(req_id, False, _g.CODE_BUSY, message="too many requests in flight"))
                 return ticket
             timeout_ms = args.get("timeout_ms") if "timeout_ms" in declared else None
-            if type(timeout_ms) is not int or not _g.MIN_TIMEOUT_MS <= timeout_ms <= _g.MAX_TIMEOUT_MS:
+            if timeout_ms is None:  # an invalid declared timeout_ms was refused above as bad_request
                 timeout_ms = self.default_timeout_ms
             entry = _Entry(req_id, op, needs_game, time.monotonic() + timeout_ms / 1000, self._loads)
             self._entries[ticket] = entry
@@ -254,7 +264,7 @@ class FakeSkyrim:
 
     def base_state(self) -> dict:
         reason = self._not_ready
-        return {"data_ready": reason != "starting", "game_loaded": reason not in ("starting", "no_game"),
+        return {"data_ready": reason != "starting", "game_loaded": reason is None,
                 "loading": reason == "loading", "interactive": reason is None, "paused": self._paused,
                 "menus": list(self.menus), "epoch": self.epoch}
 
@@ -279,6 +289,41 @@ class FakeSkyrim:
             return f"unknown op {obj.get('op')!r}"
         if not isinstance(obj.get("args"), dict):
             return "args must be an object"
+        return FakeSkyrim._op_problem(obj["op"], obj["args"])
+
+    @staticmethod
+    def _op_problem(op: str, args: dict) -> str | None:
+        """The argument checks of core's validate_op_args / parse_batch_args that need no value codec."""
+        declared = {name for name, _type, _required in _g.OPS[op]["args"]}
+        if "timeout_ms" in declared and "timeout_ms" in args:
+            t = args["timeout_ms"]
+            if type(t) is not int or not _g.MIN_TIMEOUT_MS <= t <= _g.MAX_TIMEOUT_MS:
+                return f"timeout_ms must be an integer from {_g.MIN_TIMEOUT_MS} to {_g.MAX_TIMEOUT_MS}"
+        if "require_unpaused" in declared and "require_unpaused" in args and type(args["require_unpaused"]) is not bool:
+            return "require_unpaused must be a boolean"
+        names = ["script", "function"] if op in (_g.OP_PAPYRUS_CALL_STATIC, _g.OP_PAPYRUS_CALL_METHOD) else []
+        if op in (_g.OP_PAPYRUS_GET_PROPERTY, _g.OP_PAPYRUS_SET_PROPERTY):
+            names = ["script", "property"]
+        for name in names:
+            if not isinstance(args.get(name), str) or not args[name]:
+                return f"missing or non-string field {name!r}"
+        if op == _g.OP_PAPYRUS_BATCH:
+            calls = args.get("calls")
+            if not isinstance(calls, list) or not calls:
+                return "batch needs a non-empty 'calls' array"
+            if len(calls) > _g.MAX_BATCH_CALLS:
+                return f"a batch may hold at most {_g.MAX_BATCH_CALLS} calls, got {len(calls)}"
+            for step in calls:
+                if not isinstance(step, dict) or step.get("op") not in _g.BATCHABLE_OPS:
+                    return "a batch step must be a batchable papyrus.* op"
+                step_args = step.get("args", {})
+                if not isinstance(step_args, dict):
+                    return "args must be an object"
+                problem = FakeSkyrim._op_problem(step["op"], step_args)
+                if problem is not None:
+                    return problem
+            if "stop_on_error" in args and type(args["stop_on_error"]) is not bool:
+                return "stop_on_error must be a boolean"
         return None
 
     def _finish_now(self, ticket: int, req_id: int, text: str) -> None:
@@ -303,6 +348,9 @@ class FakeSkyrim:
 
     def _run(self, ticket: int, entry: _Entry, op: str, args: dict) -> None:
         with self._cond:
+            if entry.stop.is_set():  # it ended (timeout, load, cancel) before its thread got going: never run it
+                return
+            entry.dispatched = True
             self.handler_calls += 1
         try:
             result = self.handler(op, args, Ctx(self, entry))
@@ -322,11 +370,14 @@ class FakeSkyrim:
             detail = {"paused": self._paused, "menus": list(self.menus)}
             if entry.needs_game and entry.loads != self._loads:
                 reason = self._not_ready or "loading"
-                detail.update(reason=reason, dispatched=True)  # every entry here has reached its handler
+                detail.update(reason=reason)
+                if entry.dispatched:  # the handler had started: its effect may have happened
+                    detail["dispatched"] = True
                 entry.response = _response(entry.req_id, False, _g.CODE_NOT_READY, detail, f"not ready: {reason}")
             elif now >= entry.deadline:
-                if entry.progress is not None:
-                    detail.update(completed=len(entry.progress), results=entry.progress)
+                if entry.op == _g.OP_PAPYRUS_BATCH:
+                    progress = entry.progress or []
+                    detail.update(completed=len(progress), results=progress)
                 entry.response = _response(entry.req_id, False, _g.CODE_TIMEOUT, detail, "the call did not finish in time")
             else:
                 continue

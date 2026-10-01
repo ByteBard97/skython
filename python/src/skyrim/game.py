@@ -62,7 +62,12 @@ class Game:
     def __init__(self, transport: Transport, *, call_timeout: float = _g.CALL_TIMEOUT_S,
                  retry_not_ready: bool | float = False):
         self._call_timeout = _positive_seconds(call_timeout, "call_timeout")
-        self._retry_not_ready = _g.RETRY_NOT_READY_S if retry_not_ready is True else float(retry_not_ready or 0)
+        if retry_not_ready is True:
+            self._retry_not_ready = _g.RETRY_NOT_READY_S
+        elif retry_not_ready is False or retry_not_ready == 0 and not isinstance(retry_not_ready, str):
+            self._retry_not_ready = 0.0
+        else:
+            self._retry_not_ready = _positive_seconds(retry_not_ready, "retry_not_ready")
         self.transport = transport
         self.welcome: dict = transport.welcome
         #: The epoch when this Game was made, fixed for its life. It does NOT follow save loads: read

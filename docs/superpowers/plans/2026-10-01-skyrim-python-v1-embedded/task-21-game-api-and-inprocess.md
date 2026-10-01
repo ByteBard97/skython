@@ -118,6 +118,7 @@ class Ctx:
 class _Entry:
     def __init__(self, req_id: int, op: str, needs_game: bool, deadline: float, loads: int):
         self.req_id, self.op, self.needs_game, self.deadline, self.loads = req_id, op, needs_game, deadline, loads
+        self.dispatched = False  # the handler has started
         self.response: str | None = None
         self.progress: list | None = None
         self.stop = threading.Event()
@@ -191,7 +192,7 @@ class FakeSkyrim:
         self.logs: list[tuple[str, str]] = []
         self.handler_calls = 0
         self.late_results = 0
-        self.epoch = 1
+        self._epoch_base = 0
         self.menus: list[str] = []
         self._not_ready: str | None = None
         self._paused = False
@@ -199,6 +200,15 @@ class FakeSkyrim:
         self._tickets = itertools.count(1)
         self._entries: dict[int, _Entry] = {}
         self._cond = threading.Condition()
+
+    @property
+    def epoch(self) -> int:
+        """Like FakeBackend::BaseState: the number of loads so far (0 at the start); tests may set it."""
+        return self._epoch_base + self._loads
+
+    @epoch.setter
+    def epoch(self, value: int) -> None:
+        self._epoch_base = value - self._loads
 
     # -- the _skyrim API ------------------------------------------------------------------------
     def submit(self, request: str) -> int:
@@ -229,7 +239,7 @@ class FakeSkyrim:
                 self._finish_now(ticket, req_id, _response(req_id, False, _g.CODE_BUSY, message="too many requests in flight"))
                 return ticket
             timeout_ms = args.get("timeout_ms") if "timeout_ms" in declared else None
-            if type(timeout_ms) is not int or not _g.MIN_TIMEOUT_MS <= timeout_ms <= _g.MAX_TIMEOUT_MS:
+            if timeout_ms is None:  # an invalid declared timeout_ms was refused above as bad_request
                 timeout_ms = self.default_timeout_ms
             entry = _Entry(req_id, op, needs_game, time.monotonic() + timeout_ms / 1000, self._loads)
             self._entries[ticket] = entry
@@ -307,7 +317,7 @@ class FakeSkyrim:
 
     def base_state(self) -> dict:
         reason = self._not_ready
-        return {"data_ready": reason != "starting", "game_loaded": reason not in ("starting", "no_game"),
+        return {"data_ready": reason != "starting", "game_loaded": reason is None,
                 "loading": reason == "loading", "interactive": reason is None, "paused": self._paused,
                 "menus": list(self.menus), "epoch": self.epoch}
 
@@ -332,6 +342,41 @@ class FakeSkyrim:
             return f"unknown op {obj.get('op')!r}"
         if not isinstance(obj.get("args"), dict):
             return "args must be an object"
+        return FakeSkyrim._op_problem(obj["op"], obj["args"])
+
+    @staticmethod
+    def _op_problem(op: str, args: dict) -> str | None:
+        """The argument checks of core's validate_op_args / parse_batch_args that need no value codec."""
+        declared = {name for name, _type, _required in _g.OPS[op]["args"]}
+        if "timeout_ms" in declared and "timeout_ms" in args:
+            t = args["timeout_ms"]
+            if type(t) is not int or not _g.MIN_TIMEOUT_MS <= t <= _g.MAX_TIMEOUT_MS:
+                return f"timeout_ms must be an integer from {_g.MIN_TIMEOUT_MS} to {_g.MAX_TIMEOUT_MS}"
+        if "require_unpaused" in declared and "require_unpaused" in args and type(args["require_unpaused"]) is not bool:
+            return "require_unpaused must be a boolean"
+        names = ["script", "function"] if op in (_g.OP_PAPYRUS_CALL_STATIC, _g.OP_PAPYRUS_CALL_METHOD) else []
+        if op in (_g.OP_PAPYRUS_GET_PROPERTY, _g.OP_PAPYRUS_SET_PROPERTY):
+            names = ["script", "property"]
+        for name in names:
+            if not isinstance(args.get(name), str) or not args[name]:
+                return f"missing or non-string field {name!r}"
+        if op == _g.OP_PAPYRUS_BATCH:
+            calls = args.get("calls")
+            if not isinstance(calls, list) or not calls:
+                return "batch needs a non-empty 'calls' array"
+            if len(calls) > _g.MAX_BATCH_CALLS:
+                return f"a batch may hold at most {_g.MAX_BATCH_CALLS} calls, got {len(calls)}"
+            for step in calls:
+                if not isinstance(step, dict) or step.get("op") not in _g.BATCHABLE_OPS:
+                    return "a batch step must be a batchable papyrus.* op"
+                step_args = step.get("args", {})
+                if not isinstance(step_args, dict):
+                    return "args must be an object"
+                problem = FakeSkyrim._op_problem(step["op"], step_args)
+                if problem is not None:
+                    return problem
+            if "stop_on_error" in args and type(args["stop_on_error"]) is not bool:
+                return "stop_on_error must be a boolean"
         return None
 
     def _finish_now(self, ticket: int, req_id: int, text: str) -> None:
@@ -356,6 +401,9 @@ class FakeSkyrim:
 
     def _run(self, ticket: int, entry: _Entry, op: str, args: dict) -> None:
         with self._cond:
+            if entry.stop.is_set():  # it ended (timeout, load, cancel) before its thread got going: never run it
+                return
+            entry.dispatched = True
             self.handler_calls += 1
         try:
             result = self.handler(op, args, Ctx(self, entry))
@@ -375,11 +423,14 @@ class FakeSkyrim:
             detail = {"paused": self._paused, "menus": list(self.menus)}
             if entry.needs_game and entry.loads != self._loads:
                 reason = self._not_ready or "loading"
-                detail.update(reason=reason, dispatched=True)  # every entry here has reached its handler
+                detail.update(reason=reason)
+                if entry.dispatched:  # the handler had started: its effect may have happened
+                    detail["dispatched"] = True
                 entry.response = _response(entry.req_id, False, _g.CODE_NOT_READY, detail, f"not ready: {reason}")
             elif now >= entry.deadline:
-                if entry.progress is not None:
-                    detail.update(completed=len(entry.progress), results=entry.progress)
+                if entry.op == _g.OP_PAPYRUS_BATCH:
+                    progress = entry.progress or []
+                    detail.update(completed=len(progress), results=progress)
                 entry.response = _response(entry.req_id, False, _g.CODE_TIMEOUT, detail, "the call did not finish in time")
             else:
                 continue
@@ -644,6 +695,83 @@ def test_sixteen_threads_calling_at_once_get_their_own_answers(game, fake):
         t.join(30)
     assert not failures and len(results) == 16
     assert fake.handler_calls == 16 * 25 and fake.in_flight() == 0
+
+
+# -- argument checks and details that follow core's parser and Dispatcher --------------------------------
+def test_a_batch_timeout_with_no_finished_step_still_has_completed_and_results(fake):
+    calls = [{"op": "papyrus.call_static", "args": {"script": "Fake", "function": "Never", "args": []}}]
+    resp = json.loads(fake.call(req("papyrus.batch", calls=calls, timeout_ms=100), 5.0))
+    detail = resp["error"]["detail"]
+    assert resp["error"]["code"] == "timeout" and detail["completed"] == 0 and detail["results"] == []
+    assert {"paused", "menus"} <= set(detail)
+    resp = json.loads(fake.call(fake_call("Never", timeout_ms=100), 5.0))  # a single call has neither
+    assert "completed" not in resp["error"]["detail"]
+
+
+STEP = {"op": "papyrus.call_static", "args": {"script": "Fake", "function": "Echo", "args": [1]}}
+
+
+@pytest.mark.parametrize("text", [
+    fake_call("Echo", 1, timeout_ms=0),
+    fake_call("Echo", 1, timeout_ms=g.MAX_TIMEOUT_MS + 1),
+    fake_call("Echo", 1, timeout_ms=1.5),
+    fake_call("Echo", 1, timeout_ms="5"),
+    fake_call("Echo", 1, timeout_ms=True),
+    fake_call("Echo", 1, require_unpaused="yes"),
+    req("papyrus.call_static", function="Echo"),
+    req("papyrus.call_static", script="Fake"),
+    req("papyrus.batch", calls=[]),
+    req("papyrus.batch", calls=[STEP] * (g.MAX_BATCH_CALLS + 1)),
+    req("papyrus.batch", calls=[{"op": "game.state", "args": {}}]),
+    req("papyrus.batch", calls=[STEP], timeout_ms=0),
+    req("papyrus.batch", calls=[STEP], stop_on_error="no"),
+], ids=["t0", "tmax+1", "tfloat", "tstr", "tbool", "unpaused-str", "no-script", "no-function", "empty-batch",
+        "big-batch", "unbatchable-step", "batch-t0", "stop-str"])
+def test_the_parsers_argument_checks_answer_bad_request_at_submit(fake, text):
+    resp = json.loads(fake.wait(fake.submit(text), 1.0))
+    assert resp["error"]["code"] == "bad_request"
+    assert fake.handler_calls == 0 and fake.requests == []
+
+
+def test_a_call_that_ended_before_its_thread_started_never_runs_the_handler(fake):
+    fake.handler = lambda op, args, ctx: 1 / 0
+    ticket = fake.submit(fake_call("Echo", 1))
+    fake.cancel(ticket)  # may or may not beat the thread; either way no result is returned
+    fake._fake_bump_loads()
+    time.sleep(0.1)
+    assert fake.wait(ticket, 0.05) is None
+
+
+def test_dispatched_only_when_the_handler_had_started(fake):
+    started = threading.Event()
+    gate = threading.Event()
+
+    def handler(op, args, ctx):
+        started.set()
+        gate.wait(5)
+
+    real_run = fake._run
+    fake._run = lambda *a: (gate.wait(5), real_run(*a))  # hold the thread back before it starts
+    ticket = fake.submit(fake_call("Echo", 1))
+    fake.handler = handler
+    fake._fake_bump_loads()
+    resp = json.loads(fake.wait(ticket, 1.0))
+    gate.set()
+    assert resp["error"]["code"] == "not_ready" and "dispatched" not in resp["error"]["detail"]
+    time.sleep(0.1)
+    assert fake.handler_calls == 0 and not started.is_set()
+
+
+def test_base_state_follows_the_loads_like_fake_backend(fake):
+    assert fake.base_state()["epoch"] == 0
+    fake._fake_set_not_ready("loading")
+    st = fake.base_state()
+    assert st["loading"] is True and st["game_loaded"] is False and st["interactive"] is False
+    fake._fake_set_not_ready(None)
+    fake._fake_bump_loads()
+    assert fake.base_state()["epoch"] == 1 and fake.base_state()["game_loaded"] is True
+    fake.epoch = 7
+    assert json.loads(fake.state())["epoch"] == 7
 ```
 
 The `Game` API, over the in-process transport and the fake. The request-shape checks replay the golden `requests.json`, so every op in the generated table must have a `Game` method that produces its fixture:
@@ -944,9 +1072,9 @@ def test_wait_ready_gives_up_with_not_ready_not_call_timeout(game, fake):
 
 def test_game_epoch_is_the_welcome_value_only(game, fake):
     fake.handler = results({"interactive": True, "epoch": 5})
-    assert game.epoch == 1
+    assert game.epoch == 0
     assert game.state()["epoch"] == 5  # the game has loaded a save since the Game was made
-    assert game.epoch == 1  # documented: Game.epoch never follows
+    assert game.epoch == 0  # documented: Game.epoch never follows
 
 
 def test_alias_takes_the_quests_epoch(game):
@@ -1065,6 +1193,17 @@ def test_type_mismatch_fixtures_are_refused_before_sending(game, fake, msg):
     with pytest.raises(errors.TypeMismatch):
         CALLERS[msg["op"]](game, msg["args"])
     assert fake.requests == []
+
+
+@pytest.mark.parametrize("bad", [-1, float("nan"), float("inf"), "5", None, [], -0.5])
+def test_bad_retry_not_ready_is_a_value_error(fake, bad):
+    with pytest.raises(ValueError):
+        connect_in_process(retry_not_ready=bad)
+
+
+@pytest.mark.parametrize("ok", [False, 0, 0.0, True, 2.5])
+def test_good_retry_not_ready_is_accepted(fake, ok):
+    connect_in_process(retry_not_ready=ok).close()
 ```
 
 - [ ] **Step 3: Run to verify they fail**
@@ -1140,7 +1279,12 @@ class Game:
     def __init__(self, transport: Transport, *, call_timeout: float = _g.CALL_TIMEOUT_S,
                  retry_not_ready: bool | float = False):
         self._call_timeout = _positive_seconds(call_timeout, "call_timeout")
-        self._retry_not_ready = _g.RETRY_NOT_READY_S if retry_not_ready is True else float(retry_not_ready or 0)
+        if retry_not_ready is True:
+            self._retry_not_ready = _g.RETRY_NOT_READY_S
+        elif retry_not_ready is False or retry_not_ready == 0 and not isinstance(retry_not_ready, str):
+            self._retry_not_ready = 0.0
+        else:
+            self._retry_not_ready = _positive_seconds(retry_not_ready, "retry_not_ready")
         self.transport = transport
         self.welcome: dict = transport.welcome
         #: The epoch when this Game was made, fixed for its life. It does NOT follow save loads: read
@@ -1374,7 +1518,7 @@ __version__ = "0.1.0"
 - [ ] **Step 5: Run to verify they pass, on both Python versions**
 
 Run: `cd python && uv run --python 3.12 pytest -q && uv run --python 3.14 pytest -q`
-Expected: `216 passed` twice, each in about 5 s (Task 20's 143 plus this task's 73; the request-fixture replay adds one test per entry in `requests.json`). No test depends on wall-clock luck: every wait is bounded by a deadline, and the one call with a 1 ms timeout (`test_tiny_timeout_is_one_millisecond_not_zero`) checks only what was sent. To check for flakiness on a slow machine, run the two new files on one CPU a few times: `for i in 1 2 3; do taskset -c 0 uv run --python 3.14 pytest -q tests/test_game.py tests/test_inprocess.py; done` prints `73 passed` three times.
+Expected: `253 passed` twice, each in about 5 s (Task 20's 151 plus this task's 102; the request-fixture replay adds one test per entry in `requests.json`). No test depends on wall-clock luck: every wait is bounded by a deadline, and the one call with a 1 ms timeout (`test_tiny_timeout_is_one_millisecond_not_zero`) checks only what was sent. To check for flakiness on a slow machine, run the two new files on one CPU a few times: `for i in 1 2 3; do taskset -c 0 uv run --python 3.14 pytest -q tests/test_game.py tests/test_inprocess.py; done` prints `102 passed` three times.
 
 Design notes the tests pin: `Game` owns no I/O and never sees request ids (the transport chooses them); an oversize or unencodable request is `EncodeError` before `_skyrim` sees anything (`_framing.dumps` runs first); `InProcessTransport.request` blocks in `_skyrim.call`, which in the real module releases the GIL, so 16 threads can wait at once (`test_sixteen_threads_calling_at_once_get_their_own_answers`); a call whose wait runs out leaves nothing in flight (`_skyrim.call` cancels its ticket).
 

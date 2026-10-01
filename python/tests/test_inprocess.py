@@ -209,3 +209,80 @@ def test_sixteen_threads_calling_at_once_get_their_own_answers(game, fake):
         t.join(30)
     assert not failures and len(results) == 16
     assert fake.handler_calls == 16 * 25 and fake.in_flight() == 0
+
+
+# -- argument checks and details that follow core's parser and Dispatcher --------------------------------
+def test_a_batch_timeout_with_no_finished_step_still_has_completed_and_results(fake):
+    calls = [{"op": "papyrus.call_static", "args": {"script": "Fake", "function": "Never", "args": []}}]
+    resp = json.loads(fake.call(req("papyrus.batch", calls=calls, timeout_ms=100), 5.0))
+    detail = resp["error"]["detail"]
+    assert resp["error"]["code"] == "timeout" and detail["completed"] == 0 and detail["results"] == []
+    assert {"paused", "menus"} <= set(detail)
+    resp = json.loads(fake.call(fake_call("Never", timeout_ms=100), 5.0))  # a single call has neither
+    assert "completed" not in resp["error"]["detail"]
+
+
+STEP = {"op": "papyrus.call_static", "args": {"script": "Fake", "function": "Echo", "args": [1]}}
+
+
+@pytest.mark.parametrize("text", [
+    fake_call("Echo", 1, timeout_ms=0),
+    fake_call("Echo", 1, timeout_ms=g.MAX_TIMEOUT_MS + 1),
+    fake_call("Echo", 1, timeout_ms=1.5),
+    fake_call("Echo", 1, timeout_ms="5"),
+    fake_call("Echo", 1, timeout_ms=True),
+    fake_call("Echo", 1, require_unpaused="yes"),
+    req("papyrus.call_static", function="Echo"),
+    req("papyrus.call_static", script="Fake"),
+    req("papyrus.batch", calls=[]),
+    req("papyrus.batch", calls=[STEP] * (g.MAX_BATCH_CALLS + 1)),
+    req("papyrus.batch", calls=[{"op": "game.state", "args": {}}]),
+    req("papyrus.batch", calls=[STEP], timeout_ms=0),
+    req("papyrus.batch", calls=[STEP], stop_on_error="no"),
+], ids=["t0", "tmax+1", "tfloat", "tstr", "tbool", "unpaused-str", "no-script", "no-function", "empty-batch",
+        "big-batch", "unbatchable-step", "batch-t0", "stop-str"])
+def test_the_parsers_argument_checks_answer_bad_request_at_submit(fake, text):
+    resp = json.loads(fake.wait(fake.submit(text), 1.0))
+    assert resp["error"]["code"] == "bad_request"
+    assert fake.handler_calls == 0 and fake.requests == []
+
+
+def test_a_call_that_ended_before_its_thread_started_never_runs_the_handler(fake):
+    fake.handler = lambda op, args, ctx: 1 / 0
+    ticket = fake.submit(fake_call("Echo", 1))
+    fake.cancel(ticket)  # may or may not beat the thread; either way no result is returned
+    fake._fake_bump_loads()
+    time.sleep(0.1)
+    assert fake.wait(ticket, 0.05) is None
+
+
+def test_dispatched_only_when_the_handler_had_started(fake):
+    started = threading.Event()
+    gate = threading.Event()
+
+    def handler(op, args, ctx):
+        started.set()
+        gate.wait(5)
+
+    real_run = fake._run
+    fake._run = lambda *a: (gate.wait(5), real_run(*a))  # hold the thread back before it starts
+    ticket = fake.submit(fake_call("Echo", 1))
+    fake.handler = handler
+    fake._fake_bump_loads()
+    resp = json.loads(fake.wait(ticket, 1.0))
+    gate.set()
+    assert resp["error"]["code"] == "not_ready" and "dispatched" not in resp["error"]["detail"]
+    time.sleep(0.1)
+    assert fake.handler_calls == 0 and not started.is_set()
+
+
+def test_base_state_follows_the_loads_like_fake_backend(fake):
+    assert fake.base_state()["epoch"] == 0
+    fake._fake_set_not_ready("loading")
+    st = fake.base_state()
+    assert st["loading"] is True and st["game_loaded"] is False and st["interactive"] is False
+    fake._fake_set_not_ready(None)
+    fake._fake_bump_loads()
+    assert fake.base_state()["epoch"] == 1 and fake.base_state()["game_loaded"] is True
+    fake.epoch = 7
+    assert json.loads(fake.state())["epoch"] == 7

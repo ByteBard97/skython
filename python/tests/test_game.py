@@ -293,9 +293,9 @@ def test_wait_ready_gives_up_with_not_ready_not_call_timeout(game, fake):
 
 def test_game_epoch_is_the_welcome_value_only(game, fake):
     fake.handler = results({"interactive": True, "epoch": 5})
-    assert game.epoch == 1
+    assert game.epoch == 0
     assert game.state()["epoch"] == 5  # the game has loaded a save since the Game was made
-    assert game.epoch == 1  # documented: Game.epoch never follows
+    assert game.epoch == 0  # documented: Game.epoch never follows
 
 
 def test_alias_takes_the_quests_epoch(game):
@@ -414,3 +414,14 @@ def test_type_mismatch_fixtures_are_refused_before_sending(game, fake, msg):
     with pytest.raises(errors.TypeMismatch):
         CALLERS[msg["op"]](game, msg["args"])
     assert fake.requests == []
+
+
+@pytest.mark.parametrize("bad", [-1, float("nan"), float("inf"), "5", None, [], -0.5])
+def test_bad_retry_not_ready_is_a_value_error(fake, bad):
+    with pytest.raises(ValueError):
+        connect_in_process(retry_not_ready=bad)
+
+
+@pytest.mark.parametrize("ok", [False, 0, 0.0, True, 2.5])
+def test_good_retry_not_ready_is_accepted(fake, ok):
+    connect_in_process(retry_not_ready=ok).close()
