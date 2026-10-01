@@ -60,16 +60,49 @@ def _recv_exact(sock: socket.socket, n: int, deadline: float | None) -> bytes:
     return bytes(buf)
 
 
-def read_frame(sock: socket.socket, deadline: float | None = None) -> dict:
-    """Read one frame. Raises ConnectionLost on EOF, ProtocolViolation on a bad frame, and TimeoutError
-    if `deadline` (a time.monotonic() value) passes first."""
+def _reject_constant(name: str):
+    raise ValueError(f"{name} is not JSON")
+
+
+def _too_deep(obj) -> bool:
+    """True if arrays/objects nest deeper than MAX_JSON_DEPTH (the top-level object is depth 1). Iterative."""
+    stack = [(obj, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, dict):
+            children = node.values()
+        elif isinstance(node, list):
+            children = node
+        else:
+            continue
+        if depth > _g.MAX_JSON_DEPTH:
+            return True
+        stack.extend((c, depth + 1) for c in children if isinstance(c, (dict, list)))
+    return False
+
+
+def _read_frame(sock: socket.socket, deadline: float | None) -> dict:
     (n,) = struct.unpack("<I", _recv_exact(sock, 4, deadline))
     if n > MAX_FRAME:
         raise ProtocolViolation(f"frame of {n} bytes exceeds {MAX_FRAME}")
+    body = _recv_exact(sock, n, deadline)
     try:
-        obj = json.loads(_recv_exact(sock, n, deadline).decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as e:
-        raise ProtocolViolation(f"frame is not UTF-8 JSON: {e}") from e
+        obj = json.loads(body.decode("utf-8"), parse_constant=_reject_constant)
+    except (UnicodeDecodeError, ValueError, RecursionError) as e:  # JSONDecodeError is a ValueError
+        raise ProtocolViolation(f"frame is not UTF-8 JSON: {e}") from None
     if not isinstance(obj, dict):
         raise ProtocolViolation("frame is not a JSON object")
+    if _too_deep(obj):
+        raise ProtocolViolation(f"frame nests deeper than {_g.MAX_JSON_DEPTH} levels")
     return obj
+
+
+def read_frame(sock: socket.socket, deadline: float | None = None) -> dict:
+    """Read one frame. Raises ConnectionLost on EOF, ProtocolViolation on a bad frame, and TimeoutError
+    if `deadline` (a time.monotonic() value) passes first. The socket's timeout is restored on return."""
+    previous = sock.gettimeout()
+    try:
+        return _read_frame(sock, deadline)
+    finally:
+        if deadline is not None:
+            sock.settimeout(previous)

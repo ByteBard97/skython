@@ -88,7 +88,8 @@ def test_malformed_server_values_are_protocol_violations():
     for bad in ({"kind": "form"}, {"kind": "alias", "alias_id": 0}, {"kind": "alias", "quest": {"kind": "form"}, "alias_id": 0},
                 {"array": "Int", "items": 5}, {"kind": "form", "form_id": 1, "fingerprint": {"base": "x"}},
                 {"array": "Float", "items": ["1.5", True]}, {"array": "Int", "items": [1, True]},
-                {"array": "String", "items": ["a", 1]}, {"array": "Bool", "items": [0]}):
+                {"array": "String", "items": ["a", 1]}, {"array": "Bool", "items": [0]},
+                {"array": "Float", "items": [10**400]}):
         with pytest.raises(errors.ProtocolViolation):
             from_wire(bad)
 
@@ -135,8 +136,8 @@ def test_form_keys():
     ".esm|0x1",               # empty plugin stem
     " .esp|0x1",
     "Sky\nrim.esm|0x14",
-    "x.eſm|0x14",        # U+017F must not stand in for "s" under IGNORECASE
-    "Skyrim.esm|0x١",    # non-ASCII digit
+    "x.e\u017fm|0x14",        # U+017F must not stand in for "s" under IGNORECASE
+    "Skyrim.esm|0x\u0661",    # non-ASCII digit
     "Skyrim.esm|0x123456789",
     "Skyrim .esm|0x14",         # space before the extension
     "Light Mod.esl|0x1000",     # light plugins have 12-bit local ids

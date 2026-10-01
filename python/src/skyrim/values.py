@@ -198,6 +198,6 @@ def from_wire(j: Any) -> Any:
         if kind == "alias":
             return Alias(_form_from(j["quest"]), _opt(j, "alias_id", int), j.get("alias_type", _g.DEFAULT_ALIAS_TYPE),
                          _opt(j, "epoch", int))
-    except (KeyError, TypeError, ValueError, AttributeError) as e:
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as e:
         raise errors.ProtocolViolation(f"malformed {j.get('kind') or 'array'} value from the server: {e}") from None
     return j

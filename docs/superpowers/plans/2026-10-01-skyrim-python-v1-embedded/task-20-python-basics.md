@@ -208,6 +208,52 @@ def test_dumps_fails_like_encode(bad):
 def test_dumps_applies_the_frame_limit():
     with pytest.raises(EncodeError, match="limit"):
         _framing.dumps({"x": "a" * _framing.MAX_FRAME})
+
+
+# -- every malformed frame is a ProtocolViolation, never a bare ValueError / RecursionError ----------------
+def _send_body(a, body: bytes):
+    a.sendall(struct.pack("<I", len(body)) + body)
+
+
+def _nested(levels: int) -> bytes:
+    """An object whose total nesting depth (the object included) is `levels`."""
+    return b'{"x":' + b"[" * (levels - 1) + b"]" * (levels - 1) + b"}"
+
+
+@pytest.mark.parametrize("body", [
+    b'{"x":' + b"[" * 100_000,
+    b'{"x":' + b"1" * 5000 + b"}",
+    b'{"x":NaN}',
+    b'{"x":Infinity}',
+    b'{"x":-Infinity}',
+    _nested(_framing._g.MAX_JSON_DEPTH + 1),
+], ids=["deep-open-brackets", "5000-digit-int", "nan", "infinity", "neg-infinity", "65-deep"])
+def test_malformed_frames_are_protocol_violations(pair, body):
+    a, b = pair
+    _send_body(a, body)
+    with pytest.raises(ProtocolViolation):
+        _framing.read_frame(b)
+
+
+def test_depth_limit_is_inclusive(pair):
+    a, b = pair
+    _send_body(a, _nested(_framing._g.MAX_JSON_DEPTH))
+    assert "x" in _framing.read_frame(b)
+
+
+def test_read_frame_restores_the_socket_timeout(pair):
+    a, b = pair
+    b.settimeout(7.5)
+    a.sendall(_framing.encode({"type": "event"}))
+    _framing.read_frame(b, deadline=time.monotonic() + 5)
+    assert b.gettimeout() == 7.5
+    b.settimeout(None)
+    a.sendall(_framing.encode({"type": "event"}))
+    _framing.read_frame(b, deadline=time.monotonic() + 5)
+    assert b.gettimeout() is None
+    with pytest.raises(TimeoutError):
+        _framing.read_frame(b, deadline=time.monotonic() + 0.1)
+    assert b.gettimeout() is None
 ```
 
 `python/tests/test_errors.py`:
@@ -361,7 +407,8 @@ def test_malformed_server_values_are_protocol_violations():
     for bad in ({"kind": "form"}, {"kind": "alias", "alias_id": 0}, {"kind": "alias", "quest": {"kind": "form"}, "alias_id": 0},
                 {"array": "Int", "items": 5}, {"kind": "form", "form_id": 1, "fingerprint": {"base": "x"}},
                 {"array": "Float", "items": ["1.5", True]}, {"array": "Int", "items": [1, True]},
-                {"array": "String", "items": ["a", 1]}, {"array": "Bool", "items": [0]}):
+                {"array": "String", "items": ["a", 1]}, {"array": "Bool", "items": [0]},
+                {"array": "Float", "items": [10**400]}):
         with pytest.raises(errors.ProtocolViolation):
             from_wire(bad)
 
@@ -861,19 +908,52 @@ def _recv_exact(sock: socket.socket, n: int, deadline: float | None) -> bytes:
     return bytes(buf)
 
 
-def read_frame(sock: socket.socket, deadline: float | None = None) -> dict:
-    """Read one frame. Raises ConnectionLost on EOF, ProtocolViolation on a bad frame, and TimeoutError
-    if `deadline` (a time.monotonic() value) passes first."""
+def _reject_constant(name: str):
+    raise ValueError(f"{name} is not JSON")
+
+
+def _too_deep(obj) -> bool:
+    """True if arrays/objects nest deeper than MAX_JSON_DEPTH (the top-level object is depth 1). Iterative."""
+    stack = [(obj, 1)]
+    while stack:
+        node, depth = stack.pop()
+        if isinstance(node, dict):
+            children = node.values()
+        elif isinstance(node, list):
+            children = node
+        else:
+            continue
+        if depth > _g.MAX_JSON_DEPTH:
+            return True
+        stack.extend((c, depth + 1) for c in children if isinstance(c, (dict, list)))
+    return False
+
+
+def _read_frame(sock: socket.socket, deadline: float | None) -> dict:
     (n,) = struct.unpack("<I", _recv_exact(sock, 4, deadline))
     if n > MAX_FRAME:
         raise ProtocolViolation(f"frame of {n} bytes exceeds {MAX_FRAME}")
+    body = _recv_exact(sock, n, deadline)
     try:
-        obj = json.loads(_recv_exact(sock, n, deadline).decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as e:
-        raise ProtocolViolation(f"frame is not UTF-8 JSON: {e}") from e
+        obj = json.loads(body.decode("utf-8"), parse_constant=_reject_constant)
+    except (UnicodeDecodeError, ValueError, RecursionError) as e:  # JSONDecodeError is a ValueError
+        raise ProtocolViolation(f"frame is not UTF-8 JSON: {e}") from None
     if not isinstance(obj, dict):
         raise ProtocolViolation("frame is not a JSON object")
+    if _too_deep(obj):
+        raise ProtocolViolation(f"frame nests deeper than {_g.MAX_JSON_DEPTH} levels")
     return obj
+
+
+def read_frame(sock: socket.socket, deadline: float | None = None) -> dict:
+    """Read one frame. Raises ConnectionLost on EOF, ProtocolViolation on a bad frame, and TimeoutError
+    if `deadline` (a time.monotonic() value) passes first. The socket's timeout is restored on return."""
+    previous = sock.gettimeout()
+    try:
+        return _read_frame(sock, deadline)
+    finally:
+        if deadline is not None:
+            sock.settimeout(previous)
 ```
 
 `python/src/skyrim/refs.py`:
@@ -1120,7 +1200,7 @@ def from_wire(j: Any) -> Any:
         if kind == "alias":
             return Alias(_form_from(j["quest"]), _opt(j, "alias_id", int), j.get("alias_type", _g.DEFAULT_ALIAS_TYPE),
                          _opt(j, "epoch", int))
-    except (KeyError, TypeError, ValueError, AttributeError) as e:
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError) as e:
         raise errors.ProtocolViolation(f"malformed {j.get('kind') or 'array'} value from the server: {e}") from None
     return j
 ```
@@ -1139,7 +1219,7 @@ __version__ = "0.1.0"
 - [ ] **Step 5: Run to verify they pass, on both Python versions**
 
 Run: `cd python && uv run --python 3.12 pytest -q && uv run --python 3.14 pytest -q`
-Expected: `143 passed` twice, each in about 1.5 s (`uv` replaces the virtualenv when the version changes; any 3.12.x and 3.14.x will do). The count includes the parametrized fixture cases as Task 11's fixtures stand today and grows by one per entry added to `values.json` or `form_keys.json`.
+Expected: `151 passed` twice, each in about 1.5 s (`uv` replaces the virtualenv when the version changes; any 3.12.x and 3.14.x will do). The count includes the parametrized fixture cases as Task 11's fixtures stand today and grows by one per entry added to `values.json` or `form_keys.json`.
 
 Note on the fixture round trip: `{"array":"Float","items":[1,2.5]}` decodes to `[1.0, 2.5]` and re-encodes as Float (all items are numbers, one is a float). Python says `1.0 == 1`, so the test compares with `same()`, which is strict about `int` versus `float` and `bool` versus `int` everywhere except the items of a Float array (where the protocol accepts integers). An all-integer Float array such as `[1.0, 2.0]` decodes to floats and so re-encodes as Float too. Ambiguity that remains until M3: a bare `[1, 2]` always infers as an Int array. The 129-item fixture is re-encoded through `PArray` with the fixture's own element type, so the test checks the array limit and nothing else.
 
