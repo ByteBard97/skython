@@ -103,13 +103,15 @@ Expected: three `: OK` lines; `PYBIND11_VERSION_MAJOR 3`, `MINOR 1`, `PATCH 0`; 
 
 - [ ] **Step 3: Add CommonLibSSE-NG as a submodule pinned at the verified commit**
 
-`git submodule add -b ng` checks out the branch head, which may be newer than the commit the plan's API notes (`API-VERIFICATION.md`) were checked against, so check out the pin explicitly.
+`git submodule add -b ng` checks out the branch head, which may be newer than the commit the plan's API notes (`API-VERIFICATION.md`) were checked against, so check out the pin explicitly. `add` also stages that branch head as the gitlink, and a later `git submodule update` run from the superproject would check the submodule back out to the staged commit, undoing the pin. So stage the pinned commit with `git add` right after the checkout, and fetch CommonLib's own nested submodule from inside it.
 
 ```bash
 git submodule add -b ng https://github.com/alandtse/CommonLibSSE-NG plugin/extern/CommonLibSSE-NG
 git -C plugin/extern/CommonLibSSE-NG checkout --quiet 39f9d07a6ffabea8fb559eee87ab7d27cd463e8a
-# CommonLib has its own submodule (extern/openvr, headers needed even with VR off); add -b does not fetch it:
-git submodule update --init --recursive    # about 40 s; openvr's samples/ are large and are excluded from the box sync
+git add plugin/extern/CommonLibSSE-NG     # stage the PIN as the gitlink (add -b staged the branch head)
+# CommonLib has its own submodule (extern/openvr, headers needed even with VR off); add -b does not fetch it.
+# Run the update INSIDE the submodule, so it only fetches openvr and cannot move CommonLib itself:
+git -C plugin/extern/CommonLibSSE-NG submodule update --init --recursive    # about 40 s; openvr's samples/ are large and are excluded from the box sync
 cd plugin/extern/CommonLibSSE-NG
 git log -1 --format='%H %cs %s'
 grep -n -i -E '1\.7\.99|1\.7\.104|address library.*(5|v5)' CHANGELOG.md | head
@@ -117,8 +119,9 @@ grep -n -E 'option\(ENABLE_SKYRIM_(SE|AE|VR)|option\(BUILD_TESTS' CMakeLists.txt
 ls extern/openvr/headers | head -3
 cd ../../..
 git status --short .gitmodules plugin/extern/CommonLibSSE-NG
+git ls-files -s plugin/extern/CommonLibSSE-NG
 ```
-Expected: `39f9d07a6ffabea8fb559eee87ab7d27cd463e8a 2026-09-30 chore(release): 10.1.0 [skip ci]`; the CHANGELOG grep shows the 1.7.99 / Address Library v5 lines (it does **not** mention 1.7.104; that is known and recorded in `API-VERIFICATION.md`); the option grep shows `ENABLE_SKYRIM_SE`, `ENABLE_SKYRIM_AE`, `ENABLE_SKYRIM_VR`, `BUILD_TESTS`; openvr headers exist; `git status` shows `.gitmodules` and the submodule as added. If `git log` prints another commit, **STOP and ask the owner.**
+Expected: `39f9d07a6ffabea8fb559eee87ab7d27cd463e8a 2026-09-30 chore(release): 10.1.0 [skip ci]`; the CHANGELOG grep shows the 1.7.99 / Address Library v5 lines (it does **not** mention 1.7.104; that is known and recorded in `API-VERIFICATION.md`); the option grep shows `ENABLE_SKYRIM_SE`, `ENABLE_SKYRIM_AE`, `ENABLE_SKYRIM_VR`, `BUILD_TESTS`; openvr headers exist; `git status` shows `.gitmodules` and the submodule as added, and `git ls-files -s plugin/extern/CommonLibSSE-NG` shows `160000 39f9d07a6ffabea8fb559eee87ab7d27cd463e8a`. If `git log` or `ls-files` prints another commit, **STOP and ask the owner.**
 
 - [ ] **Step 4: Write `tools/fetch_python.sh` and `docs/PINS.md`**
 

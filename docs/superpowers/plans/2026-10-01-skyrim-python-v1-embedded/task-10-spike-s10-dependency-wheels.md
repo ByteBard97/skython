@@ -145,9 +145,14 @@ A second run stops with "out/site-packages is not empty": that is the script ref
 """Spike S10 check. Runs INSIDE the game's embedded CPython through Task 3's `py_exec`, as
     exec(open(CHECK).read(), {"__name__": "s10", "SITE": ..., "OUT": ..., "URL": ...})
 It never raises: every step's result or error goes into the JSON file OUT, which the Linux side reads.
-SITE: the site-packages folder to put first on sys.path. URL: a plain-HTTP URL served from Linux."""
+SITE: the deployed site-packages folder. URL: a plain-HTTP URL served from Linux.
+The imports run first WITHOUT touching sys.path: they must work through the site-packages entry that
+PyLoad.cpp configured (module_search_paths), which is what Task 26 relies on. Only if that pass fails is SITE
+inserted at the front and the steps run again, to tell a path problem from a wheel problem."""
+import importlib
 import importlib.metadata
 import json
+import os
 import ssl
 import sys
 import time
@@ -167,10 +172,18 @@ def step(name, fn):
                                  "trace": traceback.format_exc(limit=6)}
 
 
-def check_path():
-    if SITE not in sys.path:
-        sys.path.insert(0, SITE)
-    return sys.path[:4]
+def _same(a, b):
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
+def check_configured_path():
+    # Before any insert: is the configured site-packages entry (another spelling of SITE) on sys.path?
+    hits = [p for p in sys.path if _same(p, SITE)]
+    result["configured_site_in_path"] = bool(hits)
+    return {"configured_site_in_path": bool(hits), "entries": hits, "path_head": sys.path[:4]}
 
 
 def check_httpx_import():
@@ -206,25 +219,46 @@ def check_httpx_get():
         return {"status": r.status_code, "body": r.text.strip()}
 
 
-step("sys_path", check_path)
-step("import_httpx", check_httpx_import)
-step("jsonschema_validate", check_jsonschema)
-step("mwparserfromhell_parse", check_mwparserfromhell)
-step("httpx_get", check_httpx_get)
-result["pass"] = all(s["ok"] for s in result["steps"].values()) and \
-    result["steps"]["httpx_get"].get("value", {}).get("body") == "s10-ok"
+CHECKS = [("import_httpx", check_httpx_import), ("jsonschema_validate", check_jsonschema),
+          ("mwparserfromhell_parse", check_mwparserfromhell), ("httpx_get", check_httpx_get)]
+
+
+def all_ok(suffix=""):
+    s = result["steps"]
+    return all(s[n + suffix]["ok"] for n, _ in CHECKS) and s["httpx_get" + suffix].get("value", {}).get("body") == "s10-ok"
+
+
+step("sys_path", check_configured_path)
+for name, fn in CHECKS:  # pass 1: the configured sys.path only
+    step(name, fn)
+result["configured_path_pass"] = all_ok()
+if not result["configured_path_pass"]:
+    # Diagnosis only: insert SITE and retry in a clean import state (failed imports may have left partial modules).
+    for mod in [m for m in sys.modules if m.split(".")[0] in ("httpx", "httpcore", "anyio", "h11", "certifi", "idna", "jsonschema",
+                                                               "jsonschema_specifications", "referencing", "rpds", "attrs", "attr",
+                                                               "mwparserfromhell", "typing_extensions", "sniffio")]:
+        del sys.modules[mod]
+    importlib.invalidate_caches()
+    sys.path.insert(0, SITE)
+    for name, fn in CHECKS:
+        step(name + "_with_insert", fn)
+    result["with_insert_pass"] = all_ok("_with_insert")
+result["pass"] = result["configured_site_in_path"] and result["configured_path_pass"]
 with open(OUT, "w", encoding="utf-8") as f:
     json.dump(result, f, indent=2)
 ```
-Dry run on Linux against a local HTTP server (port 45979: the bridge uses 45977 and the spike harness 45978):
+Dry run on Linux against a local HTTP server (port 45981: the bridge uses 45977, the spike harness 45978, and Task 3's in-game `echo_server.py` 45979; Wine's loopback is the host's, so a game session with the echo server still running would otherwise take the port). Two runs: the first like a bare interpreter (the staged folder is not on `sys.path`), the second with the folder already on `sys.path` under another spelling (`<dir>/./`), the way `PyLoad.cpp`'s configured entry differs from the `Z:/...` string passed as `SITE` in the game:
 ```bash
 mkdir -p out/s10-www && echo s10-ok > out/s10-www/s10.txt
-( timeout 60 python3 -m http.server 45979 --bind 127.0.0.1 --directory out/s10-www >/dev/null 2>&1 & )
-sleep 1
-"$(uv python find 3.14)" -I -c "exec(open('spikes/deps/s10_check.py').read(), {'__name__': 's10', 'SITE': '$PWD/out/site-packages', 'OUT': '$PWD/out/s10-linux.json', 'URL': 'http://127.0.0.1:45979/s10.txt'})"
-python3 -c "import json; r = json.load(open('out/s10-linux.json')); print('pass', r['pass']); [print(k, v['ok'], v.get('value', v.get('error'))) for k, v in r['steps'].items()]"
+( timeout 60 python3 -m http.server 45981 --bind 127.0.0.1 --directory out/s10-www >/dev/null 2>&1 & )
+for i in $(seq 1 20); do curl -fsS http://127.0.0.1:45981/s10.txt 2>/dev/null && break; sleep 0.5; done   # must print s10-ok
+show() { python3 -c "import json, sys; r = json.load(open(sys.argv[1])); print('pass', r['pass'], 'configured_site_in_path', r['configured_site_in_path'], 'configured_path_pass', r['configured_path_pass'], 'with_insert_pass', r.get('with_insert_pass')); [print(k, v['ok'], v.get('value', v.get('error'))) for k, v in r['steps'].items()]" "$1"; }
+"$(uv python find 3.14)" -I -c "exec(open('spikes/deps/s10_check.py').read(), {'__name__': 's10', 'SITE': '$PWD/out/site-packages', 'OUT': '$PWD/out/s10-linux.json', 'URL': 'http://127.0.0.1:45981/s10.txt'})"
+show out/s10-linux.json
+"$(uv python find 3.14)" -I -c "import sys; sys.path.append('$PWD/out/site-packages/./'); exec(open('spikes/deps/s10_check.py').read(), {'__name__': 's10', 'SITE': '$PWD/out/site-packages', 'OUT': '$PWD/out/s10-linux2.json', 'URL': 'http://127.0.0.1:45981/s10.txt'})"
+show out/s10-linux2.json
 ```
-Expected on Linux (checked while writing this task): `sys_path True`, `import_httpx True 0.28.1`, `mwparserfromhell_parse True {'version': '0.7.2', 'use_c': False}`, `httpx_get True {'status': 200, 'body': 's10-ok'}`, and `jsonschema_validate False ModuleNotFoundError: No module named 'rpds.rpds'`, so `pass False`. That one failure is correct on Linux: `rpds` is a Windows `.pyd`. In the game all five steps must pass.
+Expected on Linux (checked while writing this task): `s10-ok` from `curl` (if it does not print, the server did not start: check that nothing else holds 45981, then retry). First run: `pass False configured_site_in_path False configured_path_pass False with_insert_pass False`; `sys_path True {'configured_site_in_path': False, ...}`; the four pass-1 steps `False ModuleNotFoundError` (nothing configured); then `import_httpx_with_insert True 0.28.1`, `jsonschema_validate_with_insert False ModuleNotFoundError: No module named 'rpds.rpds'`, `mwparserfromhell_parse_with_insert True {'version': '0.7.2', 'use_c': False}`, `httpx_get_with_insert True {'status': 200, 'body': 's10-ok'}`. Second run: `configured_site_in_path True` (the `<dir>/./` entry is found by `os.path.samefile`), and pass 1 itself gives `import_httpx True`, `mwparserfromhell_parse True`, `httpx_get True` and the same `rpds.rpds` failure (so the `_with_insert` steps follow again, with the same results). That one failure is correct on Linux: `rpds` is a Windows `.pyd`. In the game, `configured_site_in_path` must be true and all five pass-1 steps must pass (no `_with_insert` steps then appear).
 
 - [ ] **Step 4: Add `--site-packages` to `tools/deploy.sh`**
 
@@ -272,26 +306,28 @@ SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/S
 # Bring the interpreter up exactly as Task 3 does (an "already loaded/initialised" answer is fine):
 python3 spikes/spike_client.py py_load
 python3 spikes/spike_client.py py_init
-# A Linux HTTP server for the httpx step, bounded to 10 minutes:
+# A Linux HTTP server for the httpx step, bounded to 10 minutes, on 45981 (45979 is Task 3's in-game echo server):
 mkdir -p out/s10-www && echo s10-ok > out/s10-www/s10.txt
-( timeout 600 python3 -m http.server 45979 --bind 127.0.0.1 --directory out/s10-www >/dev/null 2>&1 & )
+( timeout 600 python3 -m http.server 45981 --bind 127.0.0.1 --directory out/s10-www >/dev/null 2>&1 & )
+for i in $(seq 1 20); do curl -fsS http://127.0.0.1:45981/s10.txt 2>/dev/null && break; sleep 0.5; done   # must print s10-ok before going on
 # Windows paths for the game: Wine maps Z: to /, and Python accepts forward slashes.
 W="Z:$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython"
-python3 spikes/spike_client.py py_exec "exec(open('$W/s10_check.py').read(), {'__name__': 's10', 'SITE': '$W/site-packages', 'OUT': '$W/s10-result.json', 'URL': 'http://127.0.0.1:45979/s10.txt'})"
-python3 -c "import json, sys; r = json.load(open(sys.argv[1])); print('S10', 'PASS' if r['pass'] else 'FAIL', r['python'].split()[0], r['openssl']); [print(' ', k, v['ok'], v.get('value', v.get('error'))) for k, v in r['steps'].items()]" "$RESULT"
+python3 spikes/spike_client.py py_exec "exec(open('$W/s10_check.py').read(), {'__name__': 's10', 'SITE': '$W/site-packages', 'OUT': '$W/s10-result.json', 'URL': 'http://127.0.0.1:45981/s10.txt'})"
+python3 -c "import json, sys; r = json.load(open(sys.argv[1])); print('S10', 'PASS' if r['pass'] else 'FAIL', r['python'].split()[0], r['openssl'], 'configured_site_in_path', r['configured_site_in_path']); [print(' ', k, v['ok'], v.get('value', v.get('error'))) for k, v in r['steps'].items()]" "$RESULT"
 ```
-Expected PASS: `S10 PASS 3.14.8 OpenSSL ...`, then `sys_path True` (the first entry is the game's `site-packages`), `import_httpx True 0.28.1`, `jsonschema_validate True {'jsonschema': '4.26.0', 'rpds': '<path ending in rpds __init__.py>'}`, `mwparserfromhell_parse True {'version': '0.7.2', 'use_c': False}`, `httpx_get True {'status': 200, 'body': 's10-ok'}`. The game keeps running.
+If `curl` does not print `s10-ok`, do not run the `py_exec`: the server did not bind (something else holds 45981); find what (`ss -ltnp | grep 45981`) and retry. Expected PASS: `S10 PASS 3.14.8 OpenSSL ... configured_site_in_path True`, then `sys_path True` (`configured_site_in_path: True`, `entries` naming the configured `...\SkyrimPython\site-packages`; the imports below ran without any `sys.path` change), `import_httpx True 0.28.1`, `jsonschema_validate True {'jsonschema': '4.26.0', 'rpds': '<path ending in rpds __init__.py>'}`, `mwparserfromhell_parse True {'version': '0.7.2', 'use_c': False}`, `httpx_get True {'status': 200, 'body': 's10-ok'}`, and no `_with_insert` steps. The game keeps running. If `configured_site_in_path` is false or pass 1 fails while the `_with_insert` steps pass, the wheels are fine but the configured `site-packages` entry is not working: that is an S10 FAIL with a Task 26 consequence (its `module_search_paths` entry); record both passes.
 
 If `s10-result.json` does not appear, the `py_exec` answer and `python.log`/the spike log say why (a path typo shows as `FileNotFoundError` in the `py_exec` reply). A step with `"ok": false` carries its traceback in the JSON: copy it into the RESULTS.md row. If `jsonschema_validate` fails with a DLL load error for `rpds`, record the exact message: it is the finding that matters for skyrim-dm (spec 4.10's fallback is a pure-Python replacement or running that dependency outside the game).
 
 - [ ] **Step 6: Record S10, review every M0 row, list the teardown, commit**
 
-Fill the S10 row in `spikes/RESULTS.md` (add the row if Task 2's table does not have it yet: `| S10 skyrim-dm dependencies as wheels (Task 10) | <date> | PASS/FAIL | <evidence> | 4.10 (FAIL: pure-Python replacements, or the dependency runs outside the game) |`). Evidence: the output of Step 5, `out/wheels/SHA256SUMS` pasted in full, the `mwparserfromhell` finding (no cp314 wheel upstream; a locally built pure-Python wheel works), and that `mcp` was left out because skyrim-dm only uses it for its MCP server.
+Fill the S10 row in `spikes/RESULTS.md` (add the row if Task 2's table does not have it yet: `| S10 skyrim-dm dependencies as wheels (Task 10) | <date> | PASS/FAIL | <evidence> | 4.10 (FAIL: pure-Python replacements, or the dependency runs outside the game) |`). Spec S10's criterion asks for `pip download --only-binary=:all: ...` to succeed for every dependency; it cannot for `mwparserfromhell` (no cp314 or pure wheel exists upstream), and this task builds that one wheel locally from the sdist. So when Step 5 passes, the result column says **`PASS with deviation: mwparserfromhell built from sdist (owner to accept)`**, not a plain `PASS`, and the owner accepts or rejects the deviation. Evidence: the output of Step 5, `out/wheels/SHA256SUMS` pasted in full, the `mwparserfromhell` finding (no cp314 wheel upstream; a locally built pure-Python wheel works), and that `mcp` was left out because skyrim-dm only uses it for its MCP server.
 
 Then review all rows (M0 is complete only when every row is filled):
 - S1, S8: must be PASS (they gated Tasks 3 and 18-32).
 - S2, S9 or S4 FAIL: STOP and ask the owner (they gate Part C, Tasks 25-32).
 - S7: each FAIL sub-test names its Task 27-30 change in the row; a FAIL that is not one of the listed changes: STOP and ask the owner.
+- S10 `PASS with deviation`: ask the owner to accept the `mwparserfromhell` deviation; record their answer in the row.
 - S5, S6 or S10 FAIL: write the change from spec section 9's "If it fails, change" column into the row's last cell, tell the owner, and do not edit the spec until they agree. M1 continues.
 
 Then list what M0 deployed, **show the owner the list, and remove nothing without their sign-off on that exact list** (`gio trash` only; never `rm`). Stop the HTTP server if it is still running (it also stops by itself after 10 minutes).

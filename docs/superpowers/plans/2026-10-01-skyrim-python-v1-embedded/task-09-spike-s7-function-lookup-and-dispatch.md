@@ -13,7 +13,7 @@ Adapted from: branch `plan-out-of-process`, task 6b (`task-06b-spike-s7-function
 
 **Interfaces:**
 - Consumes (Tasks 4, 6): `spike::OnMainThread`, `spike::WaitUntil`, `spike::Functor`, `spike::CountedArgs`, `spike::NoArgs`, `spike::IntArgs`, `spike::TidOf`, `spike::PickAlias` (Task 6), `spike::Log`. No new includes (Task 1's block covers them).
-- Produces for Tasks 27-30 (recorded in the S7 row of `spikes/RESULTS.md`): the real `FindBoundObject` signature; whether `PackHandle` binds a cold form; whether the object-pointer `DispatchMethodCall` overload works; whether `GetVMTypeID()` is reliable; how an alias result is encoded; whether object arrays can be built from a computed element type or need the copied `TypeInfo` (Task 28 rejects object-array *arguments* as `unsupported` in v1 either way; this answer decides whether M2 can lift that).
+- Produces for Tasks 27-30 (recorded in the S7 row of `spikes/RESULTS.md`): the real `FindBoundObject` signature; whether `PackHandle` binds a cold form; whether the object-pointer `DispatchMethodCall` overload works; whether a quest's own attached script (a non-native class, spec 4.3's "a mod's own script") is found by `FindBoundObject(h, "<AttachedScript>")` and dispatches a member function (S7c; Task 29's `ResolveTarget`); whether `GetVMTypeID()` is reliable; how an alias result is encoded; whether object arrays can be built from a computed element type or need the copied `TypeInfo` (Task 28 rejects object-array *arguments* as `unsupported` in v1 either way; this answer decides whether M2 can lift that).
 
 - [ ] **Step 0: Check the gates, then read the real signatures (no assumptions)**
 
@@ -55,12 +55,16 @@ std::string TI(const RE::BSScript::TypeInfo& t)
     std::string cls;
     if (t.IsObject() || t.IsObjectArray())
         if (auto* ci = t.GetTypeInfo()) cls = ci->GetName();
-    return std::format("raw={:#x} obj={} arr={} objarr={} cls={}", static_cast<std::uintptr_t>(t.GetRawType()), t.IsObject(),
-                       t.IsArray(), t.IsObjectArray(), cls);
+    // raw is GetRawType(): for a class type that is the class POINTER (+1 for an object array), not kObject;
+    // unmangled is GetUnmangledRawType(): kObject (1) / kObjectArray (11) for class types (API-VERIFICATION.md, TypeInfo).
+    return std::format("raw={:#x} unmangled={:#x} obj={} arr={} objarr={} cls={}", static_cast<std::uintptr_t>(t.GetRawType()),
+                       static_cast<std::uintptr_t>(t.GetUnmangledRawType()), t.IsObject(), t.IsArray(), t.IsObjectArray(), cls);
 }
 
 // The element-type formula the first dispatcher draft used (it is not in Tasks 27-30: they reject object-array
-// arguments). S7h tests whether it, or a copy of the real array's type_info(), would work, for M2.
+// arguments). It maps an ARRAY type to its element type. S7h compares its result with the real array's
+// type_info() (the element type) by raw value only: a wrong result is not a valid TypeInfo, so it is never
+// passed to TI(), GetTypeInfo() or CreateArray.
 RE::BSScript::TypeInfo ElementTypeFormula(const RE::BSScript::TypeInfo& arrayType)
 {
     const auto raw = static_cast<std::uintptr_t>(arrayType.GetRawType());
@@ -169,13 +173,24 @@ std::string S7b()
         pass ? "PASS" : "FAIL", exact, lower, none);
 }
 
-// ---- S7c: PropertyIter on a script that really has properties, and Object::GetProperty (sig::FindProperty, get/set_property)
+// ---- S7c: PropertyIter on a script that really has properties, and Object::GetProperty (sig::FindProperty, get/set_property);
+// plus a mod's OWN attached script as a call_method target (spec 4.3; Task 29 ResolveTarget with a non-native class):
+// FindBoundObject(h, "<AttachedScript>") must return the same Object, and a parameterless member function must
+// dispatch through both the Object& overload and the handle + "<AttachedScript>" overload.
+struct S7cTarget
+{
+    RE::BSTSmartPointer<RE::BSScript::Object> obj;
+    RE::VMHandle h = 0;
+    std::string cls, fn = "-", fnOwner = "-";
+    bool fnNative = false, boundByName = false;
+};
 std::string S7c(const std::string& scriptArg)
 {
     auto pick = PickAlias(false);
     if (pick->quest == 0) return "S7c NOT_RUN no running quest (run Task 6's S4 first)";
     auto out = std::make_shared<std::string>();
     auto props = std::make_shared<int>(0);
+    auto tgt = std::make_shared<S7cTarget>();
     auto r = OnMainThread([=, quest = pick->quest](std::function<void(std::string)> finish) {
         auto* vm = VM();
         auto* policy = vm->GetObjectHandlePolicy();
@@ -194,6 +209,28 @@ std::string S7c(const std::string& scriptArg)
             if (!obj || !obj->GetTypeInfo()) continue;
             if (!scriptArg.empty() && !IEq(obj->GetTypeInfo()->GetName(), scriptArg)) continue;
             const auto* ti = obj->GetTypeInfo();
+            if (!tgt->obj) {  // the first attached script object: resolve it by its OWN class name, pick a function
+                tgt->obj = obj;
+                tgt->h = h;
+                tgt->cls = ti->GetName();
+                RE::BSTSmartPointer<RE::BSScript::Object> byName;
+                tgt->boundByName = vm->FindBoundObject(h, ti->GetName(), byName) && byName && byName.get() == obj.get();
+                // A parameterless, non-static getter-looking function (Get*/Is*/Has*), never an event (On*): the
+                // script's own functions first, then its parents' (Quest has IsRunning/GetStage). Reads only.
+                for (const auto* t = ti; t && tgt->fn == "-"; t = t->GetParent()) {
+                    for (std::uint32_t i = 0; i < t->GetNumMemberFuncs(); ++i) {
+                        const auto& f = t->GetMemberFuncIter()[i].func;
+                        if (!f || f->GetIsStatic() || f->GetParamCount() != 0) continue;
+                        const std::string name = f->GetName().c_str();
+                        auto starts = [&](const char* pre) { return _strnicmp(name.c_str(), pre, std::string_view(pre).size()) == 0; };
+                        if (starts("On") || !(starts("Get") || starts("Is") || starts("Has"))) continue;
+                        tgt->fn = name;
+                        tgt->fnOwner = t->GetName();
+                        tgt->fnNative = f->GetIsNative();
+                        break;
+                    }
+                }
+            }
             *out += std::format("script {} props={}: ", ti->GetName(), ti->GetNumProperties());
             for (std::uint32_t i = 0; i < ti->GetNumProperties() && i < 8; ++i) {
                 const auto& p = ti->GetPropertyIter()[i];
@@ -204,8 +241,30 @@ std::string S7c(const std::string& scriptArg)
         }
         finish("ok");
     }, std::chrono::seconds(10));
-    return std::format("S7c {} {} {}  (pass an explicit script name as 's7c <Script>' if the quest has none with properties)",
-        (r == "ok" && *props > 0) ? "PASS" : "FAIL", r, *out);
+    // Dispatch the picked function on the attached script both ways (each dispatch is its own main-thread task).
+    std::string s1 = "NOT_RUN", s2 = "NOT_RUN";
+    std::shared_ptr<Captured> viaObj, viaName;
+    if (r == "ok" && tgt->obj && tgt->fn != "-") {
+        viaObj = CaptureCall([tgt](VMT* vm, Cb& cb) {
+            return vm->DispatchMethodCall(tgt->obj, RE::BSFixedString(tgt->fn), NoArgs(), cb);   // Object& overload
+        }, s1);
+        viaName = CaptureCall([tgt](VMT* vm, Cb& cb) {
+            return vm->DispatchMethodCall(tgt->h, RE::BSFixedString(tgt->cls), RE::BSFixedString(tgt->fn), NoArgs(), cb);  // handle + script class
+        }, s2);
+    }
+    auto shape = [](const std::shared_ptr<Captured>& c) {
+        if (!c || !c->have) return std::string("-");
+        std::lock_guard l(c->mx);
+        return c->v.IsInt() ? std::format("int:{}", c->v.GetSInt()) : c->v.IsBool() ? std::format("bool:{}", c->v.GetBool())
+             : c->v.IsFloat() ? std::format("float:{}", c->v.GetFloat()) : std::string(c->v.IsObject() ? "object" : "other");
+    };
+    const bool dispatchOk = s1 == "got" && s2 == "got";
+    const bool pass = r == "ok" && *props > 0 && tgt->boundByName && dispatchOk;
+    return std::format("S7c {} {} {}| attached_script={} bound_by_class_name={} fn={} declared_on={} native={} "
+                       "object_overload={} result={} class_name_overload={} result={} dispatch_ok={}  "
+                       "(pass an explicit script name as 's7c <Script>' if the quest has none with properties)",
+        pass ? "PASS" : "FAIL", r, *out, tgt->cls.empty() ? "-" : tgt->cls, tgt->boundByName, tgt->fn, tgt->fnOwner,
+        tgt->fnNative, s1, shape(viaObj), s2, shape(viaName), dispatchOk);
 }
 
 // ---- S7d: ResolveTarget: FindBoundObject / PackHandle on a form the VM has not bound yet
@@ -376,44 +435,51 @@ std::string S7h()
     if (!arrFromGame) return "S7h FAIL CreateFormArray did not return an array";
 
     // What does the engine's own array say about its element type, and does the formula reproduce it?
+    // Array::type_info() is the ELEMENT type (Form: a class pointer, bit 0 clear). The formula maps an ARRAY type
+    // to its element type, so it is applied to the array value's own type (Form[]: class pointer | 1) and its
+    // result is compared by raw value only (never passed to TI() or CreateArray).
     auto info = std::make_shared<std::string>();
+    auto formulaWorks = std::make_shared<bool>(false);
     OnMainThread([=](std::function<void(std::string)> finish) {
-        const auto& real = arrFromGame->type_info();  // does Array::type_info() exist and keep the class name? (Step 0)
-        const auto formula = ElementTypeFormula(real);
-        *info = std::format("real array: size={} elem_type{{{}}}; ElementTypeFormula(real){{{}}} same_raw_as_real={}",
-            arrFromGame->size(), TI(real), TI(formula), formula.GetRawType() == real.GetRawType());
+        RE::BSScript::TypeInfo arrType;
+        {
+            std::lock_guard l(cap->mx);
+            arrType = cap->v.GetType();
+        }
+        const auto& real = arrFromGame->type_info();
+        const auto formulaRaw = static_cast<std::uintptr_t>(ElementTypeFormula(arrType).GetRawType());
+        const auto realRaw = static_cast<std::uintptr_t>(real.GetRawType());
+        *formulaWorks = arrType.IsObjectArray() && formulaRaw == realRaw;
+        *info = std::format("real array: size={} array_type{{{}}} elem_type{{{}}}; ElementTypeFormula(array_type) raw={:#x} elem_type raw={:#x} formula_matches_real={}",
+            arrFromGame->size(), TI(arrType), TI(real), formulaRaw, realRaw, *formulaWorks);
         finish("ok");
     }, std::chrono::seconds(10));
 
-    // Build a Form[2] two ways and send it: variant 0 copies the real array's TypeInfo, variant 1 uses the formula.
-    std::string results;
-    bool works[2] = { false, false };
-    for (int variant = 0; variant < 2; ++variant) {
-        std::string st2;
-        auto cap2 = CaptureCall([arrFromGame, variant](VMT* vm, Cb& cb) {
-            auto* player = RE::PlayerCharacter::GetSingleton();
-            const auto ptype = static_cast<RE::VMTypeID>(player->GetFormType());
-            const auto& real = arrFromGame->type_info();
-            const RE::BSScript::TypeInfo et = variant == 0 ? real : ElementTypeFormula(real);
-            RE::BSTSmartPointer<RE::BSScript::Array> mine;
-            if (!vm->CreateArray(et, 2, mine) || !mine) return false;
-            for (std::uint32_t i = 0; i < 2; ++i) RE::BSScript::PackHandle(&(*mine)[i], player, ptype);
-            std::vector<RE::BSScript::Variable> v(3);
-            v[0].SetArray(mine);
-            v[1].SetSInt(4);
-            RE::BSScript::PackHandle(&v[2], player, ptype);
-            return vm->DispatchStaticCall(RE::BSFixedString("Utility"), RE::BSFixedString("ResizeFormArray"), new CountedArgs(std::move(v)), cb);
-        }, st2);
-        std::string detail = st2;
-        if (st2 == "got" && cap2->v.IsArray() && cap2->v.GetArray()) {
-            auto a = cap2->v.GetArray();
-            works[variant] = a->size() == 4;
-            detail = std::format("size={} (expected 4)", a->size());
-        }
-        results += std::format("variant {} ({}) round trip: {}; ", variant, variant == 0 ? "copied TypeInfo" : "formula", detail);
+    // Build a Form[2] from a copy of the real array's element TypeInfo and send it to ResizeFormArray. The formula
+    // gets no engine call: "formula_works" is only whether its result equals the real element type (above).
+    std::string st2;
+    auto cap2 = CaptureCall([arrFromGame](VMT* vm, Cb& cb) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        const auto ptype = static_cast<RE::VMTypeID>(player->GetFormType());
+        const RE::BSScript::TypeInfo et = arrFromGame->type_info();
+        RE::BSTSmartPointer<RE::BSScript::Array> mine;
+        if (!vm->CreateArray(et, 2, mine) || !mine) return false;
+        for (std::uint32_t i = 0; i < 2; ++i) RE::BSScript::PackHandle(&(*mine)[i], player, ptype);
+        std::vector<RE::BSScript::Variable> v(3);
+        v[0].SetArray(mine);
+        v[1].SetSInt(4);
+        RE::BSScript::PackHandle(&v[2], player, ptype);
+        return vm->DispatchStaticCall(RE::BSFixedString("Utility"), RE::BSFixedString("ResizeFormArray"), new CountedArgs(std::move(v)), cb);
+    }, st2);
+    bool copiedWorks = false;
+    std::string detail = st2;
+    if (st2 == "got" && cap2->v.IsArray() && cap2->v.GetArray()) {
+        auto a = cap2->v.GetArray();
+        copiedWorks = a->size() == 4;
+        detail = std::format("size={} (expected 4)", a->size());
     }
-    return std::format("S7h {} {} | {}  copied_TypeInfo_works={} formula_works={}  (PASS = the copied-TypeInfo route works; M2 may then accept object-array arguments by copying a real array's type_info(); if neither works, object-array arguments stay unsupported)",
-        works[0] ? "PASS" : "FAIL", *info, results, works[0], works[1]);
+    return std::format("S7h {} {} | copied TypeInfo round trip: {}  copied_TypeInfo_works={} formula_works={}  (PASS = the copied-TypeInfo route works; M2 may then accept object-array arguments by copying a real array's type_info(); formula_works=false means the formula must not be used)",
+        copiedWorks ? "PASS" : "FAIL", *info, detail, copiedWorks, *formulaWorks);
 }
 }
 ```
@@ -446,12 +512,12 @@ for t in s7a s7b s7c s7d s7e s7f s7g s7h; do python3 spikes/spike_client.py "$t"
 |---|---|---|
 | S7a | `Utility.RandomInt` found as a global with 2 named parameters; `Actor.Enable` found as a member through the parent chain; `Actor.RandomInt` not found as a member. `GetParam` names are the `.psc` names. | Task 27: `sig::FindFunction`, `sig::BindArgs` (the iterators `GetMemberFuncIter`/`GetGlobalFuncIter`, `GetParam`); the "global used as member" error path |
 | S7b | The `Actor` chain ends at `Form`; an unknown script is not found. Note whether lowercase `actor` is found. | Task 27 `sig::TypeOf` and Task 28 `sig::IsA`: canonicalise the script name first if lowercase is NOT_FOUND |
-| S7c | Properties enumerate by name with types, and `Object::GetProperty(name)` returns a `Variable*` for a live object. | Task 28 `sig::FindProperty`; Task 30 `GetProperty`/`SetProperty` (use `VirtualMachine::GetPropertyValue`/`SetPropertyValue` with the smart pointer if `Object::GetProperty` does not see the property) |
+| S7c | Properties enumerate by name with types, and `Object::GetProperty(name)` returns a `Variable*` for a live object. **And** the quest's first attached script (a mod's own script, spec 4.3) resolves by its own class name: `bound_by_class_name=true` (`FindBoundObject(h, "<AttachedScript>")` returns the same `Object`), and the picked parameterless getter (`fn=`, `declared_on=`) dispatches through both overloads: `dispatch_ok=true`. Record `fn`, `declared_on` and both results. | Task 28 `sig::FindProperty`; Task 30 `GetProperty`/`SetProperty` (use `VirtualMachine::GetPropertyValue`/`SetPropertyValue` with the smart pointer if `Object::GetProperty` does not see the property). `bound_by_class_name=false` or `dispatch_ok=false`: Task 29 `ResolveTarget`/`CallMethod` with a non-native script class (skyrim-dm's `SetupContract` path) must change before Task 29 starts: STOP and ask the owner if neither overload dispatches |
 | S7d | The real `FindBoundObject` signature compiles as written in Step 0; a cold form reports `FindBoundObject-before=false`, then `PackHandle` produces a non-null object and `FindBoundObject-after=true`. The Quest lookup on the player is false. | Task 28 `FindBound`/`BindObject` and Task 29 `ResolveTarget`: the `FindBoundObject` call (argument list as found in the header), and the `PackHandle` fallback. If `PackHandle` yields no object on a cold form, dispatch through the handle+className overload (S4's) for native classes instead of `v.GetObject()`. |
 | S7e | The `Object&` overload and the handle+className overload return the same `GetPositionX`. | Task 29 `DispatchMethod`/`CallMethod`: dispatch with the handle+className overload (the S4-proven one) if the Object overload fails |
 | S7f | `skyrim_cast<BGSRefAlias*>` is non-null only for reference aliases and `skyrim_cast<BGSLocAlias*>` only for location aliases. Record whether `GetVMTypeID()` agrees. | Task 29 `ResolveAlias`, `DescribeAlias`, `ResolveTarget`, and Task 28's `ToVariable` alias branch: keep the `skyrim_cast` route (never `GetVMTypeID()` if it disagrees) |
 | S7g | The alias returned by `Quest.GetAlias` is recoverable through `HandleIsType(BGSRefAlias::VMTYPEID, h)` plus `GetObjectForHandle` (or `Object::Resolve`). Record `naive_form_check_selects_a_form`. | Task 28 `ObjectToJson`: test the alias handle types first when the naive form check selects a form (otherwise an alias comes back as its Quest); Task 29's `test_alias_method_calls` must check an alias result, not only a Quest |
-| S7h | An object array built from a copy of the real array's `type_info()` round-trips through `ResizeFormArray` (size 4). Record whether the formula also works. | Nothing in M1: Task 28 rejects object-array arguments as `unsupported` and only reads object-array results. Record the answer for the M2 plan. |
+| S7h | An object array built from a copy of the real array's `type_info()` (the element type) round-trips through `ResizeFormArray` (size 4). Record `formula_matches_real` (the first draft's formula applied to the array's own type, compared by raw value; it is never sent to the engine). | Nothing in M1: Task 28 rejects object-array arguments as `unsupported` and only reads object-array results. Record the answer for the M2 plan. |
 
 The `FindBoundObject` row also depends on Step 0: record the signature you found. **A FAIL in S7a, S7d or S7e affects the core of method calls: fix Tasks 27-29 as listed before starting them; if a fix is not one of the listed changes, STOP and ask the owner.**
 

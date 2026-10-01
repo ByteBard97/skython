@@ -493,7 +493,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse)
 
 - [ ] **Step 4: Build, deploy, launch, check the log**
 
-Make sure a throwaway save exists first (Step 0 of Task 6 makes `s4test`; for now you only need the game to reach the main menu). Run `tools/fetch_python.sh --check` first too: it must pass, so the first sync already carries the CPython build inputs Task 3 needs.
+The game only needs to reach the main menu for this step; the throwaway save `spikebase` that every later spike runs on is made at the end of this step (below). Run `tools/fetch_python.sh --check` first too: it must pass, so the first sync already carries the CPython build inputs Task 3 needs.
 
 ```bash
 tools/remote_build.sh spikes/spike-dll SkyrimPythonSpike.dll
@@ -505,6 +505,14 @@ SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/S
 cat "$SKSE_LOG_DIR/SkyrimPythonSpike.log"
 ```
 Expected: `SkyrimPythonSpike loading on Skyrim 1.6.1170.0`, `spike: listening on 127.0.0.1:45978`. **If the wait times out, STOP and ask the owner** (do not relaunch in a loop). **If the logged version is not 1.6.1170, STOP and ask the owner.** If the build fails in CommonLibSSE-NG's configure step, the missing dependency is named in the CMake error: add it to `spikes/spike-dll/vcpkg.json` and rebuild.
+
+Then make the throwaway save that Tasks 2-10 run on (no spike command has been sent yet, so nothing has touched the game state): from the main menu load a disposable save (a fresh character or any save you do not care about; never a real playthrough), wait for gameplay, open the console and type `save spikebase`, close the console, and confirm it exists:
+
+```bash
+source tools/env.sh
+tools/teardown_list.sh | grep -i spikebase
+```
+Expected: one or more `spikebase` save files listed. Record in your report that `spikebase` exists (Tasks 3-10 load it as "the throwaway save"; Task 6 later makes `s4test` from it and Task 8 makes `spytest`). If it is not found where `teardown_list.sh` looks, find where this Stock Game keeps saves, record that path, and **STOP and ask the owner** before deploying anything else. Never save over `spikebase` with a real playthrough, and never save a real playthrough while the spike DLL is deployed.
 
 - [ ] **Step 5: Teardown procedure (reference; run at the end of M0, after Task 10)**
 

@@ -213,9 +213,16 @@ std::string S2(int n)
     }, std::chrono::seconds(10));
     const bool latentOk = lr == "posted" && WaitUntil([&] { return st->latentDone.load() >= kLatent; }, std::chrono::seconds(20));
 
+    // Settle, then take the success-path verdict BEFORE phase C starts. The VM may free an arguments
+    // object when the stack is torn down, just after the callback fires; without the settle, late
+    // destructions from phases A and B would land in phase C's bucket.
+    std::this_thread::sleep_for(std::chrono::seconds(3));  // spike only
+    const int cC = CountedArgs::ctor, dC = CountedArgs::dtor;
+    const int ctorOk = cC - c0, dtorOk = dC - d0;
+    const int liveOk = ctorOk - dtorOk;
+
     // Phase C: the FAILED-dispatch path. A script that does not exist makes Dispatch* return false.
     // Does the VM still destroy the arguments object, or must the caller?
-    const int cC = CountedArgs::ctor, dC = CountedArgs::dtor;
     (void)OnMainThread([st](std::function<void(std::string)> finish) {
         auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
         RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> none;
@@ -229,10 +236,8 @@ std::string S2(int n)
     }, std::chrono::seconds(10));
     std::this_thread::sleep_for(std::chrono::seconds(3));  // spike only: let the VM release anything it is going to release
 
-    const int ctorAll = CountedArgs::ctor - c0, dtorAll = CountedArgs::dtor - d0;
+    // failed path = everything after the first settle (phase C only)
     const int ctorFail = CountedArgs::ctor - cC, dtorFail = CountedArgs::dtor - dC;
-    // success path = everything except phase C
-    const int liveOk = (ctorAll - ctorFail) - (dtorAll - dtorFail);
     const int liveFail = ctorFail - dtorFail;
 
     const bool threadPhase = verdictNote == "ok" && st->nestedDone == n && st->nestedInts == n &&
@@ -247,7 +252,7 @@ std::string S2(int n)
         (threadPhase && ownsOk) ? "PASS" : "FAIL", verdictNote, n, st->nestedDone.load(), st->nestedInts.load(),
         st->outerFailed.load(), st->nestedFailed.load(), elapsedMs, mainTid, st->firstCbTid, st->cbOnMain.load(),
         st->cbOffMain.load(), st->firstNestedTid, st->nestedOnMain.load(), st->nestedOffMain.load(), st->latentDone.load(),
-        kLatent, st->latentRefused.load(), st->firstLatentTid, st->latentOnMain.load(), st->latentOffMain.load(), ctorAll - ctorFail, dtorAll - dtorFail,
+        kLatent, st->latentRefused.load(), st->firstLatentTid, st->latentOnMain.load(), st->latentOffMain.load(), ctorOk, dtorOk,
         liveOk, ownsOk ? "vm" : "NOT_FREED", st->failedFalse.load(), st->failedTrue.load(), liveFail, failPathOwner);
 }
 }
@@ -276,7 +281,7 @@ Expected PASS (first line of the run): `S2 PASS note=ok n=1000 nested_done=1000 
 PASS criteria (all must hold):
 1. every nested dispatch completed (`nested_done == n`, `nested_ints == n`) with no refused dispatch;
 2. all 10 latent `Utility.Wait(0.1)` callbacks arrived;
-3. **argument ownership:** on the success path `live_ok == 0` (every `CountedArgs` built was destroyed by the VM, 3 s after the last callback). Separately record `owner_failed_path`: `vm` means the VM also destroys the arguments when `Dispatch*` returns false; `CALLER(...)` means it does not, and Task 27's `CallStatic` and Task 29's `CallMethod` must `delete` the `DynArgs` when `Dispatch*` returns false (write this into the RESULTS.md row; those tasks read it);
+3. **argument ownership:** on the success path `live_ok == 0` (every `CountedArgs` built in phases A and B was destroyed by the VM; it is counted after a 3 s settle and **before** phase C starts, so late destructions cannot fall into the failed-path bucket). `live_failed_path` is counted from that split point after a second 3 s settle. Separately record `owner_failed_path`: `vm` means the VM also destroys the arguments when `Dispatch*` returns false; `CALLER(...)` means it does not, and Task 27's `CallStatic` and Task 29's `CallMethod` must `delete` the `DynArgs` when `Dispatch*` returns false (write this into the RESULTS.md row; those tasks read it);
 4. no hang or crash.
 
 The thread answers are findings, not pass/fail: record whether callbacks ran on the main thread (`cb_on_main`/`cb_off_main`) for the native case and separately for the latent case. If the latent callbacks come from a different thread than the native ones, `GameBackend` (Task 27) must not assume either: the `Dispatcher`'s `Done` (Task 18) is already safe from any thread, and must stay free of Python and of engine access. Also check the logged thread ids against `main_tid`: Task 27 converts object results with one extra `AddTask` only when the callback is off the main thread.

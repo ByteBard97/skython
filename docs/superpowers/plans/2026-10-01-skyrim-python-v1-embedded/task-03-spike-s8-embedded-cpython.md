@@ -15,7 +15,7 @@
 **Files:**
 - Create: `spikes/spike-pycore/CMakeLists.txt`, `spikes/spike-pycore/build.ps1`, `spikes/spike-pycore/src/PyCore.cpp`, `spikes/spike-pycore/linux_check.cpp`
 - Create: `spikes/spike-dll/src/PyLoad.h`, `spikes/spike-dll/src/PyLoad.cpp`
-- Modify: `spikes/spike-dll/CMakeLists.txt` (one source added), `spikes/spike-dll/src/main.cpp` (one include, one flag, four commands, autostart at `kDataLoaded`), `tools/deploy.sh` (`--python` mode)
+- Modify: `spikes/spike-dll/CMakeLists.txt` (one source added), `spikes/spike-dll/src/main.cpp` (one include, one flag, four commands, autostart: load in `SKSEPluginLoad`, init at `kDataLoaded`), `tools/deploy.sh` (`--python` mode)
 - Create: `spikes/py_send.py`, `spikes/py_echo_client.py`, `spikes/py/s8_imports.py`, `spikes/py/echo_server.py`
 - Modify: `spikes/RESULTS.md` (S8 row)
 
@@ -27,7 +27,7 @@
   - `spike::py::{Load, Init, Status, Exec, SetCaller, AutostartRequested}` and `using spike::py::CallerFn = int (*)(int, double*)` (`PyLoad.h`).
   - Harness commands: `py_load`, `py_init`, `py_status`, `py_exec <one line of Python>`. `py_exec` runs in one persistent namespace (`__main__`); a variable named `result` is returned.
   - `spikes/py_send.py FILE.py | -c CODE` (exit 0 on `OK`), `spikes/py_echo_client.py [soak SEC]`, `tools/deploy.sh --python [out/<core>.dll]`.
-  - Marker file `Data/SKSE/Plugins/SkyrimPython/spike-autostart`: when present, the spike runs `py_load` and `py_init` itself at `kDataLoaded`.
+  - Marker file `Data/SKSE/Plugins/SkyrimPython/spike-autostart`: when present, the spike runs `py_load` itself in `SKSEPluginLoad` (plugin-load time) and `py_init` at `kDataLoaded`.
   - Findings for Tasks 25-26: whether the two-DLL load works under Proton; CPython's `sys.path`, `sys.executable`, OpenSSL and SQLite versions in the game; and the rule that the host thread blocks on a **leaked** condition variable (Step 2 shows why a static one hangs process exit).
 
 - [ ] **Step 0: Check the gate and the inputs**
@@ -614,7 +614,7 @@ bool AutostartRequested()
 
 `spikes/spike-dll/CMakeLists.txt`: add `src/PyLoad.cpp` to the `add_library(SkyrimPythonSpike SHARED ...)` source list (after `src/Net.cpp`). Nothing else changes; in particular the spike DLL does **not** link `python314.lib`.
 
-`spikes/spike-dll/src/main.cpp`, four edits:
+`spikes/spike-dll/src/main.cpp`, five edits:
 1. At the top, next to `#include "Net.h"`: `#include "PyLoad.h"`.
 2. A new block directly above the `namespace spike` block that defines `Handle`:
    ```cpp
@@ -634,11 +634,14 @@ bool AutostartRequested()
        case SKSE::MessagingInterface::kDataLoaded:
            spike::Log("kDataLoaded");
            spike::g_dataLoaded.store(true);
-           if (spike::py::AutostartRequested()) {  // run B (Step 6): the real plugin's timing
-               spike::Log("spike: autostart " + spike::py::Load());
-               spike::Log("spike: autostart " + spike::py::Init(true));
-           }
+           if (spike::py::AutostartRequested())  // run B (Step 7): the real plugin's timing; py::Load ran in SKSEPluginLoad
+               spike::Log("spike: autostart at kDataLoaded " + spike::py::Init(true));
            break;
+   ```
+5. In `SKSEPluginLoad`, directly after the `spike::Log(std::format("SkyrimPythonSpike loading on ...` line (so after `SKSE::Init` and `SetupLog()`, and the result line reaches the spike log), load `python314.dll` and the core at plugin-load time, where spec 4.1 and the Global Constraints put it:
+   ```cpp
+       if (spike::py::AutostartRequested())  // run B (Step 7): python314.dll + SpikePyCore.dll at plugin load
+           spike::Log("spike: autostart at plugin load " + spike::py::Load());
    ```
 
 - [ ] **Step 4: Deploy mode for the Python runtime**
@@ -858,11 +861,21 @@ def main(argv: list[str]) -> int:
         lat = round_trips(1000, "ping")
         print(f"S8 socket basic PASS: 1000 round trips, median {statistics.median(lat):.2f} ms, max {max(lat):.2f} ms")
         print(f"S8 socket large PASS: 1 MiB echoed in {large():.1f} ms")
-        threads = [threading.Thread(target=round_trips, args=(250, f"par{k}")) for k in range(4)]
+        errs = []  # an exception in a thread target is otherwise swallowed: collect it and fail below
+
+        def worker(k: int) -> None:
+            try:
+                round_trips(250, f"par{k}")
+            except BaseException as e:
+                errs.append(f"par{k}: {e!r}")
+
+        threads = [threading.Thread(target=worker, args=(k,)) for k in range(4)]
         [t.start() for t in threads]
         [t.join(60) for t in threads]
         if any(t.is_alive() for t in threads):
             raise AssertionError("parallel: a connection did not finish in 60 s")
+        if errs:
+            raise AssertionError("parallel: " + "; ".join(errs))
         print("S8 socket parallel PASS: 4 connections x 250 round trips")
         print("S8 socket PASS")
         return 0
@@ -911,6 +924,27 @@ wait
 ```
 Expected: `imports ok`, `OK listening 127.0.0.1:45979` twice, the four `S8 socket ... PASS` lines, `S8 soak PASS`, an `ERR Traceback ... SystemExit: 3` line and `rc=1`. (Verified while writing the plan.)
 
+The parallel sub-check must also be able to fail: an exception inside a worker thread does not stop the thread from finishing, so without the `errs` list it would be swallowed and `S8 socket PASS` printed anyway. Prove it against a server that echoes correctly on the first two connections and corrupts every later one (the 1000-round-trip and 1 MiB checks are those first two connections, so only the parallel phase sees the corruption):
+```bash
+python3 - <<'PYEOF' &
+import socketserver, threading, time
+n = {"c": 0}; lock = threading.Lock()
+class H(socketserver.StreamRequestHandler):
+    def handle(self):
+        with lock: n["c"] += 1; k = n["c"]
+        for line in self.rfile:
+            self.wfile.write(line if k <= 2 else b"corrupt\n"); self.wfile.flush()
+socketserver.ThreadingTCPServer.allow_reuse_address = True
+srv = socketserver.ThreadingTCPServer(("127.0.0.1", 45996), H); srv.daemon_threads = True; srv.timeout = 1
+end = time.time() + 20
+while time.time() < end: srv.handle_request()
+PYEOF
+sleep 1
+PY_ECHO_PORT=45996 python3 spikes/py_echo_client.py; echo "rc=$? (expect 1)"
+wait
+```
+Expected: `S8 socket basic PASS`, `S8 socket large PASS`, then `S8 socket FAIL: AssertionError: parallel: par0: AssertionError(...)` naming all four `par` connections, no `S8 socket PASS` line, and `rc=1`.
+
 - [ ] **Step 6: Build, deploy, and run A (commands at the main menu)**
 
 ```bash
@@ -939,33 +973,37 @@ Expected, in order: `PY_STATUS not_loaded`; `PY_LOAD OK same_module=true ours=..
 
 `PY_LOAD MISMATCH` (the core's import resolved to another `python314.dll`), `PY_LOAD FAIL`, `PY_STATUS failed: ...`, or the game crashing at any point is an **S8 FAIL**: record it and STOP.
 
-- [ ] **Step 7: Keep it running, then run B (autostart at `kDataLoaded`) and a clean exit**
+- [ ] **Step 7: Keep it running, then run B (load at plugin load, init at `kDataLoaded`) and a clean exit**
 
 1. Load the throwaway save (`spikebase`), play for about a minute (walk, open and close the inventory), while from Linux: `python3 spikes/py_echo_client.py soak 60`. Expected `S8 soak PASS` and no visible hitch beyond normal; then `python3 spikes/spike_client.py echo still-here` prints `still-here`.
 2. Clean exit: in the game console type `qqq`, then on Linux:
    ```bash
    timeout 120 bash -c 'while pgrep -x SkyrimSE.exe >/dev/null; do sleep 2; done' && echo "game exited"
    tail -n 20 "$SKYRIM_PYTHON_STATE/launch.log"
+   find "$SKSE_LOG_DIR" -newer "$SKYRIM_PYTHON_STATE/launch.stamp" -iname 'crash*' -print
    ```
-   Expected `game exited` and no `Unhandled exception` / `page fault` lines in the tail. A hang on exit (still running after 120 s) or a crash dialog is an **S8 FAIL** (record it; STOP).
-3. Run B, the real plugin's timing (load and init on the main thread's `kDataLoaded` message):
+   Expected `game exited`, no `Unhandled exception` / `page fault` lines in the tail, and the `find` prints **nothing** (a crash logger such as Crash Logger writes `crash-*.log` under the SKSE log folder, and a crash at exit may leave its only record there). A hang on exit (still running after 120 s), a crash dialog or a new `crash*` file is an **S8 FAIL** (record it; STOP).
+3. Run B, the real plugin's timing: `python314.dll` and the core are loaded in `SKSEPluginLoad` (plugin-load time, spec 4.1), and the interpreter is started at the main thread's `kDataLoaded` message:
    ```bash
    touch "$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython/spike-autostart"
    echo "$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython/spike-autostart" >> out/deployed.txt
    tools/launch_game.sh
    SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPythonSpike.log" "pycore: status (running|failed)" 600
+   grep -E 'loading on Skyrim|autostart at (plugin load|kDataLoaded)|kDataLoaded' "$SKSE_LOG_DIR/SkyrimPythonSpike.log"
    python3 spikes/spike_client.py py_status
    python3 spikes/py_send.py spikes/py/s8_imports.py && python3 spikes/py_send.py spikes/py/echo_server.py && python3 spikes/py_echo_client.py
    ```
-   Expected: `spike: autostart PY_LOAD OK same_module=true ...` and `spike: autostart PY_INIT STARTED` in the log, `PY_STATUS running`, the imports JSON and `S8 socket PASS`. Quit with `qqq` and repeat the clean-exit check of item 2. Leave the marker file in place only if the owner wants autostart for later spikes; Task 5 does not need it.
+   Expected, in this order in the log: `SkyrimPythonSpike loading on Skyrim 1.6.1170.0`, `spike: autostart at plugin load PY_LOAD OK same_module=true ...` (before `kDataLoaded`), `kDataLoaded`, `spike: autostart at kDataLoaded PY_INIT STARTED (poll py_status)`; then `PY_STATUS running`, the imports JSON and `S8 socket PASS`. `PY_LOAD FAIL`/`MISMATCH` at plugin load, or a crash during loading, is an **S8 FAIL** (record it; STOP). Quit with `qqq` and repeat the clean-exit check of item 2. Leave the marker file in place only if the owner wants autostart for later spikes; Task 5 does not need it.
+
+   What run B does **not** cover: the real core DLL calls `SKSE::Init` itself with the loader's `LoadInterface` and registers the messaging listener, Papyrus functions and `AddTask` from a second module (`API-VERIFICATION.md` Part 3 lists this as unverified). No spike tests that; it is first exercised by Task 25's first live launch, which is a STOP gate for it. Write that into the S8 row (template below).
 
 - [ ] **Step 8: Record the result**
 
 Fill the S8 row of `spikes/RESULTS.md` (add the row below S1 if the table has none):
 ```markdown
-| S8 two-DLL load, embedded CPython, Python socket from Linux (Task 3) | <date> | PASS/FAIL | run A: `<PY_LOAD line>`, `<PY_STATUS>`, imports JSON (hexversion, isolated, openssl, sqlite, sys.path, executable), `<S8 socket lines>`; soak `<line>`; clean exit yes/no; run B (autostart at kDataLoaded): `<lines>`; runtime `<version from log>` | Whole design (FAIL: STOP; fallback is branch `plan-out-of-process`, spec draft 3). Socket-only failure: the dev bridge connects outbound to a Linux listener (spec 4.2) |
+| S8 two-DLL load, embedded CPython, Python socket from Linux (Task 3) | <date> | PASS/FAIL | run A: `<PY_LOAD line>`, `<PY_STATUS>`, imports JSON (hexversion, isolated, openssl, sqlite, sys.path, executable), `<S8 socket lines>`; soak `<line>`; clean exit yes/no; run B (Load in SKSEPluginLoad, Init at kDataLoaded): `<lines>`; clean exit B yes/no, crash logs none; runtime `<version from log>`. Not covered: SKSE::Init from the core DLL (second module); first tested by Task 25's live launch (a STOP gate) | Whole design (FAIL: STOP; fallback is branch `plan-out-of-process`, spec draft 3). Socket-only failure: the dev bridge connects outbound to a Linux listener (spec 4.2) |
 ```
-**PASS needs all of:** `same_module=true` in both runs, `PY_STATUS running` in both runs, every import in `s8_imports.py`, `S8 socket PASS` and `S8 soak PASS`, and a clean exit. If only the socket part fails (Python runs, Linux cannot connect to 45979), record `FAIL (socket only)`: that is still a STOP, but tell the owner the embedding itself worked.
+**PASS needs all of:** `same_module=true` in both runs (run B's from the plugin-load-time `PY_LOAD`), `PY_STATUS running` in both runs, every import in `s8_imports.py` with `"site_imported": true` and a `"path"` whose **first four entries** are exactly the four `PyLoad.cpp` entries in order (`...\SkyrimPython\python\python314.zip`, `...\SkyrimPython\python`, `...\SkyrimPython\site-packages`, `...\SkyrimPython\lib`; they prove the isolated `PyConfig` took effect, and S10 and Task 26 rely on `site-packages` and `lib` being on the path), `S8 socket PASS` (which now fails if any of the 4 parallel connections fails) and `S8 soak PASS`, and a clean exit in both runs (no hang, no crash dialog, no new `crash*` log). If only the socket part fails (Python runs, Linux cannot connect to 45979), record `FAIL (socket only)`: that is still a STOP, but tell the owner the embedding itself worked.
 
 - [ ] **Step 9: Commit**
 
