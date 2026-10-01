@@ -380,7 +380,7 @@ json FromVariable(const Variable& v)
 - [ ] **Step 4: Build, deploy, run**
 
 ```bash
-tools/remote_build.sh plugin SkyrimPython.dll
+tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
 tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package
 tools/launch_game.sh
 source tools/env.sh

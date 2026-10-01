@@ -213,7 +213,7 @@ command -v shellcheck >/dev/null && shellcheck tools/fetch_python.sh || echo "(s
 
 Then `docs/PINS.md`. The sha256 block **must** keep exactly this format (64 hex, two spaces, file name), because `fetch_python.sh` reads it. The `<...>` fields are filled in from what Step 3 and Step 6 actually print; they are observations, not guesses:
 
-```bash
+````bash
 cat > docs/PINS.md <<'EOF'
 # Pins
 
@@ -253,7 +253,7 @@ a1cc06b524ab3edca51f8ad3895f9c4fa20b8b19283173dff4ae781449dc9639  pybind11-3.1.0
 44faa038e9c3f9728efbda143748d01124ea0a27f4bf78f35a15d8fab2e039fb  doctest.h
 ```
 EOF
-```
+````
 
 - [ ] **Step 5: Check the API names later tasks depend on, and record them in `docs/PINS.md`**
 

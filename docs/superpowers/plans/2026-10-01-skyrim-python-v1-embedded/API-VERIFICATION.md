@@ -125,3 +125,43 @@ Reproduced, not a plan bug: Task 10 leaves stub definitions of `is_valid_form_ke
 **Compiled and linked without change:** the Task 3, 5, 6 spike code (S2 `CountedArgs`, `Functor`, `OnMainThread`; S5 `RegisterFunction`/`ModSink`; S6 `AddUITask`/`MenuSink`), Task 6b S7 apart from the two items above, and the plugin sources of Tasks 15, 16, 17a, 17b, 17c and 18 (assembled from the plan text, `core/` Tasks 8-12 included). Exports of both DLLs (`objdump -p`): `SKSEPlugin_Load`, `SKSEPlugin_Query`, `SKSEPlugin_Version`.
 
 **Not verified (needs the game):** every runtime behaviour: callback thread, argument ownership on failed dispatch, alias/cold-form binding, `Load` overload choice, Wine's `WSAPoll`, the SKSE log path, that `SKSEPlugin_Version` is accepted by SKSE for AE 1.6.1170, and any live test.
+
+## Part 3: build-box verification of the embedded plan (2026-10-01)
+
+Done on the Windows build box in a NEW checkout root, `C:\dev\skyrim-python-verify2` (the plan's `tools/remote_build.sh` with `REMOTE_ROOT='C:\dev\skyrim-python-verify2'`; the script already has that override). The Linux side was a separate copy of the scratch checkout at the post-Task-24 state, with the Windows-side tasks applied from the plan text in order: Task 0 (submodule pinned at `39f9d07a`, `tools/fetch_python.sh`), Task 1, Task 3, Tasks 4-9 (spike), Tasks 25-30 (plugin). Task 31 has no C++. Nothing was run in the game.
+
+**Toolchain:** VS 2022 Build Tools, MSBuild 17.14.40, MSVC 19.44.35228 (14.44.35207), Windows SDK 10.0.26100, CMake 3.31.6, vcpkg at `C:\vcpkg` (triplet `x64-windows-static-md`). CPython headers and import library from the NuGet `python` 3.14.8 package; pybind11 3.1.0 headers.
+
+**Build times** (including the sync): `SpikePyCore.dll` 28 s cold; spike DLL 5 min 19 s cold (vcpkg manifest install + CommonLib), 33 s incremental; plugin (both DLLs, CommonLib, `spy_core`, `pymodule.cpp`) 5 min 30 s cold, 34-51 s incremental.
+
+**Checkpoints, all compiled and linked with 0 errors and 0 compiler warnings outside CommonLib:**
+
+| After | Target | Result |
+|---|---|---|
+| Task 3 | `SpikePyCore.dll`, `SkyrimPythonSpike.dll` | OK |
+| Task 5 | `SkyrimPythonSpike.dll` (S2 + S9 code) | OK |
+| Task 9 | `SkyrimPythonSpike.dll` (S4, S5, S6, S7 code) | OK |
+| Task 26 | `SkyrimPython.dll` (loader), `SkyrimPythonCore.dll` (interim backend) | OK |
+| Task 27 | core (GameBackend, Ops, Signatures, PapyrusValues) | OK |
+| Task 28 | core (value conversion, `IsA`, `FindProperty`) | OK |
+| Task 29 | core (aliases, `form.resolve`, `call_method`) | OK |
+| Task 30 | core (properties, batch) and the loader | OK |
+
+**Imports and exports** (`objdump -p` on Linux, final DLLs):
+
+| DLL | imports `python314.dll` | exports |
+|---|---|---|
+| `SkyrimPython.dll` (loader) | no | `SKSEPlugin_Load`, `SKSEPlugin_Query`, `SKSEPlugin_Version` |
+| `SkyrimPythonCore.dll` | yes | `SpyCore_Load`, `PyInit__skyrim`, `SKSEPlugin_Query`, `SKSEPlugin_Version` |
+| `SpikePyCore.dll` | yes | `SpikePy_PythonModule`, `SpikePy_Run`, `SpikePy_SetCaller`, `SpikePy_SetLog`, `SpikePy_Start`, `SpikePy_Status` |
+| `SkyrimPythonSpike.dll` | no | `SKSEPlugin_Load`, `SKSEPlugin_Query`, `SKSEPlugin_Version` |
+
+**Plan defects found while applying the text** (no compile errors came from the code itself):
+
+| Where | Problem | Fix |
+|---|---|---|
+| Task 1 `main.cpp` skeleton | `Handle` shared a namespace block with `Log`/`ParseInt`; Tasks 4-9 say "a new `namespace spike` block above `Handle`", which cannot both precede `Handle` and follow `Log` (their code calls `Log`). | `Handle` now has its own `namespace spike` block, so the new blocks go between it and the `Log`/`ParseInt` block. |
+| Task 0 Step 4 | The `docs/PINS.md` heredoc contains a fenced block, which closed the outer triple-backtick fence early (the extracted script ended mid-heredoc). | Outer fence is now four backticks. |
+| Tasks 28, 29, 30 build steps | One `remote_build.sh plugin SkyrimPython.dll` call fetches only the loader; `deploy.sh` then refuses the stale core. | Both calls, as Tasks 25-27 do. |
+
+**Not verified (needs the game):** everything at runtime: that SKSE loads the loader and the loader's `LoadLibraryExW` of `python314.dll` then `SkyrimPythonCore.dll` resolves the core's import to the same module under Wine; `SKSE::Init` from two DLLs in one process; `PyImport_AppendInittab` with pybind11 3's `PyInit__skyrim`; CPython initialisation under GE-Proton; the bridge's sockets under Wine; every Papyrus call path (S2-S7 results).

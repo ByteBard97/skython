@@ -239,7 +239,7 @@ and delete the two `(void)cancelled; (void)progress;` lines in `Run`. Note: the 
 
 Loading a save is manual (press Continue); every wait is bounded. The cap test needs the low-cap ini, so the run is in two parts.
 ```bash
-tools/remote_build.sh plugin SkyrimPython.dll
+tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
 tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package
 tools/launch_game.sh
 source tools/env.sh

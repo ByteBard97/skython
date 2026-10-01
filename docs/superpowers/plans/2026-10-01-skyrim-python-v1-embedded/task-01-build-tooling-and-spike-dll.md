@@ -434,7 +434,11 @@ int ParseInt(const std::string& s, int fallback)
         return fallback;
     }
 }
+}
 
+// Handle has a namespace block of its own: Tasks 3-9 add their code as new `namespace spike { ... }` blocks
+// directly above this one, after Log and ParseInt, which they use.
+namespace spike {
 std::string Handle(const std::string& line)
 {
     if (line.rfind("echo ", 0) == 0) return line.substr(5);
