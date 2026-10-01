@@ -40,6 +40,7 @@
 - Never delete files with `rm`; use `gio trash` only after the owner approves an itemised list (global rule). Applies to the Windows box too (no `Remove-Item`).
 - The Windows build box's default SSH shell is Windows PowerShell 5.1 (not cmd.exe); every remote command is PowerShell syntax, every ssh/scp call has a timeout and `BatchMode`, every wait loop is bounded and prints the log tail on timeout.
 - The RTX 5080 is reserved for TTS: no step may use or reconfigure the GPU.
+- The game runs on the Windows box (Task 1b): no step launches the game on the Linux desktop, uses xdotool, or starts Linux Steam, unless the owner says the Linux machine is free. On the box, our files go only under `Data\SKSE\Plugins` (DLLs, `SkyrimPython\`), the one file `Data\Scripts\SkyrimPython.pex`, and `C:\dev\skyrim-python-box`; never modify ChronicleDev's existing files, tasks or saves.
 
 ## Review Focus
 
@@ -118,7 +119,7 @@ skyrim-python/
 ```
 
 Fixed paths:
-- Windows box: `geoff@192.168.0.211`, checkout root `C:\dev\skyrim-python`, vcpkg `C:\vcpkg`, VS2022 Build Tools.
+- Windows box: `geoff@192.168.0.211`, checkout root `C:\dev\skyrim-python`, vcpkg `C:\vcpkg`, VS2022 Build Tools. Game on the box: `C:\ChronicleDev\Stock Game` (1.6.1170.0, SKSE 2.2.6), logs `C:\Users\geoff\Documents\My Games\Skyrim Special Edition\SKSE`, harness folder `C:\dev\skyrim-python-box`, launched by our scheduled task `SkyrimPythonGame` (Task 1b).
 - Game: `~/Games/SimpleSkyrim/Stock Game`; plugin files under `Data/SKSE/Plugins/`. Proton prefix `~/.local/share/Steam/steamapps/compatdata/4190904831`.
 - Deployed layout (Task 26's `tools/deploy.sh`): `Data/SKSE/Plugins/SkyrimPython.dll` (loader), `Data/SKSE/Plugins/SkyrimPython.ini`, `Data/SKSE/Plugins/SkyrimPython/SkyrimPythonCore.dll`, `.../SkyrimPython/python/` (embeddable zip), `.../SkyrimPython/site-packages/`, `.../SkyrimPython/lib/skyrim/`, `.../SkyrimPython/scripts/`. SKSE loads only DLLs directly in `Plugins/`, so nothing in the `SkyrimPython/` subfolder is loaded by SKSE.
 - Logs (inside the prefix, `.../pfx/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition/SKSE/`): C++ `SkyrimPython.log`; Python `SkyrimPython/python.log`; bridge session file `SkyrimPython/session.json`.
@@ -224,7 +225,9 @@ Fixed paths:
 
 **Task size.** Task files aim at 600 lines or fewer, so a worker reads this index plus one small file. A task that would be longer is split by topic (as 22 and 23 are).
 
-**Suggested order.** 0 → 1 → 2 → 3 (S8) → 4 → 5 → 6 → 7 → 8 → 9 → 10, with 11-17 in parallel; then 18 → 19 → 20 → 21 → 22 → 23 → 24; then 25 → 26 → 27 (first real Papyrus call from Linux through the bridge) → 28 → 29 → 30 → 31 → 32.
+**Where the game runs (owner ruling 2026-10-01).** The owner's Linux desktop is not used to run the game: launching it there took keyboard and mouse focus from the owner. Tasks 3-10 run the game on the Windows box through Task 1b's harness (`tools/box/*`; its "Substitutions for Tasks 3-10" table maps every local step to its box equivalent). Results recorded on the box are Windows-native; S8 run A under Proton already passed (2026-10-01). S6 under Proton and the final verification under Proton wait until the owner says the Linux machine is free. Known open issue: the game hung on `qqq` exit on the box once (ended with CIM `Terminate`); judge Task 3's clean-exit criterion on the box only after a baseline exit without our DLL.
+
+**Suggested order.** 0 → 1 → 1b → 2 → 3 (S8) → 4 → 5 → 6 → 7 → 8 → 9 → 10, with 11-17 in parallel; then 18 → 19 → 20 → 21 → 22 → 23 → 24; then 25 → 26 → 27 (first real Papyrus call from Linux through the bridge) → 28 → 29 → 30 → 31 → 32.
 
 ### Part A: M0 spikes
 
@@ -232,6 +235,7 @@ Fixed paths:
 |---|---|---|---|
 | 0 | [Repository bootstrap, vendored headers, pinned CPython](task-00-repository-bootstrap.md) | Linux | - |
 | 1 | [Build tooling and a spike DLL that loads](task-01-build-tooling-and-spike-dll.md) | Windows box + game | 0 |
+| 1b | [Game harness on the Windows box](task-01b-box-game-harness.md) | Windows box + game | 1 |
 | 2 | [Spike S1: Linux reaches a socket inside Proton (spike harness)](task-02-spike-s1-harness-socket.md) | Windows box + game | 1 |
 | 3 | [Spike S8: two-DLL load and CPython embedded in the game; Python socket from Linux](task-03-spike-s8-embedded-cpython.md) | Windows box + game | 2 |
 | 4 | [Spike S2: VM callback thread, nested dispatch, argument ownership](task-04-spike-s2-vm-callback-thread.md) | Windows box + game | 3 |
