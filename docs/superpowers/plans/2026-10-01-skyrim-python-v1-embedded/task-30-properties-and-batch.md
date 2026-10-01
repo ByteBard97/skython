@@ -1,6 +1,6 @@
 # Task 30: Properties and batch
 
-Adapted from: branch `plan-out-of-process`, task 18 (`task-18-properties-batch-and-the-in-flight-caps.md`). The property and batch code in `Ops.cpp` is unchanged apart from comments (it compiled on the build box). What moved: the per-connection in-flight cap is now the dev bridge's (Task 23, Python) and the global cap is the Dispatcher's (Task 18), so the cap test here exercises the bridge's cap through a low-cap ini; the batch timeout's partial results are reported by the Dispatcher from the `Progress` callback this task feeds.
+Adapted from: branch `plan-out-of-process`, task 18 (`task-18-properties-batch-and-the-in-flight-caps.md`). The batch code in `Ops.cpp` is the branch's apart from comments and a `catch (...)`; the property code now uses the engine's `GetPropertyValue`/`SetPropertyValue` and refuses full properties (plan review F). What moved: the per-connection in-flight cap is now the dev bridge's (Task 23, Python) and the global cap is the Dispatcher's (Task 18), so the cap test here exercises the bridge's cap through a low-cap ini; the batch timeout's partial results are reported by the Dispatcher from the `Progress` callback this task feeds.
 
 > Part of the [skyrim-python v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), sections 4.3, 4.5 rule 8, 4.9. Steps use checkbox (`- [ ]`) syntax.
 
@@ -8,9 +8,9 @@ Adapted from: branch `plan-out-of-process`, task 18 (`task-18-properties-batch-a
 >
 > **Runs on:** the Windows build box plus the game; live tests run on Linux through the dev bridge.
 >
-> **STOP and ask the owner (do not improvise) if:** a live test crashes the game; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s; the log shows a runtime other than AE 1.6.1170; `Object::GetProperty` does not exist and no equivalent is found.
+> **STOP and ask the owner (do not improvise) if:** a live test crashes the game; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s; the log shows a runtime other than AE 1.6.1170; `get_property` on the auto property S7c enumerated is refused `unsupported` (the engine then sets `getFunction` on auto properties too, and the full-property check below is wrong: record it and STOP).
 >
-> **Verify:** `RE::BSScript::Object::GetProperty(const BSFixedString&)` returns `Variable*`, null when absent (verified at the pin). Fallback if S7 shows it does not see the property: `VirtualMachine::GetPropertyValue` / `SetPropertyValue` take the `BSTSmartPointer<Object>&` itself, a `const char*` name and a `Variable&`.
+> **Verify:** `IVirtualMachine::GetPropertyValue` / `SetPropertyValue(BSTSmartPointer<Object>&, const char*, Variable&) -> bool` (the smart pointer by non-const reference, a C string name; verified at the pin, `API-VERIFICATION.md`); `PropertyTypeInfo::{type, getFunction, setFunction}`. `Object::GetProperty` is **not** used: at the pin it indexes `variables[]` with the declaring class's own index and ignores the parent classes' variables, while `Object::GetVariable` adds them, so one of the two is wrong for a property declared on a script that extends another script with variables.
 
 **Files:**
 - Modify: `plugin/src/Ops.cpp`
@@ -19,11 +19,12 @@ Adapted from: branch `plan-out-of-process`, task 18 (`task-18-properties-batch-a
 
 **Interfaces:**
 - Consumes: Tasks 27-29 (`ops::Run` with its `Cancelled` and `Progress` parameters, `pv::ResolveTarget`, `pv::ToVariable`, `pv::FromVariable`, `sig::FindProperty`), core Task 16 (`PropertyArgs`, `parse_property_args`, `BatchArgs`, `BatchStep`, `parse_batch_args`, `to_string(ErrorCode)`), Task 18 (the Dispatcher reads the latest `Progress` payload `{"completed": n, "results": [...]}` into a batch's `timeout` detail), Task 23 (the bridge answers `busy` beyond `max_inflight_per_connection`), Task 26 (`livetest/support.py`: `raw_connect`, `encode`, `read_frame`, `send_request`).
-- Produces: `papyrus.get_property`, `papyrus.set_property`, `papyrus.batch` served by `ops::Run`. Batch semantics (spec 4.3): steps run in order, one `AddTask` per step, not a transaction; the batch-level `timeout_ms` covers all steps (per-step `timeout_ms` is ignored); the response is `{"results": [...]}` with one entry per step run (`{"ok": true, "result": ...}` or `{"ok": false, "error": {code, message, detail}}`), shorter than the step list if `stop_on_error` stopped it; a timed-out, cancelled or load-interrupted batch runs no further steps (`cancelled()` is checked before each step). A batch that times out reports how far it got (`detail.completed`, `detail.results`). `papyrus.batch` and `game.state` are not allowed as steps (`bad_request`, nothing runs).
+- Produces: `papyrus.get_property`, `papyrus.set_property` (auto properties only; a full property is `unsupported`), `papyrus.batch` served by `ops::Run`. Batch semantics (spec 4.3): steps run in order, one `AddTask` per step, not a transaction; the batch-level `timeout_ms` covers all steps (per-step `timeout_ms` is ignored; `Batch.run` without a timeout sends the sum of the step timeouts, 5 s for a step without one, capped at `MAX_TIMEOUT_MS`: Task 21); the response is `{"results": [...]}` with one entry per step run (`{"ok": true, "result": ...}` or `{"ok": false, "error": {code, message, detail}}`), shorter than the step list if `stop_on_error` stopped it; a timed-out, cancelled or load-interrupted batch runs no further steps (`cancelled()` is checked before each step). A batch that times out reports how far it got (`detail.completed`, `detail.results`). `papyrus.batch` and `game.state` are not allowed as steps (`bad_request`, nothing runs; core's `parse_batch_args` refuses any op the generated table does not mark batchable while the request is parsed, so the plugin never sees such a batch).
 
 Known costs and limits (Task 32 puts them in the README):
 - **Each batch step costs 2-3 frames** (one `AddTask` for the step, the VM, and for an object result one more task to convert it), so a batch runs at roughly 15-30 steps per second at 30-60 fps. Batches give ordering, not speed; Task 31 records the real figure.
-- **Property access is not synchronised with Papyrus.** `get_property`/`set_property` read and write the script's stored value directly on the main thread while Papyrus threads may run the same script; a concurrent write of a String or object property can be observed half-done. `OnPropertyChanged` does **not** fire, and a full property's getter and setter code is not run. For anything that must be atomic or must notify, call a pre-authored Papyrus setter with `call_method` (spec 4.9).
+- **Property ops serve auto properties only.** A full property (one with Papyrus get/set code) is refused `unsupported`; call a Papyrus function for it. Reads and writes go through the engine's `GetPropertyValue`/`SetPropertyValue` on the main thread and are **not synchronised with Papyrus threads** that may run the same script; `OnPropertyChanged` does **not** fire. For anything that must be atomic or must notify, call a pre-authored Papyrus setter with `call_method` (spec 4.9).
+- **A batch without a timeout** gets the sum of its steps' timeouts (5 s per step), capped at `MAX_TIMEOUT_MS`; give `run(timeout=...)` for a tighter bound.
 
 - [ ] **Step 1: Write the live tests**
 
@@ -45,13 +46,16 @@ If Task 25's `SkyrimPython.dev.ini` sets other keys (a fixed token, for example)
 
 `livetest/test_m1_batch_props.py`:
 ```python
+import os
+
 import pytest
 
 from skyrim import errors
-from skyrim.values import Form
+from skyrim.values import Alias, Form
 from support import raw_connect, read_frame, send_request
 
 PLAYER = Form(form_id=0x14)
+KINDS = {"Int": int, "Float": float, "Bool": bool, "String": str, "Form": Form, "Alias": Alias, "Array": list}
 WAIT_1S = {"script": "Utility", "function": "Wait", "args": [1.0]}
 RANDOM = {"script": "Utility", "function": "RandomInt", "args": [1, 6]}
 
@@ -90,7 +94,18 @@ def test_batch_of_100_steps(game):
     assert len(results) == 100 and all(1 <= r <= 6 for r in results)
 
 
+def test_batch_without_timeout_gets_time_for_every_step(game):
+    # No timeout given: Batch.run sends 5 s per step (capped), not one 5 s default for the whole batch. At 2-3 frames
+    # per step, 150 steps need well over 5 s.
+    b = game.batch()
+    for _ in range(150):
+        b.call("Utility", "RandomInt", 1, 6)
+    results = b.run()
+    assert len(results) == 150 and all(1 <= r <= 6 for r in results)
+
+
 def test_nested_batch_and_state_steps_are_rejected(session):
+    # Core answers this while parsing the request (parse_batch_args); the plugin never sees such a batch.
     s = raw_connect(session)
     s.settimeout(30)
     for i, bad_op in enumerate(("papyrus.batch", "game.state"), start=1):
@@ -122,6 +137,31 @@ def test_property_errors(game):
         game.get_property(PLAYER, "Actor", "NoSuchProperty")
 
 
+def _s7c_property():
+    """The quest and the auto property spike S7c enumerated (spikes/RESULTS.md, the S7c row)."""
+    try:
+        return (int(os.environ["SPY_S7C_QUEST"], 16), os.environ["SPY_S7C_SCRIPT"], os.environ["SPY_S7C_PROPERTY"],
+                os.environ["SPY_S7C_KIND"])
+    except KeyError as e:
+        pytest.skip(f"set SPY_S7C_QUEST, SPY_S7C_SCRIPT, SPY_S7C_PROPERTY and SPY_S7C_KIND from spikes/RESULTS.md "
+                    f"({e.args[0]} is missing)")
+
+
+def test_get_property_reads_an_auto_property(game):
+    """Read-only happy path; writes wait for M1.5's test ESP (no vanilla property is safe to write)."""
+    quest_id, script, prop, kind = _s7c_property()
+    quest = game.resolve(form_id=quest_id)
+    first = game.get_property(quest, script, prop)
+    unfilled = first is None and kind in ("Form", "Alias")  # an object property may hold None
+    assert unfilled or type(first) is KINDS[kind], (kind, first)
+    assert game.get_property(quest, script, prop) == first  # two reads agree (nothing writes it meanwhile)
+    # Only when the script declares a parameterless function that returns this property (vanilla auto properties
+    # rarely have one): the Papyrus side must see the same value.
+    getter = os.environ.get("SPY_S7C_GETTER")
+    if getter:
+        assert game.call_method(quest, script, getter) == first
+
+
 def test_per_connection_cap_returns_busy(session):
     """Needs plugin/config/variants/low-cap.ini (bridge cap 16). Counts the bridge's own busy replies."""
     s = raw_connect(session)
@@ -137,39 +177,44 @@ def test_per_connection_cap_returns_busy(session):
         pytest.skip("no busy reply: deploy plugin/config/variants/low-cap.ini for this test (the dev ini's cap is 256)")
     assert len(ok) + len(busy) == n and len(ok) <= 16
 ```
-v1 property ops target auto properties. Reads and writes on a real script property are tested in M1.5 against the test ESP's quest script (no vanilla script offers a property that is both always bound and safe to write); here only the error paths run live.
+v1 property ops serve auto properties. A read runs live here, on the auto property S7c enumerated (`SPY_S7C_KIND` is one of `Int`, `Float`, `Bool`, `String`, `Form`, `Alias`, `Array`, from the type S7c printed). Writes, and the refusal of a full property, are tested in M1.5 against the test ESP's quest script (no vanilla script offers a property that is both always bound and safe to write).
 
 - [ ] **Step 2: Implement properties and batch in `Ops.cpp`**
 
 Add inside the anonymous namespace of `plugin/src/Ops.cpp`, after `CallMethod` (and `Resolve`), plus `#include <memory>` at the top:
 ```cpp
-// v1 targets auto properties (a stored value). The stored Variable is read and written directly on the main
-// thread: Papyrus threads are not stopped, no lock is taken, OnPropertyChanged does not fire, and a full
-// property's getter/setter code does not run (see the limits above). M1.5's test ESP probes the full-property case.
-// Object::GetProperty(BSFixedString) returning Variable* is the route S7 (Task 9) enumerated (signature verified at the pin).
-// If it is absent, use VM()->GetPropertyValue(obj, name.c_str(), out) (verified signature: `bool GetPropertyValue(BSTSmartPointer<Object>&, const char*, Variable&)`; the smart pointer by non-const reference, a C string name).
-Variable* PropertySlot(const pv::Target& target, const PropertyArgs& p)
+// v1 serves auto properties only, through the engine's own GetPropertyValue/SetPropertyValue on the bound script
+// object: they find the property's storage the engine's way, including for a property declared on a parent script
+// (Object::GetProperty at the pin ignores the parents' variable offset). A full property (Papyrus get/set code) is
+// refused: its code would not run here. Nothing is synchronised with Papyrus threads, and OnPropertyChanged does not
+// fire (see the limits above).
+RE::BSScript::TypeInfo AutoPropertyType(const PropertyArgs& p)
 {
-    auto* slot = target.object->GetProperty(RE::BSFixedString(p.property));
-    if (!slot) throw ProtocolError(ErrorCode::vm_error, "the object " + target.desc + " has no readable slot for " + p.script + "." + p.property);
-    return slot;
+    const auto info = sig::FindProperty(p.script, p.property);  // clear not_found before touching the object
+    if (info.getFunction || info.setFunction)
+        throw ProtocolError(ErrorCode::unsupported, p.script + "." + p.property + " is a full property (it has Papyrus "
+            "get/set code); v1 reads and writes auto properties only: call a Papyrus function on the script instead");
+    return info.type;
 }
 
 json GetProperty(const PropertyArgs& p)
 {
-    sig::FindProperty(p.script, p.property);  // clear not_found before touching the object
-    const auto target = pv::ResolveTarget(p.object, p.script);
-    const Variable copy = *PropertySlot(target, p);  // copy first, convert the copy
-    return pv::FromVariable(copy);
+    AutoPropertyType(p);
+    auto target = pv::ResolveTarget(p.object, p.script);
+    Variable out;
+    if (!VM()->GetPropertyValue(target.object, p.property.c_str(), out))
+        throw ProtocolError(ErrorCode::vm_error, "the VM could not read " + p.script + "." + p.property + " on " + target.desc);
+    return pv::FromVariable(out);
 }
 
 void SetProperty(const PropertyArgs& p)
 {
-    const auto type = sig::FindProperty(p.script, p.property);
-    const auto target = pv::ResolveTarget(p.object, p.script);
+    const auto type = AutoPropertyType(p);
+    auto target = pv::ResolveTarget(p.object, p.script);
     Variable in;
     pv::ToVariable(*p.value, type, p.property + " (property of " + p.script + ")", in);
-    *PropertySlot(target, p) = in;
+    if (!VM()->SetPropertyValue(target.object, p.property.c_str(), in))
+        throw ProtocolError(ErrorCode::vm_error, "the VM could not write " + p.script + "." + p.property + " on " + target.desc);
 }
 
 struct BatchState
@@ -208,6 +253,9 @@ void BatchStep(const std::shared_ptr<BatchState>& st)
     } catch (const std::exception& e) {
         log::Error(std::string("ops: batch step threw: ") + e.what());
         st->done(OpResult::Err(ErrorCode::internal, "internal error in a batch step"));
+    } catch (...) {  // a main-thread task never lets an exception escape (Global Constraints)
+        log::Error("ops: batch step threw an unknown exception");
+        st->done(OpResult::Err(ErrorCode::internal, "internal error in a batch step"));
     }
 }
 ```
@@ -220,41 +268,41 @@ Then in `Run`, add before the `unsupported` fall-through:
         }
         if (op == "papyrus.batch") {
             auto st = std::make_shared<BatchState>();
-            st->args = parse_batch_args(args);
-            // Nested batches and game.state are not steps. Core's parse_batch_args (Task 16) already refuses any op not
-            // marked batchable in the generated op table; this check is the second line of defence and names the step.
-            for (std::size_t i = 0; i < st->args.calls.size(); ++i)
-                if (st->args.calls[i].op == "papyrus.batch" || st->args.calls[i].op == "game.state")
-                    return done(OpResult::Err(ErrorCode::bad_request,
-                        "step " + std::to_string(i) + ": " + st->args.calls[i].op + " cannot be used inside papyrus.batch"));
+            st->args = parse_batch_args(args);  // refuses non-batchable steps (nested batches, game.state): bad_request
             st->done = std::move(done);
             st->cancelled = std::move(cancelled);
             st->progress = std::move(progress);
             return BatchStep(st);
         }
 ```
-and delete the two `(void)cancelled; (void)progress;` lines in `Run`. Note: the `catch` in `Run` cannot fire after `done` was moved into the batch: `parse_batch_args` and the nested-op check are the only throwing code before the move, and `BatchStep` routes each step's errors through that step's own `Run` and its own try/catch.
+and delete the two `(void)cancelled; (void)progress;` lines in `Run`. Note: the `catch` in `Run` cannot fire after `done` was moved into the batch: `parse_batch_args` is the only throwing code before the move, and `BatchStep` routes each step's errors through that step's own `Run` and its own try/catch. (No plugin-side check for nested batches or `game.state` steps: core refuses them while parsing the request, Task 16, and `test_nested_batch_and_state_steps_are_rejected` pins that answer.)
 
 - [ ] **Step 3: Build, deploy, run**
 
-Loading a save is manual (press Continue); every wait is bounded. The cap test needs the low-cap ini, so the run is in two parts.
+Loading a save is manual; every wait is bounded and ignores logs from an earlier run (`SINCE=`). The cap test needs the low-cap ini, so the run is in two parts. The property happy path needs the quest S7c used, so load the named save S7 ran on (spikes/RESULTS.md) from the Load menu, not Continue.
 ```bash
 tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
 tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package
 tools/launch_game.sh
 source tools/env.sh
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "Main Menu" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
-# Manual: press Continue. Then:
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "interactive = true" 300
-uv run --project python pytest livetest/test_m1_batch_props.py livetest/test_m1_calls.py -q -rs
+export SINCE="$SKYRIM_PYTHON_STATE/launch.stamp"
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
+# Manual: Load the save S7 ran on. Then:
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: interactive = true" 300
+export SPY_S7C_QUEST=0x... SPY_S7C_SCRIPT=... SPY_S7C_PROPERTY=... SPY_S7C_KIND=...   # from the S7c row of spikes/RESULTS.md
+export SPY_S4_QUEST=0x... SPY_S4_ALIAS=... SPY_S4_REF=0x...                          # as in Task 29
+SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_batch_props.py livetest/test_m1_calls.py -q -rs
 # test_per_connection_cap_returns_busy reports a skip here. Quit the game, then:
 tools/deploy.sh out/SkyrimPython.dll plugin/config/variants/low-cap.ini
-tools/launch_game.sh   # Continue again, then wait for "interactive = true" as above
-uv run --project python pytest livetest/test_m1_batch_props.py -q -k per_connection_cap
+tools/launch_game.sh   # Continue, then wait as above (SINCE is still exported, and the stamp is new)
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: interactive = true" 600
+SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_batch_props.py -q -rs -k per_connection_cap
+unset SINCE
 # Put the dev ini back afterwards:
 tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
 ```
-Expected: the first run passes except the one skip (`test_per_connection_cap_returns_busy`); the second run passes it (at most 16 ok, the rest busy). A skip is not a pass for the cap: run the second part before committing. The 100-step batch takes about 3-7 s.
+Expected: the first run passes except the one skip (`test_per_connection_cap_returns_busy`); the second run passes it (at most 16 ok, the rest busy). A skip is not a pass: run the second part before committing, and a skip of `test_get_property_reads_an_auto_property` (missing `SPY_S7C_*`) or of the alias tests means they did not run. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. The 100-step batch takes about 3-7 s, the 150-step one with no timeout about 5-10 s. If `test_get_property_reads_an_auto_property` gets `Unsupported` ("is a full property"), STOP (see the STOP list).
 
 - [ ] **Step 4: Commit**
 

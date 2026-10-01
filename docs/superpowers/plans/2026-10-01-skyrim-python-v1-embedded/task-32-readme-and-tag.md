@@ -8,7 +8,7 @@ Adapted from: branch `plan-out-of-process`, task 20 (`task-20-readme-and-milesto
 >
 > **Runs on:** Linux (the repository). Step 2 needs the game running with a save loaded, so it is a hand-off to the owner.
 >
-> **STOP and ask the owner (do not improvise) if:** the full run in Step 2 fails anywhere; the alias tests were skipped because the `SPY_S4_*` values are missing (a skip is not a pass); a spike row is missing from `spikes/RESULTS.md`.
+> **STOP and ask the owner (do not improvise) if:** the full run in Step 2 fails anywhere; the alias or property tests were skipped because the `SPY_S4_*` or `SPY_S7C_*` values are missing (a skip is not a pass); a live test was skipped for lack of `SKYRIM_LIVE=1`; a spike row is missing from `spikes/RESULTS.md`.
 
 **Files:**
 - Modify: `README.md`
@@ -79,8 +79,11 @@ The bridge listens on `127.0.0.1` only, checks a token on every connection, and 
 - Papyrus runtime errors are invisible: a script error inside the function you called gives you `None` or a `Timeout`, never a `VmError` (that means only that the VM refused to dispatch). Have the function return a value you can check.
 - A paused game (inventory, journal, console open) does not run Papyrus: calls wait and may time out. Use `require_unpaused=True` or a generous timeout.
 - `game.batch()` keeps the order of its calls but is neither a transaction nor fast: each step costs 2-3 frames (roughly 15-30 steps per second). For changes that must land together, call one Papyrus function on your own script.
-- Property writes bypass Papyrus: `OnPropertyChanged` does not fire and a full property's setter does not run. Call a Papyrus function for those.
-- Arrays of objects can be returned but not sent; Papyrus arrays hold at most 128 elements.
+- Property access serves auto properties only: a full property (one with Papyrus get/set code) is refused as `Unsupported`. Reads and writes are not synchronised with Papyrus threads running the same script, and `OnPropertyChanged` does not fire. Call a Papyrus function for anything that must be atomic or must notify.
+- Member functions are looked up in a script's empty state only; a function that exists only inside a named state is `UnknownFunction`.
+- `game.batch().run()` without a timeout gives the batch 5 s per step in total (capped at one hour); pass `timeout=` for a tighter bound.
+- Arrays of objects can be returned but not sent. An array argument holds at most 128 elements (`TypeMismatch`); results are passed through whatever their length.
+- Alias references work as call targets and results; alias *arguments* have no live test until M1.5 (no vanilla function takes one).
 - Latent calls in flight when the player saves may be dropped by the VM (surfaces as `Timeout`).
 - A crash in native code inside the process (the plugin, or a compiled extension in a wheel) takes the game down; pure-Python exceptions do not.
 - Script reload (`skyrim._host.reload(name)`) is best effort: state held in C extensions or in threads a script did not stop in `teardown()` survives it.
@@ -89,8 +92,8 @@ The bridge listens on `127.0.0.1` only, checks a token on every connection, and 
 ## Build and test
 - Core and `_skyrim` (Linux): `cmake -S core -B core/build && cmake --build core/build -j && ctest --test-dir core/build`; the `_skyrim` module and its tests per `pyglue/` (Task 19); the package: `cd python && uv run pytest`.
 - CPython runtime and headers: `tools/fetch_python.sh` (checks SHA-256s against `docs/PINS.md`).
-- Plugin (Windows box over ssh): `tools/remote_build.sh plugin SkyrimPython.dll`; deploy with `tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package`; launch with `tools/launch_game.sh`.
-- Live tests (game running, save loaded): `source tools/env.sh && uv run --project python pytest livetest -q`.
+- Plugin (Windows box over ssh), two calls because the script fetches one DLL per call: `tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll`; deploy with `tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --python --package --scripts livetest/scripts` (`--python` and `--scripts` only when the runtime or the scripts changed); launch with `tools/launch_game.sh`.
+- Live tests (game running, save loaded): `source tools/env.sh && SKYRIM_LIVE=1 uv run --project python pytest livetest -q -rs`. Without `SKYRIM_LIVE=1` every live test is skipped.
 - Protocol: `protocol/PROTOCOL.md`, fixtures in `protocol/v1/fixtures/`. Design: `docs/specs/2026-09-30-skyrim-python-design.md`. Spike results: `spikes/RESULTS.md`.
 
 ## Licence
@@ -110,9 +113,11 @@ Expected: `README filled in`.
 ctest --test-dir core/build --output-on-failure
 (cd python && uv run pytest -q)
 source tools/env.sh && export SPY_S4_QUEST=0x... SPY_S4_ALIAS=... SPY_S4_REF=0x...   # from spikes/RESULTS.md
-uv run --project python pytest livetest -q --deselect livetest/test_m1_mainmenu.py -rs
+export SPY_S7C_QUEST=0x... SPY_S7C_SCRIPT=... SPY_S7C_PROPERTY=... SPY_S7C_KIND=...   # from spikes/RESULTS.md (Task 30)
+SKYRIM_LIVE=1 uv run --project python pytest livetest -q -rs --deselect livetest/test_m1_mainmenu.py --deselect livetest/test_m1_throughput.py
+git status --short    # clean: nothing in the run rewrote a tracked file
 ```
-Also run the `_skyrim` Linux suite the way Task 19 set it up. Expected: all pass. The skip report (`-rs`) lists only tests that need another setup: the startup-variant tests (Task 26), the low-cap test (run in Task 30 with its own ini) and the two `SPY_MANUAL` tests (run in Task 31). The main-menu tests ran in Tasks 27-29 before a save was loaded. Any skip about missing `SPY_S4_*` values means the alias tests did not run: set them and rerun.
+(`test_m1_throughput.py` is deselected: Task 31 recorded the baseline that Step 1 copied into the README, and running it again would rewrite `livetest/results/throughput.json` with numbers that disagree with the README. The save loaded must be the one S7 ran on, for the property and alias tests.) Also run the `_skyrim` Linux suite the way Task 19 set it up. Expected: all pass. The skip report (`-rs`) lists only tests that need another setup: the startup-variant tests (Task 26), the low-cap test (run in Task 30 with its own ini) and the two `SPY_MANUAL` tests (run in Task 31). The main-menu tests ran in Tasks 27-29 before a save was loaded. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. Any skip about missing `SPY_S4_*` or `SPY_S7C_*` values means the alias or property tests did not run: set them and rerun.
 
 - [ ] **Step 3: Commit and tag (local only; never push)**
 

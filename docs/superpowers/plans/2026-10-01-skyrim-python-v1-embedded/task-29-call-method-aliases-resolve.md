@@ -4,11 +4,11 @@ Adapted from: branch `plan-out-of-process`, task 17c (`task-17c-call-method-alia
 
 > Part of the [skyrim-python v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), sections 4.3-4.4. Steps use checkbox (`- [ ]`) syntax.
 
-> **Gate:** start only after Task 28 is done, **spike S7 has passed** (Task 9) and **spike S4 has passed** (Task 6), per `spikes/RESULTS.md`. **If S4 is FAIL, STOP and ask the owner**: aliases then depend on a pre-authored Papyrus helper from the M1.5 test ESP, which invalidates the alias code below; the non-alias half (`call_method` on forms, `form.resolve`) can still go ahead if the owner says so.
+> **Gate:** start only after Task 28 is done, **spike S7 has passed** (Task 9) and **spike S4 has passed** (Task 6), per `spikes/RESULTS.md`. S7's PASS must include the S7c row with **`bound_by_class_name=true` and `dispatch_ok=true`**: a quest's own attached script (a non-native class, spec 4.3) was found by `FindBoundObject(handle, "<AttachedScript>")` and one of its member functions dispatched. `ResolveTarget` below relies on exactly that for every call on a mod's own script (skyrim-dm's `SetupContract` path). **If S4 is FAIL, STOP and ask the owner**: aliases then depend on a pre-authored Papyrus helper from the M1.5 test ESP, which invalidates the alias code below; the non-alias half (`call_method` on forms, `form.resolve`) can still go ahead if the owner says so.
 >
 > **Runs on:** the Windows build box plus the game; live tests run on Linux through the dev bridge.
 >
-> **STOP and ask the owner (do not improvise) if:** S4 or S7 is missing or FAIL; the cold-form route S7 recorded (`FindBoundObject` or `PackHandle`) differs from the code below by more than a rename; a live test crashes the game; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s.
+> **STOP and ask the owner (do not improvise) if:** S4 or S7 is missing or FAIL; S7c's record lacks `bound_by_class_name=true` or `dispatch_ok=true` (or either is `false`); the cold-form route S7 recorded (`FindBoundObject` or `PackHandle`) differs from the code below by more than a rename; a live test crashes the game; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s.
 >
 > **Verify (prefer what S4 and S7 recorded; `API-VERIFICATION.md` checked these at the pin):** `skyrim_cast<RE::BGSRefAlias*>` / `<RE::BGSLocAlias*>` on a non-const `BGSBaseAlias*`; `RE::BGSRefAlias::VMTYPEID` (140), `RE::BGSLocAlias::VMTYPEID` (141); `TESQuest::aliases`, `TESQuest::aliasAccessLock` with `BSReadLockGuard`; `BGSBaseAlias::aliasID`, `owningQuest`; `IObjectHandlePolicy::GetObjectForHandle`, `HandleIsType`, `EmptyHandle`; `DispatchMethodCall(BSTSmartPointer<Object>&, BSFixedString, IFunctionArguments*, BSTSmartPointer<IStackCallbackFunctor>&)`; `TESForm::LookupByEditorID` (returns nullptr when the editor-id map is empty). `BGSBaseAlias::GetVMTypeID()` exists at the pin but the `skyrim_cast` + `VMTYPEID` route is the one S4 proved; keep it.
 
@@ -19,7 +19,7 @@ Adapted from: branch `plan-out-of-process`, task 17c (`task-17c-call-method-alia
 
 **Interfaces:**
 - Consumes: Tasks 27-28 (`pv::ResolveForm`, `BindObject`, `FindBound`, `Describe`, `sig::FindFunction`, `sig::BindArgs`, `sig::IsA`, `Callback`, `DynArgs`, `PausedNow`, `PausedError`), spikes S4 (Task 6) and S7 (Task 9), core Task 14 (`AliasRef`, `alias_ref_to_json`, `form_ref_from_json`, `form_ref_to_json`) and Task 16 (`parse_call_args`).
-- Produces: `pv::ResolveAlias`, `pv::DescribeAlias`, `pv::ResolveTarget`; `ops::Run` serves `form.resolve` and `papyrus.call_method`; alias references work as call targets, arguments and results.
+- Produces: `pv::ResolveAlias`, `pv::DescribeAlias`, `pv::ResolveTarget`; `ops::Run` serves `form.resolve` and `papyrus.call_method`; alias references work as call targets, arguments and results; the live proof that a form argument reaches the game as that form (`test_form_argument_arrives`).
 
 Rules this task implements:
 - **Look up the function before resolving the object.** `CallMethod` calls `sig::FindFunction(script, function, member=true)` first, then `ResolveTarget`. A global such as `Utility.RandomInt` called on the player is then `bad_request` ("is a global function"), where resolving first would have produced `type_mismatch`. `test_method_on_wrong_kind_of_form` still gets `type_mismatch`, because the function exists on `Actor` but the target is a Weapon.
@@ -81,11 +81,6 @@ def test_resolve_missing_form_is_not_found(game):
         game.form("NotAPlugin.esp|0x000800")
 
 
-def test_missing_runtime_id_is_not_found_not_stale(game):
-    with pytest.raises(errors.NotFound):
-        game.call_method(Form(form_id=0xFF123456), "ObjectReference", "GetBaseObject")
-
-
 def test_editor_id_unavailable_is_a_clear_not_found(game):
     with pytest.raises(errors.NotFound, match="editor id"):
         game.resolve(editor_id="NoSuchEditorIdAnywhere")
@@ -96,7 +91,24 @@ def test_object_array_result(game):
         forms = game.call_method(Form(form_id=PLAYER_ID), "ObjectReference", "GetContainerForms")  # SKSE
     except errors.UnknownFunction:
         pytest.skip("SKSE's ObjectReference.GetContainerForms is not available")
-    assert isinstance(forms, list) and all(isinstance(f, Form) for f in forms)
+    assert isinstance(forms, list) and forms, "the player's inventory should not be empty"
+    assert all(isinstance(f, Form) for f in forms) and any(f.form_key for f in forms)
+
+
+def test_form_argument_arrives(game):
+    # The proof Task 28 could not give: these counts only change if the Form argument reaches the game as that form
+    # (a None or empty Variable would leave GetItemCount at 0 and AddItem without effect).
+    player = Form(form_id=PLAYER_ID)
+    sword = game.form(IRON_SWORD)
+    n = game.call_method(player, "ObjectReference", "GetItemCount", sword)
+    game.call_method(player, "ObjectReference", "AddItem", sword, 1, True)
+    try:
+        assert game.call_method(player, "ObjectReference", "GetItemCount", sword) == n + 1
+    finally:
+        # RemoveItem(akItemToRemove, aiCount, abSilent, akOtherContainer): every argument is passed (no defaults), so
+        # akOtherContainer is None, a typed None ObjectReference (Task 28).
+        game.call_method(player, "ObjectReference", "RemoveItem", sword, 1, True, None)
+    assert game.call_method(player, "ObjectReference", "GetItemCount", sword) == n
 
 
 def test_alias_method_calls(game):
@@ -289,14 +301,18 @@ tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin Sk
 tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package
 tools/launch_game.sh
 source tools/env.sh
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "Main Menu" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
-uv run --project python pytest livetest/test_m1_mainmenu.py -q
-# Manual: press Continue (the save S4 recorded its values from, for the alias tests). Then:
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "interactive = true" 300
+export SINCE="$SKYRIM_PYTHON_STATE/launch.stamp"   # every wait ignores logs from an earlier run
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
+SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_mainmenu.py -q -rs
+# Manual: in the game, Load (not Continue) the named save S4 recorded its values from (spikes/RESULTS.md). Continue
+# loads the most recent save, which after Tasks 27-28 may be another one, and the alias tests would then fail. Then:
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: interactive = true" 300
 export SPY_S4_QUEST=0x... SPY_S4_ALIAS=... SPY_S4_REF=0x...   # from spikes/RESULTS.md; the alias tests skip when unset
-uv run --project python pytest livetest/test_m1_calls.py -q -rs
+SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_calls.py -q -rs
+unset SINCE
 ```
-Expected: `test_m1_mainmenu.py` passes; everything in `test_m1_calls.py` passes. The two alias tests are skipped with a message when the `SPY_S4_*` variables are unset; a skip is not a pass, so run them once with the variables set before committing. If S4 failed, STOP (see the gate) rather than marking them `xfail`. If `test_alias_result_is_an_alias_not_its_quest` gets a Quest back, `AliasObjectToJson` is not reached: re-check the order in `ObjectToJson` (Task 28). If `test_method_call_on_cold_base_form` crashes or fails with `vm_error`, the `PackHandle` route differs from S7's record: STOP.
+Expected: `test_m1_mainmenu.py` passes; everything in `test_m1_calls.py` passes. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. The two alias tests are skipped with a message when the `SPY_S4_*` variables are unset; a skip is not a pass, so run them once with the variables set before committing. If S4 failed, STOP (see the gate) rather than marking them `xfail`. **If `test_form_argument_arrives` fails (the count does not change) or crashes the game, STOP**: form arguments do not reach the game as the form (the `PackHandle`/`BindObject` route S7 recorded differs from Task 28's code); do not go on to Task 30. If `test_alias_result_is_an_alias_not_its_quest` gets a Quest back, `AliasObjectToJson` is not reached: re-check the order in `ObjectToJson` (Task 28). If `test_method_call_on_cold_base_form` crashes or fails with `vm_error`, the `PackHandle` route differs from S7's record: STOP.
 
 - [ ] **Step 5: Commit**
 

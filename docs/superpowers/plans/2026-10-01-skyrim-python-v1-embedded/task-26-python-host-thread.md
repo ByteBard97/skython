@@ -13,7 +13,7 @@ New in the embedded design (it replaces the C++ loopback server of branch `plan-
 - Create: `plugin/src/PyModule.cpp` (`PYBIND11_MODULE(_skyrim, m)` for the game build)
 - Create: `plugin/src/GameBackend.h`, `plugin/src/GameBackend.cpp` (**interim**: `game.state` only; Task 27 overwrites both files with the real backend)
 - Modify: `plugin/src/main.cpp` (start the host thread at `kDataLoaded`), `plugin/CMakeLists.txt` (two sources)
-- Modify: `tools/deploy.sh` (full replacement: adds `--package` and `--scripts DIR`)
+- Modify: `tools/deploy.sh` (full replacement: adds `--package` and `--scripts DIR`; Task 10's `--site-packages DIR` block is kept unchanged)
 - Create: `livetest/support.py`, `livetest/conftest.py`, `livetest/test_m1_bridge.py`, `livetest/test_m1_startup_variants.py`
 - Create: `livetest/scripts/livetest_broken/__init__.py` (a player script whose `setup` raises; deployed with every `--scripts livetest/scripts` from here on, so every live run also proves a failing script is harmless)
 
@@ -21,16 +21,17 @@ New in the embedded design (it replaces the C++ loopback server of branch `plan-
 - Consumes: Task 25 (`spy::log::*`, `spy::settings::{Get, OwnDir, SessionFile, GetRuntime}`, `spy::life::{BaseState, NotReadyReason, LoadsStarted}`, `spy::host::LinkedPythonVersion`, loader log phrases); Task 19 (`spy::ModuleHost`, `spy::InstallModuleHost`, `spy::DefineModule` in `pyglue/include/spy/pymodule.h`); Task 18 (`spy::Backend`, `Dispatcher`, `DispatcherOptions`, `OpResult`); Task 16 (`config_to_json`, `dump_json`); Task 24 (`skyrim._host.main()`); Task 22 (`skyrim.connect` falling back to `connect_remote`).
 - Produces:
   - `spy::host::Start(const Config&)` (call once at `kDataLoaded`; returns at once; never throws) and `spy::host::State() -> std::string` (`"disabled: <why>"`, `"starting"`, `"running"`, `"failed: <why>"`).
-  - Core log phrases: `python host: disabled: python_enabled=false`, `python host: starting (CPython 3.14.8)`, `python host: initialised; sys.path = [...]`, `python host: running`, `python host: failed: <why>` (followed by the traceback when there is one).
+  - Core log phrases: `python host: disabled: python_enabled=false`, `python host: starting (CPython 3.14.8)`, `python host: initialised; sys.executable = <...\python\python.exe>; sys.path = [...]`, `python host: running`, `python host: failed: <why>` (followed by the traceback when there is one; a failed `Py_InitializeFromConfig` reads `python host: failed: Py_InitializeFromConfig: <CPython's message>`).
   - `spy::game::Backend()` and `spy::game::GetDispatcher()` with the interim behaviour (Task 27 replaces the implementation, same names). Interim log line: `game backend: interim dispatcher ready (game.state only)`.
-  - `tools/deploy.sh out/SkyrimPython.dll [ini] [--python] [--package] [--scripts DIR]`.
+  - `tools/deploy.sh out/SkyrimPython.dll [ini] [--python] [--package] [--scripts DIR]`; `tools/deploy.sh --site-packages DIR` (Task 10) unchanged.
   - `livetest/support.py` (stdlib only): `Session(port, token)`, `load_session()`, `encode`, `read_frame`, `hello(session, **override)`, `raw_connect`, `rpc(sock, op, args=None, req_id=1, timeout=30.0)`, `send_request(sock, op, args=None, req_id=1)`, `send_raw`, `closed_by_server`, `frame_header`, `read_frame_or_none`, `still_serving`, `log_text(name="SkyrimPython.log")`, `python_log_text()`, `fresh(path)`, `refused(port=45977)`. `livetest/conftest.py`: fixtures `session` and `game` (`skyrim.connect(...)` over the bridge); skips everything unless `SKYRIM_LIVE=1`.
 
 Rules (Global Constraints, spec 4.5):
 - `PyImport_AppendInittab("_skyrim", PyInit__skyrim)` and `InstallModuleHost` happen on the host thread **before** `Py_InitializeFromConfig`. Nothing Python-related runs at DLL load time.
-- `PyConfig`: `PyConfig_InitIsolatedConfig`, then `isolated = 1`, `use_environment = 0`, `install_signal_handlers = 0`, `site_import = 1`, `write_bytecode = 0` (no `__pycache__` written into the game's Data folder), `user_site_directory = 0`, `pathconfig_warnings = 0`, `home` = the python folder, `module_search_paths_set = 1` with exactly `python\python314.zip`, `python\`, `site-packages\`, `lib\`, `scripts\` (the zip's `python314._pth` is then ignored).
-- Before `skyrim._host` is imported, `sys.stdout`/`sys.stderr` are replaced by writers that forward whole lines to `_skyrim.log` (a GUI process has no console; without this, `print` and early tracebacks vanish).
-- After `main()` returns or fails, the host thread calls `PyEval_SaveThread()` and parks forever. It never ends while holding the GIL. **Never `Py_Finalize`.**
+- `PyConfig`: `PyConfig_InitIsolatedConfig`, then `isolated = 1`, `use_environment = 0`, `install_signal_handlers = 0`, `site_import = 1`, `write_bytecode = 0` (no `__pycache__` written into the game's Data folder), `user_site_directory = 0`, `pathconfig_warnings = 0`, `home` = the python folder, `executable` = `python\python.exe` (the embeddable zip ships it; otherwise `sys.executable` is `SkyrimSE.exe`, and `multiprocessing`'s spawn or `subprocess.run([sys.executable, ...])` would start a second copy of the game), `module_search_paths_set = 1` with exactly `python\python314.zip`, `python\`, `site-packages\`, `lib\`, `scripts\` (the zip's `python314._pth` is then ignored).
+- Before `skyrim._host` is imported, `sys.stdout`/`sys.stderr` are replaced by `io.TextIOBase` writers (`encoding = "utf-8"`, a lock around the line buffer) that forward whole lines to `_skyrim.log` (a GUI process has no console; without this, `print` and early tracebacks vanish).
+- After `main()` returns or fails, the host thread releases the GIL with `PyEval_SaveThread()` and parks forever. The release is a `noexcept` scope guard built right after `Py_InitializeFromConfig` succeeds, so even an exception thrown inside one of `Run`'s catch handlers (for example `std::bad_alloc` while formatting a traceback) cannot leave the thread holding the GIL. **Never `Py_Finalize`.**
+- The host thread's state (`State()`'s mutex and text) and `ParkForever`'s mutex and condition variable are immortal (`new`, never static objects), per the Global Constraint: a static one is destroyed at exit while the host thread still waits on it.
 - Collision variant: staged with a test-only loader build (`SPY_TEST_HOOKS=ON`, Task 25) that preloads a second copy of `python314.dll` from another folder, named by the environment variable `SKYRIM_PYTHON_TEST_PRELOAD`. Normal builds do not contain the hook (`build.ps1` always passes `-DSPY_TEST_HOOKS=OFF` unless `plugin/build-options.local` says `ON`).
 
 - [ ] **Step 1: The host thread**
@@ -71,11 +72,12 @@ namespace {
 namespace fs = std::filesystem;
 namespace py = pybind11;
 
-std::mutex g_mx;
-std::string g_state = "disabled: not started";
+// Immortal (Global Constraints): never static objects, so process exit cannot destroy them under a waiting thread.
+std::mutex& Mx() { static std::mutex& m = *new std::mutex(); return m; }
+std::string& StateText() { static std::string& s = *new std::string("disabled: not started"); return s; }
 std::atomic_bool g_started{ false };
 
-void SetState(std::string s) { std::lock_guard l(g_mx); g_state = std::move(s); }
+void SetState(std::string s) { std::lock_guard l(Mx()); StateText() = std::move(s); }
 void Fail(const std::string& why) { SetState("failed: " + why); log::Error("python host: failed: " + why); }
 
 std::string U8(const fs::path& p) { const auto s = p.u8string(); return std::string(s.begin(), s.end()); }
@@ -114,16 +116,24 @@ std::string LastLine(const std::string& text)
     return text.substr(start == std::string::npos ? 0 : start + 1, end - (start == std::string::npos ? 0 : start + 1) + 1);
 }
 
+// Until skyrim._host installs its own streams: whole lines to the plugin log. A real text stream (encoding,
+// errors, writable), and the line buffer is locked because several threads may print at once.
 constexpr const char* kStdio = R"PY(
-import sys, _skyrim
-class _SpyStream:
+import io, sys, threading, _skyrim
+class _SpyStream(io.TextIOBase):
+    encoding = "utf-8"
+    errors = "backslashreplace"
     def __init__(self, level):
-        self.level, self.buf = level, ""
+        super().__init__()
+        self.level, self.buf, self.lock = level, "", threading.Lock()
+    def writable(self):
+        return True
     def write(self, text):
         text = str(text)
-        self.buf += text
-        while "\n" in self.buf:
-            line, self.buf = self.buf.split("\n", 1)
+        with self.lock:
+            lines = (self.buf + text).split("\n")
+            self.buf = lines.pop()
+        for line in lines:
             if line.strip():
                 _skyrim.log(self.level, line)
         return len(text)
@@ -137,11 +147,21 @@ sys.stderr = _SpyStream("error")
 
 [[noreturn]] void ParkForever()
 {
-    static std::mutex m;
-    static std::condition_variable cv;
+    static std::mutex& m = *new std::mutex();                         // immortal (Global Constraints)
+    static std::condition_variable& cv = *new std::condition_variable();
     std::unique_lock l(m);
     for (;;) cv.wait(l);  // never notified; spurious wake-ups just wait again
 }
+
+// Releases the GIL when the scope that owns it ends, by any path: the normal end, or an exception thrown inside one
+// of Run's catch handlers. noexcept, so the host thread can never end holding the GIL (spec 4.5 rule 2).
+struct GilRelease
+{
+    GilRelease() = default;
+    GilRelease(const GilRelease&) = delete;
+    GilRelease& operator=(const GilRelease&) = delete;
+    ~GilRelease() noexcept { PyEval_SaveThread(); }
+};
 
 void Run(const Config cfg)
 {
@@ -191,29 +211,35 @@ void Run(const Config cfg)
         c.user_site_directory = 0;
         c.pathconfig_warnings = 0;
         Check(PyConfig_SetString(&c, &c.home, pyDir.c_str()), "PyConfig home");
+        Check(PyConfig_SetString(&c, &c.executable, (pyDir / "python.exe").c_str()), "PyConfig executable");
         c.module_search_paths_set = 1;
         for (const fs::path& p : { pyDir / "python314.zip", pyDir, site, lib, scripts })
             Check(PyWideStringList_Append(&c.module_search_paths, p.c_str()), "module_search_paths");
         Check(Py_InitializeFromConfig(&c), "Py_InitializeFromConfig");
     }
 
-    // From here this thread holds the GIL; every path below ends in PyEval_SaveThread + ParkForever.
-    try {
-        py::exec(kStdio);
-        log::Info("python host: initialised; sys.path = " + py::str(py::module_::import("sys").attr("path")).cast<std::string>());
-        py::module_::import("skyrim._host").attr("main")();
-        SetState("running");
-        log::Info("python host: running");
-    } catch (py::error_already_set& e) {
-        const std::string tb = Traceback(e);
-        Fail("skyrim._host: " + LastLine(tb));
-        log::Error(tb);
-    } catch (const std::exception& e) {
-        Fail(e.what());
-    } catch (...) {
-        Fail("unknown exception after initialisation");
+    // From here this thread holds the GIL. `release` gives it up when this block ends, by any path; every py:: object
+    // lives inside the try block and is destroyed before that. A normal end parks the thread below.
+    {
+        const GilRelease release;
+        try {
+            py::exec(kStdio);
+            py::module_ sys = py::module_::import("sys");
+            log::Info("python host: initialised; sys.executable = " + py::str(sys.attr("executable")).cast<std::string>() +
+                      "; sys.path = " + py::str(sys.attr("path")).cast<std::string>());
+            py::module_::import("skyrim._host").attr("main")();
+            SetState("running");
+            log::Info("python host: running");
+        } catch (py::error_already_set& e) {
+            const std::string tb = Traceback(e);
+            Fail("skyrim._host: " + LastLine(tb));
+            log::Error(tb);
+        } catch (const std::exception& e) {
+            Fail(e.what());
+        } catch (...) {
+            Fail("unknown exception after initialisation");
+        }
     }
-    PyEval_SaveThread();
     ParkForever();
 }
 }
@@ -236,12 +262,14 @@ void Start(const Config& cfg)
         SetState("starting");
         log::Info("python host: starting (CPython " + LinkedPythonVersion() + ")");
         std::thread([cfg] {
+            // Run parks forever once Python is initialised. It throws only before that (no GIL taken), or if one of its
+            // catch handlers threw (GilRelease has released the GIL by then). Nothing may escape this thread.
             try {
-                Run(cfg);  // returns only if it failed before Py_InitializeFromConfig succeeded (no GIL held)
+                Run(cfg);
             } catch (const std::exception& e) {
-                Fail(e.what());
+                try { Fail(e.what()); } catch (...) {}
             } catch (...) {
-                Fail("unknown exception");
+                try { Fail("unknown exception"); } catch (...) {}
             }
         }).detach();
     } catch (const std::exception& e) {
@@ -251,10 +279,35 @@ void Start(const Config& cfg)
     }
 }
 
-std::string State() { std::lock_guard l(g_mx); return g_state; }
+std::string State() { std::lock_guard l(Mx()); return StateText(); }
 }
 ```
-`py::exec` and `py::module_::import` are used only while this thread holds the GIL; every `py::` object is destroyed before `PyEval_SaveThread()` (they live inside the `try` block). `ModuleHost`'s member names are Task 19's; if Task 19 spelled one differently, use its spelling.
+`py::exec` and `py::module_::import` are used only while this thread holds the GIL; every `py::` object is destroyed before `GilRelease` calls `PyEval_SaveThread()` (they live inside the `try` block, which ends first). Check `kStdio` on Linux before building (no game needed):
+```bash
+python3 - <<'EOF'
+import io, re, sys, traceback, types
+src = open("plugin/src/PythonHost.cpp").read()
+code = re.search(r'kStdio = R"PY\((.*?)\)PY";', src, re.S).group(1)
+got = []
+sys.modules["_skyrim"] = types.SimpleNamespace(log=lambda level, msg: got.append((level, msg)))
+out, err = sys.stdout, sys.stderr
+exec(code, {})
+try:
+    s = sys.stdout
+    print("hello\nworld", end="")
+    print("!")
+    try:
+        1 / 0
+    except ZeroDivisionError:
+        traceback.print_exc()
+    checks = (isinstance(s, io.TextIOBase), s.encoding == "utf-8", s.writable(), ("info", "hello") in got,
+              ("info", "world!") in got, any(l == "error" and "ZeroDivisionError" in m for l, m in got))
+finally:
+    sys.stdout, sys.stderr = out, err
+print("kStdio OK" if all(checks) else f"kStdio FAILED {checks} {got}")
+EOF
+```
+Expected: `kStdio OK`. `ModuleHost`'s member names are Task 19's; if Task 19 spelled one differently, use its spelling.
 
 - [ ] **Step 2: The game build of `_skyrim`, the interim backend, the wiring**
 
@@ -342,11 +395,12 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
 
 - [ ] **Step 3: Deploy script (full replacement of `tools/deploy.sh`)**
 
-Task 25's script plus `--package` and `--scripts DIR` (both skip `__pycache__`):
+Task 25's script (including Task 10's `--site-packages DIR` block, unchanged) plus `--package` and `--scripts DIR` (both skip `__pycache__`):
 ```bash
 cat > tools/deploy.sh <<'EOF'
 #!/usr/bin/env bash
 # Usage: tools/deploy.sh out/<Dll>.dll [path/to/ini] [--python] [--package] [--scripts DIR]
+#        tools/deploy.sh --site-packages DIR
 #   SkyrimPython.dll (the loader) also deploys out/SkyrimPythonCore.dll into Plugins/SkyrimPython/.
 #   --python   embeddable CPython (third_party/cpython/embed) -> Plugins/SkyrimPython/python/
 #   --package  python/src/skyrim -> Plugins/SkyrimPython/lib/skyrim/
@@ -356,6 +410,26 @@ cat > tools/deploy.sh <<'EOF'
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT/tools/env.sh"
+# --site-packages DIR (Task 10): copy a staged site-packages into Data/SKSE/Plugins/SkyrimPython/site-packages/
+# and exit. Handled before any other argument, so it works whatever other options deploy.sh has.
+if [ "${1:-}" = "--site-packages" ]; then
+  SP_SRC="${2:?usage: tools/deploy.sh --site-packages DIR}"
+  [ -d "$SP_SRC" ] || { echo "deploy: no such directory: $SP_SRC" >&2; exit 1; }
+  SP_DEST="$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython/site-packages"
+  mkdir -p "$SP_DEST" "$ROOT/out"
+  # Never mix versions: an entry in the game's site-packages that the new one lacks stops the copy (nothing is deleted).
+  stale="$(comm -23 <(ls -A "$SP_DEST" | sort) <(ls -A "$SP_SRC" | sort))"
+  if [ -n "$stale" ]; then
+    echo "deploy: $SP_DEST holds entries the new site-packages does not have:" >&2
+    echo "$stale" >&2
+    echo "deploy: ask the owner to approve moving exactly these to the trash (gio trash), then re-run" >&2
+    exit 1
+  fi
+  cp -r "$SP_SRC"/. "$SP_DEST"/
+  ls -A "$SP_SRC" | while IFS= read -r e; do echo "$SP_DEST/$e" >> "$ROOT/out/deployed.txt"; done
+  echo "deploy: $(ls -A "$SP_SRC" | wc -l) entries copied to $SP_DEST"
+  exit 0
+fi
 DLL="${1:-}"; shift || true
 [ -f "$DLL" ] || { echo "deploy: no such file: ${DLL:-<none>}" >&2; exit 1; }
 INI=""; PYTHON=0; PACKAGE=0; SCRIPTS=""
@@ -742,7 +816,7 @@ import os
 
 import pytest
 
-from support import log_text, python_log_text, raw_connect, load_session, refused
+from support import load_session, log_text, raw_connect, refused
 
 VARIANT = os.environ.get("SPY_VARIANT", "")
 
@@ -791,6 +865,21 @@ def test_another_python314_already_loaded_disables_python():
     assert "TEST HOOK: preloaded" in text
     assert "another python314.dll is already loaded from" in text
     assert refused()
+
+
+@only("no-stdlib")
+def test_missing_stdlib_zip_is_a_logged_failure():
+    text = log_text()
+    assert "python host: failed: Py_InitializeFromConfig" in text
+    assert "python host: running" not in text
+    assert refused()
+
+
+@only("relaunch")
+def test_bridge_listens_after_a_quick_relaunch():
+    # The previous run was quit with a bridge client connected and the game relaunched within 60 s (Step 7).
+    assert "python host: running" in log_text()
+    raw_connect(load_session()).close()  # load_session raises if the session file says the bridge is not serving
 ```
 
 `livetest/scripts/livetest_broken/__init__.py`:
@@ -812,14 +901,14 @@ tools/launch_game.sh
 source tools/env.sh
 SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "python host: (running|failed|disabled)" 600 \
   || echo "STOP: Python did not report within 10 minutes; ask the owner"
-grep -E "python:|game backend:" "$SKSE_LOG_DIR/SkyrimPython.log"
-SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_bridge.py -q
+grep -E "python host:|game backend:|py: " "$SKSE_LOG_DIR/SkyrimPython.log"
+SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_bridge.py -q -rs
 ```
-Expected log lines: `game backend: interim dispatcher ready (game.state only)`, `python host: starting (CPython 3.14.8)`, `python host: initialised; sys.path = [...\python\python314.zip, ...\python, ...\site-packages, ...\lib, ...\scripts]`, `python host: running`. Expected tests: 14 passed. The log also shows the `livetest_broken` traceback (expected: it fails on purpose). If `python host: failed:` appears, the traceback follows it in the log; a `ModuleNotFoundError` for a stdlib module means `python314.zip` is not on `sys.path` (check the deployed `python/` folder). The game stays responsive throughout (open and close the console once to check).
+Expected log lines: `game backend: interim dispatcher ready (game.state only)`, `python host: starting (CPython 3.14.8)`, `python host: initialised; sys.executable = ...\SkyrimPython\python\python.exe; sys.path = [...\python\python314.zip, ...\python, ...\site-packages, ...\lib, ...\scripts]`, `python host: running`. If `sys.executable` names `SkyrimSE.exe` instead of `python.exe`, `PyConfig.executable` was not applied: fix that before going on. Expected tests: 14 passed. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure (the run did not test anything). The log also shows the `livetest_broken` traceback (expected: it fails on purpose). If `python host: failed:` appears, the traceback follows it in the log; a `ModuleNotFoundError` for a stdlib module means `python314.zip` is not on `sys.path` (check the deployed `python/` folder). The game stays responsive throughout (open and close the console once to check).
 
 - [ ] **Step 7: Startup variants (one game start each)**
 
-Quit the game from its main menu between runs; if it will not exit, STOP and ask the owner before killing anything. Each variant changes the deployed files by **moving** them, never deleting, and moves them back afterwards. `OWN="$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython"`. For each, launch with `tools/launch_game.sh`, wait with `SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh <log> <phrase> 600`, then run `SKYRIM_LIVE=1 SPY_VARIANT=<name> uv run --project python pytest livetest/test_m1_startup_variants.py -q` (expected: 1 passed, 5 skipped) and check the game reached the main menu normally.
+Quit the game from its main menu between runs; if it will not exit, STOP and ask the owner before killing anything. Each variant changes the deployed files by **moving** them, never deleting, and moves them back afterwards. `OWN="$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython"`. For each, launch with `tools/launch_game.sh`, wait with `SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh <log> <phrase> 600`, then run `SKYRIM_LIVE=1 SPY_VARIANT=<name> uv run --project python pytest livetest/test_m1_startup_variants.py -q -rs` (expected: 1 passed, 7 skipped, every skip naming another `SPY_VARIANT`; a skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure) and check the game reached the main menu normally.
 
 | Variant | Stage | Wait for (log, phrase) | Restore |
 |---|---|---|---|
@@ -829,6 +918,22 @@ Quit the game from its main menu between runs; if it will not exit, STOP and ask
 | `python-off` | `tools/deploy.sh out/SkyrimPython.dll plugin/config/variants/python-off.ini` | core log, `python host: disabled` | redeploy the dev ini |
 | `bridge-off` | `tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.ini` | core log, `python host: running` | redeploy the dev ini |
 | `collision` | see below | loader log, `Python disabled` | see below |
+| `no-stdlib` | `mv "$OWN/python/python314.zip" "$OWN/python/python314.zip.off"` | core log, `python host: failed` | `mv "$OWN/python/python314.zip.off" "$OWN/python/python314.zip"` |
+| `relaunch` | see below | core log, `python host: (running\|failed)` | nothing to restore |
+
+`no-stdlib` stands in for a partial or corrupt `python/` folder: CPython cannot find its codecs, `Py_InitializeFromConfig` returns an error status, and the host must log one `python host: failed: Py_InitializeFromConfig: ...` line and leave the game running. If instead the game process exits or hangs at startup, record the last lines of both logs, restore the zip, and STOP and ask the owner (a fatal CPython init error is a finding, not something to fix in place).
+
+`relaunch` checks that the bridge's port is free again right after a quick restart (the bridge binds with `SO_EXCLUSIVEADDRUSE` on Windows, Task 23). With the normal dev set deployed and the game at the main menu:
+```bash
+source tools/env.sh
+(cd livetest && python3 -c "import support; s = support.raw_connect(support.load_session()); s.settimeout(None); s.recv(1)") &
+# Quit the game from its main menu now (the client above stays connected until the game is gone, then exits).
+for i in $(seq 1 60); do pgrep -x SkyrimSE.exe >/dev/null || break; sleep 1; done
+tools/launch_game.sh   # within 60 s of quitting
+SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "python host: (running|failed)" 600
+cat "$SKYRIM_PYTHON_SESSION"
+```
+If the game has not exited within 60 s, STOP and ask the owner before killing anything. If the session file shows `"active": false` with an address-in-use reason, Wine does not free the port as Windows would: record it in `spikes/RESULTS.md` and STOP and ask the owner (a finding for Task 23's bind options, not something to work around here).
 
 The `collision` variant stands in for another mod that loaded its own CPython 3.14 first:
 ```bash
@@ -842,9 +947,9 @@ export SKYRIM_PYTHON_TEST_PRELOAD="Z:$(printf '%s' "$OTHER/python314.dll" | tr '
 tools/launch_game.sh
 unset SKYRIM_PYTHON_TEST_PRELOAD
 ```
-After the test: quit the game, `: > plugin/build-options.local` (empty: hooks off), rebuild both DLLs (the build log ends with `SPY_TEST_HOOKS=OFF`) and redeploy the dev ini. `SpyCollideTest/` stays until the owner approves removing it (it is listed in `out/deployed.txt`). If the loader log shows `TEST HOOK: preloaded ... (failed)`, Wine did not pass the variable through: record the collision row as "not staged" in `spikes/RESULTS.md` instead of a pass.
+After the test: quit the game, `: > plugin/build-options.local` (empty: hooks off), rebuild both DLLs (the build log ends with `SPY_TEST_HOOKS=OFF`) and redeploy the dev ini. `SpyCollideTest/` stays until the owner approves removing it (it is listed in `out/deployed.txt`). If the loader log shows `TEST HOOK: SKYRIM_PYTHON_TEST_PRELOAD not set` (the variable did not reach the game) or `TEST HOOK: preloaded ... (failed)` (the second copy did not load), record the collision row as "not staged" in `spikes/RESULTS.md` with that line, instead of a pass. No `TEST HOOK` line at all means the loader was not built with the hooks: check the build log said `SPY_TEST_HOOKS=ON` and redeploy.
 
-Finally redeploy the normal set (`tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package`), relaunch, and rerun Step 6's tests once (14 passed).
+Finally redeploy the normal set (`tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package`), relaunch, wait as in Step 6, and rerun Step 6's tests once (`SKYRIM_LIVE=1`, 14 passed).
 
 - [ ] **Step 8: Commit**
 

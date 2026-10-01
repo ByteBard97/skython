@@ -8,13 +8,13 @@ Adapted from: branch `plan-out-of-process`, task 15 (`task-15-plugin-skeleton-bu
 >
 > **Depends on:** Tasks 16 (`Config`, `parse_config`), 17 (`LifecycleState`), 19 (`pyglue/` sources). **Runs on:** Step 1 on Linux; Steps 2-9 on the Windows build box plus the game.
 >
-> **STOP and ask the owner (do not improvise) if:** a gating spike is FAIL; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s; the log shows a runtime other than AE 1.6.1170; a CommonLibSSE-NG name below does not compile and `plugin/extern/CommonLibSSE-NG` shows no obvious equivalent; `tools/fetch_python.sh --check` fails.
+> **STOP and ask the owner (do not improvise) if:** a gating spike is FAIL; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s; the log shows a runtime other than AE 1.6.1170; a CommonLibSSE-NG name below does not compile and `plugin/extern/CommonLibSSE-NG` shows no obvious equivalent; `tools/fetch_python.sh --check` fails; **the first live launch (Step 9) is a gate:** if the loader log says `SpyCore_Load returned true` but the core log has no `SkyrimPython core: data loaded` line, `SKSE::Init` called from the core or the core's messaging listener does not work. Do not work around it (for example by moving the listener into the loader): STOP and ask the owner.
 
 **Files:**
 - Create: `plugin/CMakeLists.txt`, `plugin/vcpkg.json`, `plugin/build.ps1`, `plugin/config/SkyrimPython.ini`, `plugin/config/SkyrimPython.dev.ini`, `plugin/config/variants/python-off.ini`
 - Create: `plugin/loader/main.cpp`, `plugin/loader/Win.h`, `plugin/loader/Win.cpp` (loader DLL `SkyrimPython.dll`)
 - Create: `plugin/src/main.cpp`, `plugin/src/Log.{h,cpp}`, `plugin/src/Settings.{h,cpp}`, `plugin/src/Lifecycle.{h,cpp}`, `plugin/src/PythonHost.{h,cpp}` (core DLL `SkyrimPythonCore.dll`; `PythonHost` holds only `LinkedPythonVersion()` until Task 26)
-- Modify: `tools/deploy.sh` (full replacement: routes the core DLL into `SkyrimPython/`, keeps `--python`), `.gitignore` (append `plugin/build-options.local`)
+- Modify: `tools/deploy.sh` (full replacement: routes the core DLL into `SkyrimPython/`, keeps `--python` and Task 10's `--site-packages DIR`), `.gitignore` (append `plugin/build-options.local`), `docs/PINS.md` (append the Step 2 notes)
 
 **Interfaces:**
 - Consumes: `spy::Config`, `spy::parse_config`, `spy::config_to_json` (Task 16); `spy::LifecycleState` with `set_paused`, `not_ready_reason(bool)`, `base_state()` (Task 17); `pyglue/src/pymodule.cpp` and `pyglue/include` (Task 19, compiled into the core); `tools/remote_build.sh`, `tools/launch_game.sh`, `tools/wait_for_log.sh`, `tools/env.sh` (Task 1; `env.sh` exports `SKSE_LOG_DIR`, `SIMPLESKYRIM_DATA`, `SKYRIM_PYTHON_STATE`); `third_party/cpython/{embed,nuget}` (Task 0).
@@ -25,12 +25,15 @@ Adapted from: branch `plan-out-of-process`, task 15 (`task-15-plugin-skeleton-bu
   - `spy::settings::Load()`, `Get() -> const Config&`, `PluginsDir()`, `OwnDir()`, `SessionFile(skseDir) -> std::optional<path>`, and **`struct Runtime { std::string plugin_version, game_version, runtime; std::optional<std::filesystem::path> skse_dir; }`, `SetRuntime(Runtime)`, `GetRuntime() -> const Runtime&`** (filled by `main.cpp`, read by Task 26's `_skyrim.config()`, so `PythonHost.cpp` needs no CommonLib header).
   - `spy::life::OnMessage(Message*)`, `DataReady()`, `GameLoaded()`, `Loading()`, `Interactive()`, `Paused()`, `Epoch()`, `LoadsStarted()`, `NotReadyReason(bool require_unpaused = false) -> std::optional<std::string>`, `OpenMenus()`, `BaseState() -> json`.
   - `spy::host::LinkedPythonVersion() -> std::string` (Task 26 adds `Start`/`State` to the same files).
-  - `tools/deploy.sh out/SkyrimPython.dll [ini] [--python]`: copies the loader to `Plugins/`, and `out/SkyrimPythonCore.dll` (required, must not be older than the loader) to `Plugins/SkyrimPython/`.
+  - `tools/deploy.sh out/SkyrimPython.dll [ini] [--python]`: copies the loader to `Plugins/`, and `out/SkyrimPythonCore.dll` (required, must not be older than the loader) to `Plugins/SkyrimPython/`. `tools/deploy.sh --site-packages DIR` (Task 10's block, unchanged) still works.
+  - Test hooks (only in a loader built with `SPY_TEST_HOOKS=ON`): `SKYRIM_PYTHON_TEST_PRELOAD=<path>` (Task 26's collision variant) and `SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1` (Step 10). Such a loader logs one `TEST HOOK:` line per hook, also when its variable is not set.
   - Build: run `tools/remote_build.sh plugin SkyrimPython.dll` **and** `tools/remote_build.sh plugin SkyrimPythonCore.dll` (the script fetches one DLL per call; the second call is an incremental no-op build plus the copy).
 
 Rules (spec 4.1, 6):
 - The loader has **no Python headers and no import of `python314.dll`**. Its order: runtime check → collision check (`GetModuleHandleW(L"python314.dll")` from another path disables Python) → `LoadLibraryExW` of `SkyrimPython\python\python314.dll` → `LoadLibraryExW` of `SkyrimPython\SkyrimPythonCore.dll` (both full paths, `LOAD_WITH_ALTERED_SEARCH_PATH`) → `SpyCore_Load`. It logs the path of the `python314.dll` the process uses after the core loaded. Every failure is one `Python disabled: <why>` line, and the loader still returns `true`.
-- The core also carries `SKSEPluginInfo` (name `SkyrimPythonCore`) because CommonLibSSE-NG looks up `SKSEPlugin_Version` in the calling module; SKSE never sees it (it loads only DLLs directly in `Plugins/`). Step 2 checks this assumption.
+- The core also carries `SKSEPluginInfo` (name `SkyrimPythonCore`). Nothing depends on it: CommonLib's `SKSE::Init` reads `PluginVersionData` only for the plugin's name, author and version and falls back to the module file name when the export is missing (Step 2). It is kept because it is harmless and names the core in CommonLib's own messages; SKSE never sees it (it loads only DLLs directly in `Plugins/`).
+- **The loader calls nothing in SKSE beyond `SKSE::Init`**: no `RegisterListener`, no other interface. Every registration happens in the core. The core's `MessagingInterface::RegisterListener` passes `GetPluginHandle()`, which is the **loader's** handle (captured during the loader's load call), and SKSE may drop a second listener for the same handle and sender, so a loader-side listener could silently swallow the core's `kDataLoaded`. Step 2 records this in `docs/PINS.md`.
+- Paths are passed to the file APIs as `std::filesystem::path` (wide on Windows) and put into log text through `U8()`. `path::string()` converts through the ANSI code page and throws for characters it cannot represent (for example a CJK user name on a Western code page), so it is never used on a game or Documents path.
 - `paused` comes from `RE::UI::GameIsPaused()`, read in the menu sink after each menu event and stored with `LifecycleState::set_paused`. Task 31's menu test checks it is not stale.
 
 - [ ] **Step 1: Linux precheck**
@@ -45,10 +48,19 @@ Expected: the checksum check passes, all core tests pass, and the four files exi
 - [ ] **Step 2: Verify two CommonLib assumptions in the pinned checkout**
 
 ```bash
-grep -rn "SKSEPlugin_Version" plugin/extern/CommonLibSSE-NG/src plugin/extern/CommonLibSSE-NG/include | head
-grep -n "GameIsPaused\|MENU_NAME" plugin/extern/CommonLibSSE-NG/include/RE/U/UI.h plugin/extern/CommonLibSSE-NG/include/RE/L/LoadingMenu.h plugin/extern/CommonLibSSE-NG/include/RE/M/MainMenu.h
+grep -rn "SKSEPlugin_Version\|PluginVersionData::GetSingleton" plugin/extern/CommonLibSSE-NG/src/SKSE/API.cpp | head
+grep -n "RegisterListener\|GetPluginHandle" plugin/extern/CommonLibSSE-NG/src/SKSE/Interfaces.cpp | head
+grep -n "GameIsPaused\|IsMenuOpen\|MENU_NAME" plugin/extern/CommonLibSSE-NG/include/RE/U/UI.h plugin/extern/CommonLibSSE-NG/include/RE/L/LoadingMenu.h plugin/extern/CommonLibSSE-NG/include/RE/M/MainMenu.h
 ```
-Expected: `PluginDeclaration::GetSingleton()` (or similar) finds `SKSEPlugin_Version` through the current module, which is why the core DLL declares `SKSEPluginInfo` too; `GameIsPaused` and both `MENU_NAME`s exist. If `SKSE::Init` does not use `SKSEPlugin_Version` at all, keep the core's `SKSEPluginInfo` anyway (harmless) and note it in `docs/PINS.md`.
+Expected: `SKSE::Impl::API::Init` (`src/SKSE/API.cpp`) reads `PluginVersionData::GetSingleton()` only for the plugin name, author and version, and falls back to the module file name when the export is missing; nothing fails without it. `MessagingInterface::RegisterListener` (`src/SKSE/Interfaces.cpp`) passes `GetPluginHandle()`, the handle captured by the first `SKSE::Init` in the process's load call, which is the loader's. `UI::GameIsPaused()`, `UI::IsMenuOpen(const std::string_view&)` and both `MENU_NAME`s exist. Append to `docs/PINS.md`:
+```bash
+cat >> docs/PINS.md <<'EOF'
+
+## Plugin notes (Task 25)
+- The core DLL's SKSEPluginInfo is not needed by CommonLib: SKSE::Init reads PluginVersionData only for name/author/version and falls back to the module file name. Kept as harmless.
+- The core's RegisterListener uses the loader's plugin handle (GetPluginHandle() is captured during the loader's load call). SKSE may drop a second listener for the same handle and sender, so the loader registers nothing beyond SKSE::Init; every registration happens in the core.
+EOF
+```
 
 - [ ] **Step 3: Build files**
 
@@ -58,7 +70,7 @@ cmake_minimum_required(VERSION 3.21)
 project(SkyrimPython VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-option(SPY_TEST_HOOKS "Loader honours SKYRIM_PYTHON_TEST_PRELOAD (Task 26 collision variant only)" OFF)
+option(SPY_TEST_HOOKS "Loader honours SKYRIM_PYTHON_TEST_PRELOAD and SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME (live tests only)" OFF)
 
 set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(ENABLE_SKYRIM_VR OFF CACHE BOOL "" FORCE)
@@ -155,6 +167,9 @@ using LogFn = void (*)(const std::string&);
 // Loads python314.dll and SkyrimPythonCore.dll by full path from <this DLL's folder>\SkyrimPython\ and calls
 // SpyCore_Load(skse). Returns "" on success, else the reason Python stays disabled. Never throws.
 std::string StartCore(const void* skseLoadInterface, LogFn log) noexcept;
+// Test hook (SPY_TEST_HOOKS builds only; always false otherwise): SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1 makes the
+// loader treat the running game as an unverified runtime (Task 25 Step 10). Logs one TEST HOOK line. Never throws.
+bool TestUnverifiedRuntime(LogFn log) noexcept;
 }
 ```
 
@@ -203,6 +218,25 @@ bool SamePath(const fs::path& a, const fs::path& b)
 std::string WinError(const std::string& what) { return what + " (Windows error " + std::to_string(GetLastError()) + ")"; }
 }
 
+bool TestUnverifiedRuntime(LogFn log) noexcept
+{
+#ifdef SPY_TEST_HOOKS
+    try {
+        wchar_t v[16];
+        const DWORD n = GetEnvironmentVariableW(L"SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME", v, 16);
+        const bool on = n > 0 && n < 16 && std::wstring(v, n) == L"1";
+        log(on ? "TEST HOOK: SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1: treating this runtime as unverified"
+               : "TEST HOOK: SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME not set");
+        return on;
+    } catch (...) {
+        return false;
+    }
+#else
+    (void)log;
+    return false;
+#endif
+}
+
 std::string StartCore(const void* skse, LogFn log) noexcept
 {
     try {
@@ -219,6 +253,8 @@ std::string StartCore(const void* skse, LogFn log) noexcept
         if (n > 0 && n < 4096) {
             HMODULE h = LoadLibraryExW(pre, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
             log("TEST HOOK: preloaded " + U8(pre) + (h ? "" : " (failed)"));
+        } else {
+            log("TEST HOOK: SKYRIM_PYTHON_TEST_PRELOAD not set");
         }
 #endif
         if (HMODULE existing = GetModuleHandleW(L"python314.dll")) {
@@ -291,6 +327,7 @@ void OpenLog()
 // Spec 6: on a runtime that has not been verified, nothing starts. Add a version only after a live run on it.
 bool RuntimeSupported()
 {
+    if (spy::loader::TestUnverifiedRuntime(&Log)) return false;  // SPY_TEST_HOOKS builds only (Step 10)
     static const REL::Version kVerified[] = { REL::Version{ 1, 6, 1170, 0 } };
     const auto v = REL::Module::get().version();
     for (const auto& ok : kVerified)
@@ -320,7 +357,7 @@ SKSE_PLUGIN_LOAD(const SKSE::LoadInterface* skse)
     return true;  // never fail the game's plugin load
 }
 ```
-Loader log lines (tests and later tasks wait for these exact phrases): `SkyrimPython loader 0.1.0 on Skyrim 1.6.1170.0 (AE)`, `runtime check: ... is not a verified runtime; Python and SkyrimPython stay off`, `loaded python314.dll from <path>`, `core loaded from <path>; python314.dll in use: <path>`, `SpyCore_Load returned true`, `Python disabled: <why>`.
+Loader log lines (tests and later tasks wait for these exact phrases): `SkyrimPython loader 0.1.0 on Skyrim 1.6.1170.0 (AE)`, `runtime check: ... is not a verified runtime; Python and SkyrimPython stay off`, `loaded python314.dll from <path>`, `core loaded from <path>; python314.dll in use: <path>`, `SpyCore_Load returned true`, `Python disabled: <why>`; in a `SPY_TEST_HOOKS` build only, `TEST HOOK: ...` (one line per hook, `... not set` when its variable is absent).
 
 - [ ] **Step 5: Core logging and settings (no CommonLib headers)**
 
@@ -401,6 +438,9 @@ namespace {
 Config& Cfg() { static Config& c = *new Config(); return c; }      // immortal
 Runtime& Rt() { static Runtime& r = *new Runtime(); return r; }
 
+// Log text only. path::string() converts through the ANSI code page and throws for characters it cannot hold.
+std::string U8(const std::filesystem::path& p) { const auto s = p.u8string(); return std::string(s.begin(), s.end()); }
+
 std::filesystem::path CoreDllPath()
 {
     HMODULE self = nullptr;
@@ -426,7 +466,7 @@ void Load()
     const auto path = PluginsDir() / "SkyrimPython.ini";
     std::ifstream f(path);
     if (!f) {
-        log::Info("settings: " + path.string() + " not found; using defaults");
+        log::Info("settings: " + U8(path) + " not found; using defaults");
         Cfg() = Config{};
         return;
     }
@@ -435,12 +475,12 @@ void Load()
     try {
         Cfg() = parse_config(ss.str());
     } catch (const std::exception& e) {
-        log::Error("settings: " + path.string() + ": " + e.what() + "; using defaults");
+        log::Error("settings: " + U8(path) + ": " + e.what() + "; using defaults");
         Cfg() = Config{};
     }
     const auto& c = Cfg();
     for (const auto& k : c.ignored_keys) log::Warn("settings: unknown key '" + k + "' ignored");
-    log::Info("settings: " + path.string() + " python_enabled=" + (c.python_enabled ? "true" : "false") +
+    log::Info("settings: " + U8(path) + " python_enabled=" + (c.python_enabled ? "true" : "false") +
               " scripts_enabled=" + (c.scripts_enabled ? "true" : "false") +
               " bridge_enabled=" + (c.bridge_enabled ? "true" : "false") + " port=" + std::to_string(c.port) +
               " default_timeout_ms=" + std::to_string(c.default_timeout_ms) +
@@ -544,9 +584,17 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
     switch (m->type) {
     case SKSE::MessagingInterface::kDataLoaded: {
         static MenuSink& sink = *new MenuSink();
-        RE::UI::GetSingleton()->AddEventSink<RE::MenuOpenCloseEvent>(&sink);
+        auto* ui = RE::UI::GetSingleton();
+        ui->AddEventSink<RE::MenuOpenCloseEvent>(&sink);
         State().on_data_loaded();
         log::Info("SkyrimPython core: data loaded");
+        // The sink sees only events from now on. If the main menu opened before kDataLoaded, record it here
+        // (on_menu is idempotent, so a sink event for the same opening does no harm).
+        if (ui->IsMenuOpen(RE::MainMenu::MENU_NAME)) {
+            State().on_menu(std::string(RE::MainMenu::MENU_NAME), true);
+            State().set_paused(ui->GameIsPaused());
+            log::Info("lifecycle: Main Menu opened; no game loaded (already open at kDataLoaded)");
+        }
         break;
     }
     case SKSE::MessagingInterface::kPreLoadGame:
@@ -581,7 +629,7 @@ std::vector<std::string> OpenMenus() { return State().open_menus(); }
 json BaseState() { return State().base_state(); }
 }
 ```
-Events arrive on the main thread (messaging) and the UI thread (menu sink); every reader goes through `LifecycleState`'s mutex. These log lines are what later tasks wait for; the index fixes four of them exactly: `SkyrimPython core: data loaded`, `lifecycle: Main Menu open` (a prefix of the line above), `lifecycle: interactive = true`, and Task 26's `python host: running`.
+Events arrive on the main thread (messaging) and the UI thread (menu sink); every reader goes through `LifecycleState`'s mutex. Whether the main menu opens before or after `kDataLoaded` is not known in advance; the seed above makes both orders give the same state, and the log line says which one happened (Step 9 records it). These log lines are what later tasks wait for; the index fixes four of them exactly: `SkyrimPython core: data loaded`, `lifecycle: Main Menu open` (a prefix of the line above), `lifecycle: interactive = true`, and Task 26's `python host: running`.
 
 - [ ] **Step 7: Core entry point and the CPython link check**
 
@@ -617,9 +665,11 @@ std::string LinkedPythonVersion()
 #include "Settings.h"
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
-#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/base_sink.h>
 #include <filesystem>
 #include <format>
+#include <fstream>
+#include <mutex>
 
 using namespace std::literals;
 
@@ -633,12 +683,35 @@ SKSEPluginInfo(
     .RuntimeCompatibility = SKSE::VersionIndependence::AddressLibrary)
 
 namespace {
+// spdlog's file sinks take a narrow file name, which Windows reads in the ANSI code page; a Documents folder whose
+// name that code page cannot spell would get no log. This sink opens the std::filesystem::path itself (wide).
+class PathFileSink final : public spdlog::sinks::base_sink<std::mutex>
+{
+public:
+    explicit PathFileSink(const std::filesystem::path& p) : out_(p, std::ios::binary | std::ios::trunc)
+    {
+        if (!out_) throw std::runtime_error("cannot open the log file");
+    }
+
+protected:
+    void sink_it_(const spdlog::details::log_msg& msg) override
+    {
+        spdlog::memory_buf_t buf;
+        formatter_->format(msg, buf);
+        out_.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+    }
+    void flush_() override { out_.flush(); }
+
+private:
+    std::ofstream out_;
+};
+
 void SetupLog(const std::optional<std::filesystem::path>& skseDir)
 {
     try {
         std::filesystem::path path = skseDir ? *skseDir : std::filesystem::path{};
         path /= "SkyrimPython.log"sv;
-        auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path.string(), true);
+        auto sink = std::make_shared<PathFileSink>(path);
         auto logger = std::make_shared<spdlog::logger>("global", std::move(sink));
         logger->set_level(spdlog::level::info);
         logger->flush_on(spdlog::level::info);
@@ -684,10 +757,13 @@ extern "C" __declspec(dllexport) bool SpyCore_Load(const SKSE::LoadInterface* sk
 
 - [ ] **Step 8: Deploy script (full replacement of `tools/deploy.sh`)**
 
+Task 10's `--site-packages DIR` block is kept unchanged, right after `source tools/env.sh` (it handles its own arguments and exits).
+
 ```bash
 cat > tools/deploy.sh <<'EOF'
 #!/usr/bin/env bash
 # Usage: tools/deploy.sh out/<Dll>.dll [path/to/ini] [--python]
+#        tools/deploy.sh --site-packages DIR
 #   SkyrimPython.dll (the loader) also deploys out/SkyrimPythonCore.dll into Plugins/SkyrimPython/.
 #   --python  copies the embeddable CPython (third_party/cpython/embed) to Plugins/SkyrimPython/python/.
 # Every copied path is appended to out/deployed.txt (tools/teardown_list.sh lists them; nothing is ever removed).
@@ -695,6 +771,26 @@ cat > tools/deploy.sh <<'EOF'
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT/tools/env.sh"
+# --site-packages DIR (Task 10): copy a staged site-packages into Data/SKSE/Plugins/SkyrimPython/site-packages/
+# and exit. Handled before any other argument, so it works whatever other options deploy.sh has.
+if [ "${1:-}" = "--site-packages" ]; then
+  SP_SRC="${2:?usage: tools/deploy.sh --site-packages DIR}"
+  [ -d "$SP_SRC" ] || { echo "deploy: no such directory: $SP_SRC" >&2; exit 1; }
+  SP_DEST="$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython/site-packages"
+  mkdir -p "$SP_DEST" "$ROOT/out"
+  # Never mix versions: an entry in the game's site-packages that the new one lacks stops the copy (nothing is deleted).
+  stale="$(comm -23 <(ls -A "$SP_DEST" | sort) <(ls -A "$SP_SRC" | sort))"
+  if [ -n "$stale" ]; then
+    echo "deploy: $SP_DEST holds entries the new site-packages does not have:" >&2
+    echo "$stale" >&2
+    echo "deploy: ask the owner to approve moving exactly these to the trash (gio trash), then re-run" >&2
+    exit 1
+  fi
+  cp -r "$SP_SRC"/. "$SP_DEST"/
+  ls -A "$SP_SRC" | while IFS= read -r e; do echo "$SP_DEST/$e" >> "$ROOT/out/deployed.txt"; done
+  echo "deploy: $(ls -A "$SP_SRC" | wc -l) entries copied to $SP_DEST"
+  exit 0
+fi
 DLL="${1:-}"; shift || true
 [ -f "$DLL" ] || { echo "deploy: no such file: ${DLL:-<none>}" >&2; exit 1; }
 INI=""; PYTHON=0
@@ -737,7 +833,7 @@ chmod +x tools/deploy.sh && bash -n tools/deploy.sh
 ```
 Expected: `bash -n` prints nothing.
 
-- [ ] **Step 9: Build, deploy, launch, check both logs**
+- [ ] **Step 9: Build, deploy, launch, check both logs (STOP gate)**
 
 Every wait is bounded. Loading a save is manual (the owner presses Continue); if nobody is at the keyboard, STOP and ask.
 ```bash
@@ -751,30 +847,42 @@ tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --python
 tools/launch_game.sh
 SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPythonLoader.log" "SpyCore_Load returned true|Python disabled" 600
 cat "$SKSE_LOG_DIR/SkyrimPythonLoader.log"
-SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "Main Menu opened" 600
+# GATE: SKSE::Init from the core and the core's messaging listener must work. No line here within 10 minutes: STOP.
+SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "SkyrimPython core: data loaded" 600 \
+  || echo "STOP: the core never saw kDataLoaded; ask the owner"
+SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: Main Menu open" 600
 # Manual: press Continue in the game. Then:
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "interactive = true" 300
+SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: interactive = true" 300
 cat "$SKSE_LOG_DIR/SkyrimPython.log"
 ```
 (The spike DLLs are moved, not deleted; move them back for spike re-runs.)
 
-Expected loader log: `SkyrimPython loader 0.1.0 on Skyrim 1.6.1170.0 (AE)`, `loaded python314.dll from ...\SkyrimPython\python\python314.dll`, `core loaded from ...\SkyrimPythonCore.dll; python314.dll in use: <the same python path>`, `SpyCore_Load returned true`. Expected core log, in order: `SkyrimPythonCore 0.1.0 on Skyrim 1.6.1170.0 (AE); linked against CPython 3.14.8`, `settings: ...\Data\SKSE\Plugins\SkyrimPython.ini python_enabled=true scripts_enabled=true bridge_enabled=true port=45977 ...`, `SkyrimPython core: data loaded`, `lifecycle: Main Menu opened; no game loaded`, `lifecycle: loading a save`, `lifecycle: Loading Menu opened`, `lifecycle: save load succeeded, epoch 1`, `lifecycle: Loading Menu closed`, `lifecycle: interactive = true, epoch 1` (`save load succeeded` and `Loading Menu closed` may swap; `interactive = true` comes after both). Any version other than 1.6.1170.0: STOP and ask the owner. Python is linked but not initialised yet (Task 26).
+**STOP gate.** This is the first launch where `SKSE::Init` runs in a second DLL (the core) and the core registers the messaging listener with the loader's plugin handle. If the loader log ends with `SpyCore_Load returned true` but the core log has no `SkyrimPython core: data loaded` line (or no core log exists), STOP and ask the owner with both logs attached; do not move the listener into the loader or call `SKSE::Init` differently on your own.
 
-- [ ] **Step 10: Check the unsupported-runtime guard**
+Expected loader log: `SkyrimPython loader 0.1.0 on Skyrim 1.6.1170.0 (AE)`, `loaded python314.dll from ...\SkyrimPython\python\python314.dll`, `core loaded from ...\SkyrimPythonCore.dll; python314.dll in use: <the same python path>`, `SpyCore_Load returned true`. Expected core log, in order: `SkyrimPythonCore 0.1.0 on Skyrim 1.6.1170.0 (AE); linked against CPython 3.14.8`, `settings: ...\Data\SKSE\Plugins\SkyrimPython.ini python_enabled=true scripts_enabled=true bridge_enabled=true port=45977 ...`, `SkyrimPython core: data loaded`, `lifecycle: Main Menu opened; no game loaded` (with ` (already open at kDataLoaded)` if the menu opened first: record which order this runtime uses in `spikes/RESULTS.md`), `lifecycle: loading a save`, `lifecycle: Loading Menu opened`, `lifecycle: save load succeeded, epoch 1`, `lifecycle: Loading Menu closed`, `lifecycle: interactive = true, epoch 1` (`save load succeeded` and `Loading Menu closed` may swap; `interactive = true` comes after both). Any version other than 1.6.1170.0: STOP and ask the owner. Python is linked but not initialised yet (Task 26).
 
-On the box copy only (never committed), change `REL::Version{ 1, 6, 1170, 0 }` to `REL::Version{ 1, 6, 1169, 0 }` in `plugin/loader/main.cpp`, rebuild the loader, deploy, launch:
+- [ ] **Step 10: Check the unsupported-runtime guard (test-hook loader; no source edit)**
+
+`tools/remote_build.sh` re-syncs the local tree over the box's checkout on every call, so the check uses the `SPY_TEST_HOOKS` override instead of editing `main.cpp`:
 ```bash
-tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
+echo "SPY_TEST_HOOKS=ON" > plugin/build-options.local
+tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll   # build log ends with SPY_TEST_HOOKS=ON
 tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
-tools/launch_game.sh
 source tools/env.sh
-SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPythonLoader.log" "runtime check:" 600
+SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1 tools/launch_game.sh
+SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPythonLoader.log" "runtime check:|TEST HOOK: SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME not set" 600
 cat "$SKSE_LOG_DIR/SkyrimPythonLoader.log"
 ```
-Expected: `runtime check: Skyrim 1.6.1170.0 is not a verified runtime; Python and SkyrimPython stay off`, no `loaded python314.dll` line, and the game reaches the main menu normally. Revert the edit by hand, rebuild, redeploy.
+Expected: `TEST HOOK: SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1: treating this runtime as unverified`, then `runtime check: Skyrim 1.6.1170.0 is not a verified runtime; Python and SkyrimPython stay off`, no `loaded python314.dll` line, and the game reaches the main menu normally. If the log shows `TEST HOOK: SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME not set`, the variable did not reach the game through `launch_game.sh`: STOP and ask the owner. Afterwards quit the game, turn the hooks off and rebuild:
+```bash
+: > plugin/build-options.local    # empty: hooks off
+tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll   # build log ends with SPY_TEST_HOOKS=OFF
+tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+git status --short plugin    # no source file changed
+```
 
 - [ ] **Step 11: Commit**
 
 ```bash
-git add plugin tools/deploy.sh .gitignore && git commit -m "feat(plugin): loader and core DLLs with logging, settings and lifecycle"
+git add plugin tools/deploy.sh .gitignore docs/PINS.md && git commit -m "feat(plugin): loader and core DLLs with logging, settings and lifecycle"
 ```

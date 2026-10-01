@@ -1,6 +1,6 @@
 # Task 28: Papyrus value conversion and signatures
 
-Adapted from: branch `plan-out-of-process`, task 17b (`task-17b-papyrus-value-conversion-and-signatures.md`). The C++ is unchanged apart from task numbers (it compiled and linked on the build box at the pinned CommonLibSSE-NG, with the `API-VERIFICATION.md` fixes applied). The live tests now go through the dev bridge.
+Adapted from: branch `plan-out-of-process`, task 17b (`task-17b-papyrus-value-conversion-and-signatures.md`). The C++ is the branch's (it compiled and linked on the build box at the pinned CommonLibSSE-NG, with the `API-VERIFICATION.md` fixes applied) plus plan review F's fixes: a typed None via `Variable(t)`, `type_mismatch` for an array argument over 128, core's float encoder, and `FindProperty` returning the whole `PropertyTypeInfo`. The live tests now go through the dev bridge.
 
 > Part of the [skyrim-python v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), section 4.4. Steps use checkbox (`- [ ]`) syntax.
 
@@ -10,7 +10,7 @@ Adapted from: branch `plan-out-of-process`, task 17b (`task-17b-papyrus-value-co
 >
 > **STOP and ask the owner (do not improvise) if:** S7 is missing or FAIL; the form-argument route S7 recorded differs from the code below by more than a rename; a live test crashes the game; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s.
 >
-> **Verified against CommonLibSSE-NG 39f9d07 (see `API-VERIFICATION.md`; this code compiled and linked on the build box).** `FindBoundObject(VMHandle, const char*, BSTSmartPointer<Object>&) const` (3 parameters); `Array::MAX_SIZE` is 128 but private (hence the local constant); `GetRawType()` exists on `TypeInfo`, not on `Variable`; `#undef GetObject` is needed after the includes (windows.h macro). Still re-check against S7's record: `GetObjectHandlePolicy`, `GetHandleForObject`, `HandleIsType`, `GetObjectForHandle`, `EmptyHandle`; `RE::BSScript::PackHandle`; `Variable::SetObject(nullptr, rawType)` / `SetNone`, `SetArray`, `GetArray`, `GetObject`; `Object::GetHandle`; `VirtualMachine::CreateArray(TypeInfo, size, BSTSmartPointer<Array>&)`; `Array::size`, `operator[]`; `TESDataHandler::LookupForm(localId, pluginName)`; `TESForm::LookupByID`, `IsDeleted`, `GetFile(0)`, `GetLocalFormID`.
+> **Verified against CommonLibSSE-NG 39f9d07 (see `API-VERIFICATION.md`; this code compiled and linked on the build box).** `FindBoundObject(VMHandle, const char*, BSTSmartPointer<Object>&) const` (3 parameters); `Array::MAX_SIZE` is 128 but private (hence the local constant); `GetRawType()` exists on `TypeInfo`, not on `Variable`; `#undef GetObject` is needed after the includes (windows.h macro). Still re-check against S7's record: `GetObjectHandlePolicy`, `GetHandleForObject`, `HandleIsType`, `GetObjectForHandle`, `EmptyHandle`; `RE::BSScript::PackHandle`; `Variable(const TypeInfo&)` (a typed None) and `Variable& operator=(Variable&&)`, `SetArray`, `GetArray`, `GetObject`; `Object::GetHandle`; `VirtualMachine::CreateArray(TypeInfo, size, BSTSmartPointer<Array>&)`; `Array::size`, `operator[]`; `TESDataHandler::LookupForm(localId, pluginName)`; `TESForm::LookupByID`, `IsDeleted`, `GetFile(0)`, `GetLocalFormID`.
 
 **Files:**
 - Modify: `plugin/src/Signatures.cpp` (add `IsA`, `FindProperty`)
@@ -19,11 +19,12 @@ Adapted from: branch `plan-out-of-process`, task 17b (`task-17b-papyrus-value-co
 
 **Interfaces:**
 - Consumes: Task 27 (all headers, `ops::Run`, `Callback`, `pv::NeedsMainThread`, `life::Epoch()`), spike S7 (Task 9, verified calls), core Tasks 14-15 (`Value`, `FormRef`, `ArrayValue`, `form_ref_to_json`, `check_fingerprint`, `RefStatus`, `parse_form_key`, `is_runtime_form_id`, `format_form_key`).
-- Produces (bodies for names declared in Task 27): `pv::ResolveForm`, `pv::ToVariable` (Bool, Int, Float, String, `None`, form arguments, arrays of Bool/Int/Float/String; arrays of objects are rejected `unsupported`), `pv::FromVariable` (everything except aliases), `sig::IsA`, `sig::FindProperty`, and the file-local helpers `FindBound`, `BindObject`, `Describe`, `AliasObjectToJson` (stub) that Task 29 edits.
+- Produces (bodies for names declared in Task 27): `pv::ResolveForm`, `pv::ToVariable` (Bool, Int, Float, String, `None` as a typed None, form arguments, arrays of Bool/Int/Float/String; arrays of objects are rejected `unsupported`), `pv::FromVariable` (everything except aliases), `pv::FloatToJson` (unchanged from Task 27), `sig::IsA`, `sig::FindProperty` (returns the `PropertyTypeInfo`), and the file-local helpers `FindBound`, `BindObject`, `Describe`, `AliasObjectToJson` (stub) that Task 29 edits.
 
 Rules this task implements:
 - **Missing is `not_found`; different is `stale_reference`** (spec 4.4): a form id that no longer exists, or a deleted form, is `not_found` for plugin and runtime forms alike. `stale_reference` is only for a runtime (`0xFF`) form that still exists but whose base form or type differs from the fingerprint.
-- **Arrays:** arrays of Bool/Int/Float/String are sent and returned; at most 128 elements (`unsupported` beyond that, before `CreateArray`). Sending an array of objects is `unsupported` in v1 (building one needs the element's script `TypeInfo`, which no spike verifies). Reading an object array result is supported; the element kind comes from the items (`Form` for an empty one), never from `arr->type_info()`.
+- **Arrays:** arrays of Bool/Int/Float/String are sent and returned. An **argument** holds at most 128 elements: a longer one is `type_mismatch` naming the limit, refused by core while it parses the request (`value_from_json`, before dispatch); the plugin's own check before `CreateArray` is only a second line of defence and gives the same code. **Results are not capped**: `FromVariable` does not go through core's codec, and SKSE or PapyrusUtil natives can return longer arrays (for example `GetContainerForms` on a player with more than 128 item types), which are passed through. Sending an array of objects is `unsupported` in v1 (building one needs the element's script `TypeInfo`, which no spike verifies). Reading an object array result is supported; the element kind comes from the items (`Form` for an empty one), never from `arr->type_info()`.
+- **`None` arguments** become a typed None, `Variable(declared type)`: the declared object or array type with no value. Never `SetObject(nullptr, ...)`, which asserts a non-null object in CommonLib.
 - **Alias handles are tested before form handles** in `ObjectToJson`: an alias handle carries its quest's FormID in the low 32 bits, so a form-first decode would answer `Quest`. Alias results are recognised here and converted in Task 29 (until then `unsupported`).
 - A parameter typed as a script (not a native class) requires that script to be attached to the object (`FindBoundObject`); otherwise `type_mismatch` naming the parameter.
 
@@ -39,7 +40,26 @@ def test_static_call_returns_form(game):
 def test_form_argument_round_trip(game):
     sword = game.call("Game", "GetFormFromFile", 0x012EB7, "Skyrim.esm")
     assert sword.form_key == IRON_SWORD and sword.type == "Weapon"
-    assert game.call("Game", "IsObjectFavorited", sword) is False  # a Form parameter given a Weapon reference
+    # A Form parameter given a Weapon. False is also what a None argument would give, so this alone does not prove the
+    # form arrived: Task 29's GetItemCount/AddItem/RemoveItem round trip does.
+    assert game.call("Game", "IsObjectFavorited", sword) is False
+
+
+def test_form_of_the_wrong_class_is_rejected_before_dispatch(game):
+    # BindObject's reject path: an ObjectReference parameter given a base Weapon.
+    sword = game.call("Game", "GetFormFromFile", 0x012EB7, "Skyrim.esm")
+    with pytest.raises(errors.TypeMismatch, match="arRef"):
+        game.call("Debug", "SendAnimationEvent", sword, "x")
+
+
+def test_none_for_an_object_parameter(game):
+    assert game.call("Game", "IsObjectFavorited", None) is False  # a typed None Form
+
+
+def test_none_for_an_array_parameter(game):
+    r = game.call("Utility", "ResizeIntArray", None, 2, 0)  # a typed None Int[]
+    assert r is None or isinstance(r, list)
+    assert 1 <= game.call("Utility", "RandomInt", 1, 6) <= 6  # the VM and the game carry on
 
 
 def test_missing_forms_are_not_found_not_stale(game):
@@ -65,11 +85,12 @@ def test_array_argument_with_wrong_element_type(session):
     assert r["ok"] is False and r["error"]["code"] in ("type_mismatch", "bad_request")
 
 
-def test_array_longer_than_128_is_unsupported(session):
+def test_array_argument_longer_than_128_is_type_mismatch(session):
+    # Sent raw: the Python client refuses it before it leaves the process. Core refuses it while parsing the request.
     r = raw_call(session, "Utility", "ResizeIntArray", [{"array": "Int", "items": list(range(129))}, 5, 0])
-    assert r["ok"] is False and r["error"]["code"] in ("unsupported", "bad_request")
+    assert r["ok"] is False and r["error"]["code"] == "type_mismatch" and "128" in r["error"]["message"], r
 ```
-(`Game.GetFormFromFile`, `Game.IsObjectFavorited`, `Utility.CreateFloatArray` are in vanilla `Game.psc`/`Utility.psc`; if this runtime's scripts lack one, substitute a function of the same shape and record it in `spikes/RESULTS.md`. A `Form` built locally is sent as given; `game.form(...)`, which asks the plugin to resolve it, arrives with `form.resolve` in Task 29. Core may already refuse a 129-element array while parsing the request, hence `bad_request` is accepted there.)
+(`Game.GetFormFromFile`, `Game.IsObjectFavorited`, `Utility.CreateFloatArray`, `Debug.SendAnimationEvent(ObjectReference arRef, string asEventName)` are in vanilla `Game.psc`/`Utility.psc`/`Debug.psc`; if this runtime's scripts lack one, substitute a function of the same shape and record it in `spikes/RESULTS.md`. A `Form` built locally is sent as given; `game.form(...)`, which asks the plugin to resolve it, arrives with `form.resolve` in Task 29.)
 
 - [ ] **Step 2: Signatures: `IsA` and `FindProperty`**
 
@@ -83,17 +104,17 @@ bool IsA(const std::string& script, const std::string& ancestor)
     return false;
 }
 
-RE::BSScript::TypeInfo FindProperty(const std::string& script, const std::string& property)
+RE::BSScript::PropertyTypeInfo FindProperty(const std::string& script, const std::string& property)
 {
     auto info = TypeOf(script);
     if (!info) throw ProtocolError(ErrorCode::not_found, "no script named " + script + " is loaded");
     for (auto* t = info.get(); t; t = t->GetParent())
         for (std::uint32_t i = 0; i < t->GetNumProperties(); ++i)
-            if (IEquals(t->GetPropertyIter()[i].name.c_str(), property)) return t->GetPropertyIter()[i].info.type;
+            if (IEquals(t->GetPropertyIter()[i].name.c_str(), property)) return t->GetPropertyIter()[i].info;  // a copy
     throw ProtocolError(ErrorCode::not_found, "script " + script + " has no property " + property);
 }
 ```
-`GetNumProperties`, `GetPropertyIter()[i].name` and `.info.type` are verified at the pin (`API-VERIFICATION.md`); use S7's recorded form if it differs.
+`GetNumProperties`, `GetPropertyIter()[i].name` and `.info` (a `PropertyTypeInfo`: `type`, `getFunction`, `setFunction`, `autoVarIndex`) are verified at the pin (`API-VERIFICATION.md`); use S7's recorded form if it differs.
 
 - [ ] **Step 3: Papyrus values**
 
@@ -103,8 +124,6 @@ Replace `plugin/src/PapyrusValues.cpp` with (everything from Task 27 is kept; ad
 #include "Lifecycle.h"
 #include "Signatures.h"
 #include "spy/refs.h"
-#include <cmath>
-#include <cstdlib>
 #include <format>
 
 // RE/Skyrim.h pulls in windows.h, whose GetObject macro (-> GetObjectA) breaks Variable::GetObject() (compile error C2039).
@@ -141,14 +160,6 @@ std::string Describe(const FormRef& r)
     return r.form_key ? *r.form_key : std::format("0x{:08X}", r.form_id.value_or(0));
 }
 
-// A Papyrus Float is a 32-bit float. Widening it to double prints 0.1 as 0.10000000149011612; print the
-// shortest text that round-trips the float and parse that instead. NaN and infinity have no JSON form.
-json FloatToJson(float f)
-{
-    if (!std::isfinite(f)) throw ProtocolError(ErrorCode::unsupported, "the result is a non-finite Float, which JSON cannot carry");
-    return std::strtod(std::format("{}", f).c_str(), nullptr);
-}
-
 // Element type of an array of Bool/Int/Float/String. Spelled out, not computed from enum arithmetic.
 TypeInfo ElementType(const TypeInfo& arrayType)
 {
@@ -182,6 +193,8 @@ void BindObject(const void* ptr, RE::VMTypeID type, const std::string& nativeCla
     auto* policy = VM()->GetObjectHandlePolicy();
     RE::BSTSmartPointer<RE::BSScript::Object> bound;
     if (FindBound(policy->GetHandleForObject(type, ptr), want, bound)) {
+        // GetRawType() on purpose: for a class type it is the class-typed value (the ObjectTypeInfo pointer), as
+        // PackHandle sets it. GetUnmangledRawType() would drop the class and pass a plain kObject (API-VERIFICATION.md).
         out.SetObject(bound, declared.GetRawType());
         return;
     }
@@ -209,6 +222,14 @@ json ObjectToJson(const RE::BSScript::Object& obj)
     throw ProtocolError(ErrorCode::unsupported, std::string("the result is a ") + (cls ? cls->GetName() : "script") +
         " object, which protocol v1 cannot return (for example ActiveMagicEffect)");
 }
+}
+
+// Unchanged from Task 27: core's encoder; shortest round-trip text, non-finite -> null (PROTOCOL.md).
+json FloatToJson(float f)
+{
+    Value v;
+    v.v = f;
+    return value_to_json(v);
 }
 
 std::string ScriptClassOf(const RE::TESForm* form)
@@ -279,21 +300,24 @@ void ToVariable(const Value& v, const TypeInfo& t, const std::string& param, Var
             "parameter " + param + " expects " + TypeName(t) + ", got " + std::string(value_kind(v)));
     };
     const bool isNull = std::holds_alternative<std::monostate>(v.v);
+    // None for an object or array parameter: a typed None, the declared type with no value. (SetObject(nullptr, ...)
+    // asserts a non-null object in CommonLib; SetNone() would drop the declared type.)
+    if (isNull && (t.IsArray() || t.IsObject())) {
+        out = Variable(t);
+        return;
+    }
     if (t.IsArray()) {
-        if (isNull) {
-            out.SetNone();  // verify (S7, Task 9): or SetArray(nullptr)
-            return;
-        }
         if (t.IsObjectArray())
             throw ProtocolError(ErrorCode::unsupported, "parameter " + param + " is an array of objects; protocol v1 cannot send those "
                 "(pass the objects one at a time, or call a Papyrus helper that takes them individually)");
         const auto* a = std::get_if<ArrayValue>(&v.v);
         if (!a) mismatch();
         const auto elem = ElementType(t);
-        // Papyrus arrays hold at most 128 elements (Array::MAX_SIZE, which is private, so it is repeated here); reject longer ones instead of asking the VM.
+        // Second line of defence only: core already refused a longer argument while parsing the request (type_mismatch,
+        // kMaxArrayItems). Papyrus arrays hold at most 128 elements (Array::MAX_SIZE is private, so it is repeated here).
         constexpr std::size_t kMaxPapyrusArray = 128;
         if (a->items.size() > kMaxPapyrusArray)
-            throw ProtocolError(ErrorCode::unsupported, std::format("parameter {}: Papyrus arrays hold at most {} elements, got {}", param, kMaxPapyrusArray, a->items.size()));
+            throw ProtocolError(ErrorCode::type_mismatch, std::format("parameter {}: a Papyrus array holds at most {} items, got {}", param, kMaxPapyrusArray, a->items.size()));
         RE::BSTSmartPointer<RE::BSScript::Array> arr;
         if (!VM()->CreateArray(elem, static_cast<std::uint32_t>(a->items.size()), arr) || !arr)
             throw ProtocolError(ErrorCode::vm_error, "could not create an array for parameter " + param);
@@ -303,10 +327,6 @@ void ToVariable(const Value& v, const TypeInfo& t, const std::string& param, Var
         return;
     }
     if (t.IsObject()) {
-        if (isNull) {
-            out.SetObject(nullptr, t.GetRawType());  // verify (S7, Task 9): a null object of the declared type
-            return;
-        }
         if (const auto* f = std::get_if<FormRef>(&v.v)) {
             auto* form = ResolveForm(*f);
             BindObject(form, static_cast<RE::VMTypeID>(form->GetFormType()), ScriptClassOf(form), Describe(*f), t, param, out);
@@ -347,6 +367,7 @@ json FromVariable(const Variable& v)
     if (t.IsArray()) {
         auto arr = v.GetArray();
         if (!arr) return nullptr;
+        // Results are not capped at 128 (index Contracts): SKSE and PapyrusUtil natives can return longer arrays.
         // Verify whether BSScript::Array exposes a lock; if so hold it while copying (a Papyrus thread may resize it).
         json items = json::array();
         for (std::uint32_t i = 0; i < arr->size(); ++i) items.push_back(FromVariable((*arr)[i]));
@@ -384,15 +405,17 @@ tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin Sk
 tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package
 tools/launch_game.sh
 source tools/env.sh
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "Main Menu" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
-uv run --project python pytest livetest/test_m1_mainmenu.py -q
+export SINCE="$SKYRIM_PYTHON_STATE/launch.stamp"   # every wait ignores logs from an earlier run
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
+SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_mainmenu.py -q -rs
 # Manual: press Continue. Then:
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "interactive = true" 300
-uv run --project python pytest livetest/test_m1_calls.py -q
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: interactive = true" 300
+SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_calls.py -q -rs
+unset SINCE
 ```
-(Use Task 25's exact log phrases for the main menu and the interactive signal if they differ.)
 
-Expected: `test_m1_mainmenu.py` passes (3); `test_m1_calls.py` passes in full. `test_form_argument_round_trip` is the first live proof that a form argument reaches a native `Form` parameter. If it fails with `vm_error` or the game crashes, STOP: the `PackHandle` route S7 recorded differs from the code here. If `test_primitive_arrays_round_trip` fails on `CreateFloatArray`, check `Utility.psc` and substitute.
+Expected: `test_m1_mainmenu.py` passes (3); `test_m1_calls.py` passes in full. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. `test_form_argument_round_trip` shows a form argument is accepted for a native `Form` parameter, and `test_form_of_the_wrong_class_is_rejected_before_dispatch` that `BindObject` refuses the wrong class; the proof that the form itself arrives (not a None) is Task 29's `GetItemCount` round trip, which carries the STOP for the form-argument route. If any form-argument test fails with `vm_error` or the game crashes, STOP: the `PackHandle` route S7 recorded differs from the code here. If a `None` test crashes the game or fails with `vm_error`, STOP: the typed None (`Variable(t)`) is not what the VM accepts; record what happened. If `test_primitive_arrays_round_trip` fails on `CreateFloatArray`, check `Utility.psc` and substitute.
 
 - [ ] **Step 5: Commit**
 

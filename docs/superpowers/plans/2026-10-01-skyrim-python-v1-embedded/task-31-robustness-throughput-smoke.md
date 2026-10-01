@@ -1,6 +1,6 @@
 # Task 31: Robustness, throughput and the in-process smoke script
 
-Adapted from: branch `plan-out-of-process`, task 19 (`task-19-robustness-and-throughput-baseline.md`). The robustness tests and the throughput curve are kept and now run through the dev bridge. New here: an in-process smoke script that makes the same calls from inside the game (the shipping mode), a deliberately broken script (a Python exception must not touch the game), and throughput with and without a CPU-spinning Python thread inside the game (GIL hand-off cost, Review Focus 6).
+Adapted from: branch `plan-out-of-process`, task 19 (`task-19-robustness-and-throughput-baseline.md`). The robustness tests and the throughput curve are kept and now run through the dev bridge. New here: an in-process smoke script that makes the same calls from inside the game (the shipping mode) and records which transport it used and how the host loaded every script (including Task 26's deliberately broken `livetest_broken`), and throughput with and without a CPU-spinning Python thread inside the game (GIL hand-off cost, Review Focus 6).
 
 > Part of the [skyrim-python v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), sections 4.5, 4.10, 8. Steps use checkbox (`- [ ]`) syntax.
 
@@ -12,15 +12,15 @@ Adapted from: branch `plan-out-of-process`, task 19 (`task-19-robustness-and-thr
 
 **Files:**
 - Create: `livetest/scripts/livetest_smoke/__init__.py` (in-process smoke script and benchmark; deployed to the game's `scripts/` folder, never shipped to players)
-- Create: `livetest/scripts/livetest_broken/__init__.py` (raises in `setup`, on purpose)
+- Unchanged: `livetest/scripts/livetest_broken/__init__.py` exists since Task 26 (its message is asserted by Task 26's `test_m1_bridge.py`); do not create or edit it here.
 - Create: `livetest/smoke.py` (Linux side: reads the smoke results, sends commands through a control file)
 - Create: `livetest/test_m1_robustness.py`, `livetest/test_m1_throughput.py`, `livetest/results/.gitkeep`
 
 **Interfaces:**
-- Consumes: the live plugin from Task 30; `skyrim` (Tasks 20-22: `Game`, `errors`, `values.Form`, `values.Fingerprint`); `_skyrim.config()["log_dir"]` and `_skyrim.log(level, msg)` (Task 19 contract); `skyrim._host` loads each package in `scripts/` and calls `setup(game)` on the host thread, `teardown()` on reload (Task 24); `tools/deploy.sh ... --scripts DIR` (Task 26); `livetest/support.py` (`raw_connect`, `rpc`, `encode`, `read_frame`, `send_request`) and fixtures `session`, `game` (Tasks 26-27); `tools/launch_game.sh` touches `~/.local/state/skyrim-python/launch.stamp` (Task 1); `tools/env.sh` exports `SKYRIM_PYTHON_SESSION` (the session file sits in the same folder as `python.log`: index Fixed paths).
+- Consumes: the live plugin from Task 30; `skyrim` (Tasks 20-22: `Game`, `errors`, `values.Form`, `values.Fingerprint`); `_skyrim.config()["log_dir"]` and `_skyrim.log(level, msg)` (Task 19 contract); `skyrim._host` loads each package in `scripts/` and calls `setup(game)` on the host thread, `teardown()` on reload (Task 24); `tools/deploy.sh ... --scripts DIR` (Task 26); `livetest/support.py` (`raw_connect`, `rpc`, `read_frame`, `send_request`, `fresh`) and fixtures `session`, `game` (Tasks 26-27); `tools/launch_game.sh` touches `$SKYRIM_PYTHON_STATE/launch.stamp` (Task 1), which `support.fresh` reads; `tools/env.sh` exports `SKYRIM_PYTHON_LOG` (`python.log`, in the folder that also holds the smoke files: index Fixed paths); `skyrim._host.status()["scripts"]` (Task 24).
 - Produces:
-  - In the game's Python log folder (`.../SKSE/SkyrimPython/`): `livetest_smoke.json` (`{status: "pass"|"fail", checks: [{name, ok, error?}], thread, switch_interval_s, time}`), and the control pair `livetest_control.json` (`{seq, cmd, ...}`, written by Linux) / `livetest_reply.json` (`{seq, result}`, written by the script). Commands: `spin_on`, `spin_off` (reply carries `spin_loops`), `bench` (`calls`; reply `{calls, seconds, per_s, p50_ms, p99_ms, spinning}`).
-  - `livetest/results/throughput.json`: the old keys (`date`, `game_version`, `runtime`, `sequential_calls`, `sequential_seconds`, `sequential_per_s`, `p50_ms`, `p99_ms`, `curve` of `{depth, calls, seconds, per_s, busy, fps_observed}` for depths 1, 8, 32, 128, 256, `fps_note`) plus `spin`: `{switch_interval_s, remote: {no_spin: {per_s, p50_ms, p99_ms}, spin: {...}}, inprocess: {no_spin: {...}, spin: {...}}, spin_loops, fps_observed_spin}`.
+  - In the game's Python log folder (`.../SKSE/SkyrimPython/`): `livetest_smoke.json` (`{status: "pass"|"fail", checks: [{name, ok, error?}], backend, transport, scripts, thread, switch_interval_s, time}`; `backend` is `_skyrim.BACKEND`, `transport` the class name of the script's `game.transport`, `scripts` the host's `status()["scripts"]` for this run), and the control pair `livetest_control.json` (`{seq, cmd, ...}`, written by Linux) / `livetest_reply.json` (`{seq, result}`, written by the script). Commands: `spin_on`, `spin_off` (reply carries `spin_loops`), `bench` (`calls`; reply `{calls, seconds, per_s, p50_ms, p99_ms, spinning}`).
+  - `livetest/results/throughput.json`: `date`, `game_version`, `runtime`, `sequential_calls`, `sequential_seconds`, `sequential_per_s`, `p50_ms`, `p99_ms`, `curve` of `{depth, calls, seconds, per_s, busy}` for depths 1, 8, 32, 128, 256, plus `spin`: `{switch_interval_s, calls, remote: {no_spin: {per_s, p50_ms, p99_ms}, spin: {...}}, inprocess: {no_spin: {...}, spin: {...}}, spin_loops, fps_observed_spin}` (both `no_spin`/`spin` pairs use the same number of calls, measured back to back). Frame time is not measured here: frame stalls are pinned by spike S9 (Task 5) only.
 
 - [ ] **Step 1: The in-process scripts**
 
@@ -42,7 +42,7 @@ import threading
 import time
 
 import _skyrim
-from skyrim import errors
+from skyrim import _host, errors
 
 log = logging.getLogger("livetest_smoke")
 PLAYER_ID = 0x14
@@ -195,13 +195,17 @@ def _main(game) -> None:
             try:
                 game.wait_ready(timeout=30)
                 break
-            except Exception:  # no save loaded yet: keep waiting until a save is loaded or teardown
-                continue
+            except Exception:  # no save loaded yet (or an error raised at once): wait, never spin holding the GIL
+                if _stop.wait(1.0):
+                    return
         if _stop.is_set():
             return
         checks = run_smoke(game)
         ok = all(c["ok"] for c in checks)
         _write("livetest_smoke.json", {"status": "pass" if ok else "fail", "checks": checks,
+                                       # Evidence of the shipping mode: the game's _skyrim and the in-process transport.
+                                       "backend": _skyrim.BACKEND, "transport": type(game.transport).__name__,
+                                       "scripts": _host.status()["scripts"],  # how the host loaded every script, this run
                                        "thread": threading.current_thread().name,
                                        "switch_interval_s": sys.getswitchinterval(), "time": time.time()})
         _skyrim.log("info" if ok else "error",
@@ -221,29 +225,19 @@ def teardown() -> None:
     _spin_stop.set()
 ```
 
-`livetest/scripts/livetest_broken/__init__.py`:
-```python
-"""Raises in setup, on purpose (Task 31). skyrim._host must log the traceback, mark this script failed,
-and keep loading the others; the game must not notice."""
-
-
-def setup(game):
-    raise RuntimeError("livetest_broken: deliberate failure in setup")
-```
-
 `livetest/smoke.py`:
 ```python
-"""Linux side of livetest_smoke: its files live next to python.log, in the same folder as the session file."""
+"""Linux side of livetest_smoke: its files live next to python.log (SKYRIM_PYTHON_LOG, from tools/env.sh)."""
 import json
 import os
 import pathlib
 import time
 
-STAMP = pathlib.Path.home() / ".local/state/skyrim-python/launch.stamp"
+from support import fresh
 
 
 def py_dir() -> pathlib.Path:
-    return pathlib.Path(os.environ["SKYRIM_PYTHON_SESSION"]).parent
+    return pathlib.Path(os.environ["SKYRIM_PYTHON_LOG"]).parent
 
 
 def _read(name: str):
@@ -253,20 +247,12 @@ def _read(name: str):
         return None
 
 
-def python_log_text() -> str:
-    try:
-        return (py_dir() / "python.log").read_text(errors="replace")
-    except OSError:
-        return ""
-
-
 def wait_smoke(timeout: float = 180.0) -> dict:
-    """The smoke results of THIS game run (written after the last tools/launch_game.sh)."""
+    """The smoke results of THIS game run (written after the last tools/launch_game.sh: support.fresh)."""
     path = py_dir() / "livetest_smoke.json"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        fresh = path.exists() and (not STAMP.exists() or path.stat().st_mtime >= STAMP.stat().st_mtime)
-        if fresh and (data := _read(path.name)):
+        if fresh(path) and (data := _read(path.name)):
             return data
         time.sleep(0.5)
     raise AssertionError(f"no fresh {path} within {timeout} s: is livetest_smoke deployed "
@@ -300,7 +286,7 @@ import pytest
 
 from skyrim import errors
 from skyrim.values import Fingerprint, Form
-from smoke import python_log_text, wait_smoke
+from smoke import wait_smoke
 from support import raw_connect, read_frame, rpc, send_request
 
 PLAYER = Form(form_id=0x14)
@@ -314,33 +300,24 @@ def ready(game):
     game.wait_ready(timeout=120)
 
 
-def late_dropped(session) -> int:
+def diagnostics(session) -> dict:
     s = raw_connect(session)
     try:
-        return rpc(s, "game.state")["result"]["diagnostics"]["late_results_dropped"]
+        return rpc(s, "game.state")["result"]["diagnostics"]
     finally:
         s.close()
 
 
 def test_in_process_smoke_script_passed():
-    data = wait_smoke()
+    data = wait_smoke()  # written in this run (support.fresh)
     failed = [c for c in data["checks"] if not c["ok"]]
     assert data["status"] == "pass" and not failed, failed
-    assert data["thread"] == "livetest_smoke"  # ran on its own thread, not the host thread or the game's
-
-
-def test_a_failing_script_is_logged_and_contained(game):
-    wait_smoke()  # the host has finished loading scripts by the time the smoke script reports
-    text = python_log_text()
-    assert "livetest_broken: deliberate failure in setup" in text and "Traceback" in text
-    assert 1 <= game.call("Utility", "RandomInt", 1, 6) <= 6  # the bridge and the game carry on
-
-
-def test_int_overflow_is_rejected_by_the_plugin(session):
-    s = raw_connect(session)
-    r = rpc(s, "papyrus.call_static", {"script": "Utility", "function": "RandomInt", "args": [1, 2147483648]})
-    s.close()
-    assert r["ok"] is False and r["error"]["code"] == "type_mismatch"
+    # The shipping mode really ran: the game's _skyrim and the in-process transport, not a bridge-backed Game.
+    assert data["backend"] == "game" and data["transport"] == "InProcessTransport", data
+    # The host loaded every script in this run: the broken one failed (Task 26's livetest_broken), the smoke one ran.
+    scripts = data["scripts"]
+    assert scripts["livetest_broken"].startswith("failed"), scripts
+    assert scripts["livetest_smoke"] == "ok", scripts
 
 
 def test_runtime_reference_fingerprint(game):
@@ -367,31 +344,20 @@ def test_runtime_reference_fingerprint(game):
 
 def test_disconnect_with_calls_in_flight_drops_the_results(session, game):
     n = 32  # enough to prove the point, few enough that the VM is never flooded
-    before = late_dropped(session)
+    before = diagnostics(session)
     s = raw_connect(session)
     for i in range(1, n + 1):
         send_request(s, "papyrus.call_static",
                      {"script": "Utility", "function": "Wait", "args": [2.0], "timeout_ms": 30000}, req_id=i)
     time.sleep(0.3)  # let the bridge submit them, so they really are in flight when we close
+    assert diagnostics(session)["in_flight"] >= before["in_flight"] + n
     s.close()  # the bridge cancels the connection's tickets (Task 23)
+    time.sleep(0.5)  # well before the 2 s waits finish in the game
+    # Dispatcher::Cancel releases each entry at once: the closed connection holds nothing any more.
+    assert diagnostics(session)["in_flight"] == before["in_flight"]
     time.sleep(4)  # the 32 waits finish in the game
-    assert late_dropped(session) - before == n  # every late result was dropped and counted, none delivered
-    assert 1 <= game.call("Utility", "RandomInt", 1, 6) <= 6
-    # The closed connection's slots were released: a new connection is not told `busy`.
-    s2 = raw_connect(session)
-    for i in range(1, n + 1):
-        send_request(s2, "papyrus.call_static", {"script": "Utility", "function": "Wait", "args": [0.2]}, req_id=i)
-    s2.settimeout(30)
-    assert all(read_frame(s2)["ok"] for _ in range(n))
-    s2.close()
-
-
-def test_timeout_is_reported_and_late_result_dropped(session, game):
-    before = late_dropped(session)
-    with pytest.raises(errors.Timeout):
-        game.call("Utility", "Wait", 2.0, timeout=0.5)
-    time.sleep(3)
-    assert late_dropped(session) == before + 1
+    # Every late result was dropped and counted, none delivered.
+    assert diagnostics(session)["late_results_dropped"] - before["late_results_dropped"] == n
     assert 1 <= game.call("Utility", "RandomInt", 1, 6) <= 6
 
 
@@ -429,7 +395,7 @@ def test_inflight_call_is_failed_when_a_save_starts_loading(session):
     assert r["ok"] is False and r["error"]["code"] == "not_ready" and r["error"]["detail"]["reason"] == "loading", r
     s.close()
 ```
-The two manual tests meet the spec's `require_unpaused` and load-cancellation checks without blocking an unattended run. If `paused` is stale or wrong, `life::Paused()` (Task 25) is read at the wrong moment: record that in `spikes/RESULTS.md` and read `RE::UI::GameIsPaused()` where it is used.
+(Task 27 already pins an out-of-range Int and a timed-out call's late result; they are not repeated here.) The two manual tests meet the spec's `require_unpaused` and load-cancellation checks without blocking an unattended run. If `paused` is stale or wrong, `life::Paused()` (Task 25) is read at the wrong moment: record that in `spikes/RESULTS.md` and read `RE::UI::GameIsPaused()` where it is used.
 
 - [ ] **Step 3: The throughput baseline, with and without a spinning Python thread**
 
@@ -495,11 +461,11 @@ def test_throughput_baseline(game):
         busy = results.count(None)
         assert all(r is None or 1 <= r <= 6 for r in results)
         curve.append({"depth": depth, "calls": CALLS_PER_DEPTH, "seconds": round(secs, 3),
-                      "per_s": round((CALLS_PER_DEPTH - busy) / secs, 1), "busy": busy,
-                      # No API reports fps: read it from an overlay while this runs and set SPY_FPS (or edit the JSON).
-                      "fps_observed": os.environ.get("SPY_FPS")})
+                      "per_s": round((CALLS_PER_DEPTH - busy) / secs, 1), "busy": busy})
 
-    # GIL hand-off cost: the same calls with one CPU-bound Python thread spinning inside the game.
+    # GIL hand-off cost: the same calls with one CPU-bound Python thread spinning inside the game. Each no-spin
+    # baseline uses the same number of calls as its spin sample and is taken right before it.
+    remote_no_spin = summary(*sequential(game, SPIN_CALLS))
     inproc_no_spin = command("bench", calls=SPIN_CALLS)
     command("spin_on")
     try:
@@ -522,13 +488,15 @@ def test_throughput_baseline(game):
         "p50_ms": round(statistics.median(lat), 2),
         "p99_ms": round(lat[int(len(lat) * 0.99)], 2),
         "curve": curve,
-        "fps_note": "fps_observed is read by the owner from an overlay; null means it was not recorded",
         "spin": {
             "switch_interval_s": smoke["switch_interval_s"],
-            "remote": {"no_spin": summary(seq_s, lat), "spin": remote_spin},
+            "calls": SPIN_CALLS,
+            "remote": {"no_spin": remote_no_spin, "spin": remote_spin},
             "inprocess": {"no_spin": {k: inproc_no_spin[k] for k in ("per_s", "p50_ms", "p99_ms")},
                           "spin": {k: inproc_spin[k] for k in ("per_s", "p50_ms", "p99_ms")}},
             "spin_loops": spin_off["spin_loops"],
+            # One reading from an overlay while the spinner runs (SPY_FPS_SPIN); null if not taken. Not a frame-time
+            # measurement: frame stalls are pinned by spike S9 (Task 5).
             "fps_observed_spin": os.environ.get("SPY_FPS_SPIN"),
         },
     }
@@ -536,27 +504,30 @@ def test_throughput_baseline(game):
     RESULTS.write_text(json.dumps(out, indent=2) + "\n")
     print(json.dumps(out, indent=2))
 ```
-There is no pass threshold in v1 beyond "every call succeeds, with and without the spinner": this records the baseline M2 and skyrim-dm budget against. Read the curve, not one number: if `per_s` stops growing with depth, frames or the GIL are the limit, and the fps column tells them apart. Compare `p50_ms` with the frame time (16.7 ms at 60 fps): 2-3 frames is expected. Compare `spin.*.spin.p99_ms` with `no_spin.p99_ms`: the difference is what a busy Python thread (skyrim-dm's 66-second generation) costs a delivery call, which spike S9 (Task 5) measured first; if it is more than about `switch_interval_s` × 2 per call, note it for skyrim-dm (it can lower its own work's priority by sleeping between batches).
+There is no pass threshold in v1 beyond "every call succeeds, with and without the spinner": this records the baseline M2 and skyrim-dm budget against. Read the curve, not one number: if `per_s` stops growing with depth, frames or the GIL are the limit (this test does not tell which; spike S9's frame-time record does). Compare `p50_ms` with the frame time (16.7 ms at 60 fps): 2-3 frames is expected. Compare `spin.*.spin.p99_ms` with `no_spin.p99_ms`: the difference is what a busy Python thread (skyrim-dm's 66-second generation) costs a delivery call, which spike S9 (Task 5) measured first; if it is more than about `switch_interval_s` × 2 per call, note it for skyrim-dm (it can lower its own work's priority by sleeping between batches).
 
 - [ ] **Step 4: Run**
 
-Loading a save is manual (press Continue); every wait is bounded.
+Loading a save is manual (press Continue); every wait is bounded and ignores logs from an earlier run (`SINCE=`).
 ```bash
-touch livetest/results/.gitkeep
+mkdir -p livetest/results && touch livetest/results/.gitkeep
 tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package --scripts livetest/scripts
 tools/launch_game.sh
 source tools/env.sh
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "Main Menu" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
+export SINCE="$SKYRIM_PYTHON_STATE/launch.stamp"
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
 # Manual: press Continue. Then:
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "interactive = true" 300
-uv run --project python pytest livetest/test_m1_robustness.py livetest/test_m1_throughput.py -q -s
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: interactive = true" 300
+SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_robustness.py livetest/test_m1_throughput.py -q -s -rs
 grep '\[error\]' "$SKSE_LOG_DIR/SkyrimPython.log" | grep -v livetest_broken || echo "no unexpected errors"
 # With someone at the keyboard, the two manual tests:
-SPY_MANUAL=1 uv run --project python pytest livetest/test_m1_robustness.py -q -s -k "paused or save_starts_loading"
+SKYRIM_LIVE=1 SPY_MANUAL=1 uv run --project python pytest livetest/test_m1_robustness.py -q -s -rs -k "paused or save_starts_loading"
+unset SINCE
 ```
-(Use Task 25's exact log phrases for the main menu and the interactive signal if they differ. `--scripts livetest/scripts` deploys both `livetest_smoke` and `livetest_broken`; `tools/teardown_list.sh` lists them for removal later, with the owner's approval.)
+(`--scripts livetest/scripts` deploys both `livetest_smoke` and Task 26's `livetest_broken`; `tools/teardown_list.sh` lists them for removal later, with the owner's approval.)
 
-Expected: all pass; the two manual tests are skipped in the first run. The `grep` prints `no unexpected errors` (only the deliberate `livetest_broken` failure may log at error level; refused handshakes, bad frames and dropped connections are warnings or info). The game is still responsive afterwards. The manual run passes when a human opens a pausing menu, closes it, and loads a save as prompted.
+Expected: all pass; the two manual tests are skipped in the first run. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. The `grep` prints `no unexpected errors` (only the deliberate `livetest_broken` failure may log at error level; refused handshakes, bad frames and dropped connections are warnings or info). The game is still responsive afterwards. The manual run passes when a human opens a pausing menu, closes it, and loads a save as prompted.
 
 - [ ] **Step 5: Commit**
 

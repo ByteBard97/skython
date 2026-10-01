@@ -28,10 +28,10 @@ Adapted from: branch `plan-out-of-process`, task 17a (`task-17a-dispatch-skeleto
 - Consumes (Task 26): `spy::InstallModuleHost(ModuleHost)` call site; `livetest/conftest.py` fixtures `session` and `game` (a `skyrim.Game` connected through the bridge); `livetest/support.py` `raw_connect(session) -> socket`, `rpc(sock, op, args=None, req_id=1, timeout=30.0) -> dict`, `encode`, `read_frame`.
 - Consumes from spikes: S2 (Task 4: the VM takes ownership of the `IFunctionArguments` passed to a dispatch; which thread runs the callback; whether a failed dispatch frees the arguments). If S2 showed the VM does **not** free them on a failed dispatch, `CallStatic` must `delete args` in the failure branch.
 - Produces:
-  - `spy::game::Backend() -> spy::Backend&` (the `GameBackend` singleton) and `spy::game::GetDispatcher() -> spy::Dispatcher&` (built on first use from `settings::Get()`: `default_timeout_ms`, `max_inflight_total`; reaper started; immortal).
+  - `spy::game::Backend() -> spy::Backend&` (the `GameBackend` singleton) and `spy::game::GetDispatcher() -> spy::Dispatcher&` (built on first use from `settings::Get()`: `default_timeout_ms`, `max_inflight_total`, and `on_late` logging each dropped late result with `log::Warn`; reaper started; immortal).
   - `spy::ops::Run(const std::string& op, const json& args, Done, Cancelled, Progress)` (main thread only; never throws), `spy::ops::AddStateExtras(json&)` (main thread), `spy::ops::WithGameState(json detail) -> json`, `spy::ops::NotReady(const std::string& reason) -> OpResult`.
-  - `spy::pv::*` and `spy::sig::*` declarations (final headers; bodies arrive in Tasks 27-29 as named in the headers).
-  - `game.state` result keys: `data_ready, game_loaded, loading, interactive, paused, menus, epoch, player, game_days_passed, diagnostics{late_results_dropped, in_flight}`.
+  - `spy::pv::*` and `spy::sig::*` declarations (final headers; bodies arrive in Tasks 27-29 as named in the headers). `pv::FloatToJson(float)` is core's float encoder (`value_to_json`): shortest round-trip text, a non-finite Float becomes `null` (`PROTOCOL.md`); every Float leaving the plugin goes through it. `sig::FindProperty` returns the whole `PropertyTypeInfo` (Task 30 refuses full properties).
+  - `game.state` result keys: `data_ready, game_loaded, loading, interactive, paused, menus, epoch, player, game_days_passed, diagnostics{late_results_dropped, in_flight}` (`player` and `game_days_passed` are `null` unless a game is loaded). `Backend::BaseState()`, which `_skyrim.state()` and every `timeout`/`not_ready` detail read, carries the same keys **without** `player` and `game_days_passed`: it never blocks, so it cannot read the engine, and it leaves the keys out rather than report a wrong `null`.
 
 Rules this task implements (spec 4.3-4.5):
 - `GameBackend::Run` never blocks the caller (a Python thread inside `_skyrim.submit`): it queues exactly one `AddTask` and returns. The queued task checks `cancelled()` first (timed out, cancelled or a load started while queued) and does nothing if so.
@@ -212,8 +212,22 @@ def test_odd_timeout_values_never_hang_or_crash(session, bad):
     assert raw_state(session)["data_ready"] is True
 
 
+def steady_late_count(session, settle: float = 3.5, tries: int = 5) -> int:
+    """late_results_dropped once nothing is still on its way: two equal readings `settle` seconds apart."""
+    prev = raw_state(session)["diagnostics"]["late_results_dropped"]
+    for _ in range(tries):
+        time.sleep(settle)
+        now = raw_state(session)["diagnostics"]["late_results_dropped"]
+        if now == prev:
+            return now
+        prev = now
+    raise AssertionError("late_results_dropped kept changing: late results from earlier tests are still arriving")
+
+
 def test_late_result_after_timeout_is_dropped_and_counted(session, game):
-    before = raw_state(session)["diagnostics"]["late_results_dropped"]
+    # test_timeout_carries_game_state left a 3 s Utility.Wait running in the game; its late result must be counted
+    # before `before` is read, or this test sees two drops instead of one.
+    before = steady_late_count(session)
     with pytest.raises(errors.Timeout):
         game.call("Utility", "Wait", 1.0, timeout=0.2)
     time.sleep(2.0)  # the wait finishes in the game; its result must be dropped, not delivered
@@ -241,8 +255,9 @@ bool IsA(const std::string& script, const std::string& ancestor);
 RE::BSTSmartPointer<RE::BSScript::IFunction> FindFunction(const std::string& script, const std::string& function, bool member);
 // Converts arguments to the declared parameter types. Throws type_mismatch naming the parameter.
 std::vector<RE::BSScript::Variable> BindArgs(const RE::BSScript::IFunction& fn, const std::vector<Value>& args, const std::string& qualified);
-// Declared type of a property on `script` or its parents. Throws not_found. (Task 28)
-RE::BSScript::TypeInfo FindProperty(const std::string& script, const std::string& property);
+// The property `property` of `script` or its parents (its declared `type`; `getFunction`/`setFunction` set means a
+// full property). Throws not_found. (Task 28)
+RE::BSScript::PropertyTypeInfo FindProperty(const std::string& script, const std::string& property);
 }
 ```
 
@@ -351,6 +366,7 @@ void ToVariable(const Value& v, const RE::BSScript::TypeInfo& declared, const st
 json FromVariable(const RE::BSScript::Variable& v);      // 27 primitives and None; 28 forms and arrays; 29 aliases
 bool NeedsMainThread(const RE::BSScript::Variable& v);   // Task 27. true for an object or an array of objects
 std::string TypeName(const RE::BSScript::TypeInfo& t);   // Task 27
+json FloatToJson(float f);                               // Task 27. core's encoder: shortest round-trip text; non-finite -> null
 }
 ```
 
@@ -360,8 +376,6 @@ std::string TypeName(const RE::BSScript::TypeInfo& t);   // Task 27
 #include "Lifecycle.h"
 #include "Signatures.h"
 #include "spy/refs.h"
-#include <cmath>
-#include <cstdlib>
 #include <format>
 
 namespace spy::pv {
@@ -388,14 +402,15 @@ Fingerprint LiveFingerprint(const RE::TESForm* form)
         if (const auto* b = ref->GetBaseObject()) base = b;
     return {KeyOrId(base), ScriptClassOf(form)};
 }
+}
 
-// A Papyrus Float is 32-bit. Widening it prints 0.1 as 0.10000000149011612; print the shortest text that
-// round-trips the float and parse that. NaN and infinity have no JSON form.
+// A Papyrus Float is 32-bit. Widening it prints 0.1 as 0.10000000149011612. Core's encoder (value_to_json) prints the
+// shortest text that round-trips the float, and sends NaN and infinity as null (PROTOCOL.md): one rule for every Float.
 json FloatToJson(float f)
 {
-    if (!std::isfinite(f)) throw ProtocolError(ErrorCode::unsupported, "the result is a non-finite Float, which JSON cannot carry");
-    return std::strtod(std::format("{}", f).c_str(), nullptr);
-}
+    Value v;
+    v.v = f;
+    return value_to_json(v);
 }
 
 std::string ScriptClassOf(const RE::TESForm* form)
@@ -602,7 +617,7 @@ void AddStateExtras(json& s)
 {
     if (!life::GameLoaded() || life::Loading()) return;  // recheck: a load may have started since submit
     if (auto* player = RE::PlayerCharacter::GetSingleton()) s["player"] = form_ref_to_json(pv::DescribeForm(player));
-    if (auto* cal = RE::Calendar::GetSingleton()) s["game_days_passed"] = cal->GetDaysPassed();
+    if (auto* cal = RE::Calendar::GetSingleton()) s["game_days_passed"] = pv::FloatToJson(cal->GetDaysPassed());  // 32-bit float
 }
 
 json WithGameState(json detail)
@@ -692,6 +707,7 @@ public:
         });
     }
 
+    // No player / game_days_passed here: BaseState never blocks, so it cannot ask the main thread (index Contracts).
     json BaseState() override { return WithDiagnostics(life::BaseState()); }
 
     std::optional<std::string> NotReadyReason(bool require_unpaused) override { return life::NotReadyReason(require_unpaused); }
@@ -701,16 +717,17 @@ public:
 private:
     static json WithDiagnostics(json s)
     {
-        s["player"] = nullptr;
-        s["game_days_passed"] = nullptr;
         auto& d = GetDispatcher();
         s["diagnostics"] = {{"late_results_dropped", d.LateResults()}, {"in_flight", d.InFlight()}};
         return s;
     }
 
+    // The game.state op: BaseState() plus player and game_days_passed (null until AddStateExtras fills them).
     void State(Done done, Cancelled cancelled)
     {
         json s = WithDiagnostics(life::BaseState());
+        s["player"] = nullptr;
+        s["game_days_passed"] = nullptr;
         // Answer at once at the main menu or while loading; ask the main thread only when it can answer.
         if (!life::GameLoaded() || life::Loading()) return done(OpResult::Ok(std::move(s)));
         SKSE::GetTaskInterface()->AddTask([done, cancelled, s = std::move(s)]() mutable {
@@ -739,7 +756,11 @@ spy::Dispatcher& GetDispatcher()
 {
     static spy::Dispatcher* dispatcher = [] {
         const auto& cfg = settings::Get();
-        auto* d = new spy::Dispatcher(Backend(), spy::DispatcherOptions{cfg.default_timeout_ms, cfg.max_inflight_total});
+        spy::DispatcherOptions opts;
+        opts.default_timeout_ms = cfg.default_timeout_ms;
+        opts.max_inflight_total = cfg.max_inflight_total;
+        opts.on_late = [](const std::string& line) { log::Warn("game backend: " + line); };  // a result nobody waits for
+        auto* d = new spy::Dispatcher(Backend(), opts);
         d->StartReaper();
         log::Info("game backend: dispatcher ready (default timeout " + std::to_string(cfg.default_timeout_ms) +
                   " ms, max in flight " + std::to_string(cfg.max_inflight_total) + ")");
@@ -769,22 +790,28 @@ Expected: `no Python includes: OK`.
 
 - [ ] **Step 7: Build, deploy, run the live tests**
 
-Every wait is bounded; loading a save is a manual step (the owner presses Continue). If nobody is at the keyboard, STOP and ask.
+Every wait is bounded and starts from this launch (`SINCE=`), so a log from an earlier run cannot satisfy it; loading a save is a manual step (the owner presses Continue). If nobody is at the keyboard, STOP and ask.
 ```bash
 tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
 tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --python --package --scripts livetest/scripts
 tools/launch_game.sh
 source tools/env.sh
+export SINCE="$SKYRIM_PYTHON_STATE/launch.stamp"
 tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "game backend: dispatcher ready" 600 || echo "STOP: the dispatcher did not start; ask the owner"
-SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "Main Menu opened" 600
-uv run --project python pytest livetest/test_m1_mainmenu.py -q
+# The bridge (and this run's session.json) exists only once the host reports; before that the tests would read the
+# previous run's port and token.
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "python host: (running|failed|disabled)" 600
+grep -q "python host: running" "$SKSE_LOG_DIR/SkyrimPython.log" || echo "STOP: Python is not running; read the log"
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: Main Menu open" 600
+SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_mainmenu.py -q -rs
 # Manual: press Continue in the game. Then:
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "interactive = true" 300
-uv run --project python pytest livetest/test_m1_calls.py -q
+tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: interactive = true" 300
+SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_calls.py -q -rs
+unset SINCE
 ```
 (Two `remote_build.sh` calls: the script fetches one DLL per call, and `deploy.sh` refuses a core DLL older than the loader. `livetest/scripts` exists since Task 26.)
 
-Expected at the main menu: `test_m1_mainmenu.py` passes (3 tests). After the save is loaded: `test_m1_calls.py` passes (all tests; `test_odd_timeout_values_never_hang_or_crash` counts 6). This is the first time a Papyrus call travels from Linux through the dev bridge, `_skyrim`, the Dispatcher and the VM. If `StringUtil` fails, SKSE's script is not loaded: check `Scripts/StringUtil.pex` and substitute, recording which. If `Utility.RandomInt` fails with `vm_error`, read `Papyrus.0.log` and STOP: the argument-ownership result from S2 does not hold here. If `test_timeout_carries_game_state` fails only because `paused`/`menus` are missing from the timeout detail, the Dispatcher (Task 18) is not adding `BaseState()`'s `paused` and `menus` to timeout errors as spec 4.1 requires: fix it there, not here.
+Expected at the main menu: `test_m1_mainmenu.py`: `3 passed`. After the save is loaded: `test_m1_calls.py` passes (all tests; `test_odd_timeout_values_never_hang_or_crash` counts 6). Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure: nothing ran. The core log shows one `game backend: late result dropped: ...` warning per dropped late result (from `on_late`). This is the first time a Papyrus call travels from Linux through the dev bridge, `_skyrim`, the Dispatcher and the VM. If `StringUtil` fails, SKSE's script is not loaded: check `Scripts/StringUtil.pex` and substitute, recording which. If `Utility.RandomInt` fails with `vm_error`, read `Papyrus.0.log` and STOP: the argument-ownership result from S2 does not hold here. If `test_timeout_carries_game_state` fails only because `paused`/`menus` are missing from the timeout detail, the Dispatcher (Task 18) is not adding `BaseState()`'s `paused` and `menus` to timeout errors as spec 4.1 requires: fix it there, not here.
 
 - [ ] **Step 8: Commit**
 
