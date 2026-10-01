@@ -444,7 +444,7 @@ TEST_CASE("responses built by the plugin match the fixture shapes")
     auto fx = load("responses.json");
     REQUIRE(fx["valid"].size() >= 3);
     CHECK(same_text(spy::make_ok(1, 6), fx["valid"][0]));
-    CHECK(same_text(spy::make_error(2, spy::ErrorCode::not_ready, "a game is loading", {{"reason", "loading"}}), fx["valid"][1]));
+    CHECK(same_text(spy::make_error(2, spy::ErrorCode::not_ready, "a game is loading", {{"reason", "loading"}, {"paused", false}, {"menus", spy::json::array()}}), fx["valid"][1]));
     // valid[2]: a form reference result, built by the codec the way the plugin builds it
     spy::FormRef actor;
     actor.form_id = 20;
