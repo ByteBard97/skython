@@ -1,0 +1,213 @@
+"""The Game API, the same in both modes. A Game talks to the game through a Transport:
+skyrim.inprocess.InProcessTransport inside the game (over the built-in _skyrim module), or
+skyrim.remote.RemoteTransport from another process (over the dev bridge, Task 22)."""
+import math
+import time
+from typing import Any, Protocol
+
+from . import _protocol_generated as _g
+from . import errors
+from .values import Alias, Form, from_wire, to_wire
+
+_GRACE = _g.GRACE_S  # seconds the Game waits beyond a server-side timeout
+_STEP_TIMEOUT = _g.CONFIG_KEYS["default_timeout_ms"]["default"] / 1000  # the plugin's default, to size a batch's wait
+
+
+class Transport(Protocol):
+    """How a Game reaches the game. request() sends {"type": "request", "id", "op", "args"} with an id the
+    transport chooses and returns the decoded response object {"type": "response", "id", "ok", ...}. It raises
+    EncodeError (nothing sent), ConnectionLost, CallTimeout or ProtocolViolation; it never interprets "ok"."""
+
+    welcome: dict
+    closed: bool
+
+    def request(self, op: str, args: dict, wait_s: float) -> dict: ...
+
+    def close(self) -> None: ...
+
+
+def _positive_seconds(value, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be a positive number of seconds, not {value!r}")
+    return float(value)
+
+
+def _timeout_ms(timeout: float) -> int:
+    """Seconds -> whole milliseconds, rounded UP so that 0.0004 s is 1 ms, never the 0 that means nothing."""
+    _positive_seconds(timeout, "timeout")
+    ms = max(_g.MIN_TIMEOUT_MS, math.ceil(round(timeout * 1000, 6)))  # round() first: 1.001 * 1000 is 1000.9999999999999
+    if ms > _g.MAX_TIMEOUT_MS:
+        raise ValueError(f"timeout of {timeout} s is over the protocol maximum of {_g.MAX_TIMEOUT_MS} ms")
+    return ms
+
+
+def _expect_dict(value: Any, what: str) -> dict:
+    if not isinstance(value, dict):
+        raise errors.ProtocolViolation(f"{what} from the server is not an object: {value!r}")
+    return value
+
+
+def _result(resp: dict, op: str) -> Any:
+    ok = resp.get("ok")
+    if ok is True:
+        return resp.get("result")
+    if ok is False:
+        raise errors.remote_error_from_wire(resp.get("error"))
+    raise errors.ProtocolViolation(f"{op}: response has no boolean \"ok\": {resp!r}")
+
+
+class Game:
+    """The running game. Thread-safe: any thread may call. Use as a context manager or call close()."""
+
+    def __init__(self, transport: Transport, *, call_timeout: float = _g.CALL_TIMEOUT_S,
+                 retry_not_ready: bool | float = False):
+        self._call_timeout = _positive_seconds(call_timeout, "call_timeout")
+        self._retry_not_ready = _g.RETRY_NOT_READY_S if retry_not_ready is True else float(retry_not_ready or 0)
+        self.transport = transport
+        self.welcome: dict = transport.welcome
+        #: The epoch when this Game was made, fixed for its life. It does NOT follow save loads: read
+        #: state()["epoch"] for the current one.
+        self.epoch: int = self.welcome.get("epoch", 0)
+
+    @property
+    def closed(self) -> bool:
+        return self.transport.closed
+
+    # -- plumbing -------------------------------------------------------------------------------
+    def _request(self, op: str, args: dict, timeout: float | None = None) -> Any:
+        wait = self._call_timeout if timeout is None else timeout + _GRACE
+        deadline = time.monotonic() + self._retry_not_ready
+        while True:
+            try:
+                return _result(self.transport.request(op, args, wait), op)
+            except errors.NotReady as e:
+                # A call a world reset ended after it reached the game (detail.dispatched) may have had its effect
+                # already: never resubmit it. A refusal before dispatch is safe to retry.
+                if e.detail.get("dispatched") or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.25)
+
+    @staticmethod
+    def _call_args(script, function, args, timeout, require_unpaused, obj=None) -> dict:
+        a: dict[str, Any] = {}
+        if obj is not None:
+            a["object"] = to_wire(obj)
+        a.update({"script": script, "function": function, "args": [to_wire(x) for x in args],
+                  "require_unpaused": require_unpaused})
+        if timeout is not None:
+            a["timeout_ms"] = _timeout_ms(timeout)
+        return a
+
+    # -- public API -----------------------------------------------------------------------------
+    def call(self, script: str, function: str, *args, timeout: float | None = None, require_unpaused: bool = False):
+        """Call a global Papyrus function, e.g. game.call("Utility", "RandomInt", 1, 6).
+
+        A Python int is sent as a Papyrus Int: pass 3.0, not 3, where the parameter is a Float (see to_wire)."""
+        a = self._call_args(script, function, args, timeout, require_unpaused)
+        return from_wire(self._request(_g.OP_PAPYRUS_CALL_STATIC, a, timeout))
+
+    def call_method(self, obj: Form | Alias, script: str, function: str, *args, timeout: float | None = None,
+                    require_unpaused: bool = False):
+        """Call a member function on a form or alias, e.g. game.call_method(player, "Actor", "GetActorValue", "Health")."""
+        a = self._call_args(script, function, args, timeout, require_unpaused, obj=obj)
+        return from_wire(self._request(_g.OP_PAPYRUS_CALL_METHOD, a, timeout))
+
+    def get_property(self, obj: Form | Alias, script: str, prop: str):
+        return from_wire(self._request(_g.OP_PAPYRUS_GET_PROPERTY, {"object": to_wire(obj), "script": script, "property": prop}))
+
+    def set_property(self, obj: Form | Alias, script: str, prop: str, value) -> None:
+        self._request(_g.OP_PAPYRUS_SET_PROPERTY,
+                      {"object": to_wire(obj), "script": script, "property": prop, "value": to_wire(value)})
+
+    def batch(self) -> "Batch":
+        return Batch(self)
+
+    def resolve(self, *, form_key: str | None = None, form_id: int | None = None, editor_id: str | None = None) -> Form:
+        given = {k: v for k, v in (("form_key", form_key), ("form_id", form_id), ("editor_id", editor_id)) if v is not None}
+        if len(given) != 1:
+            raise TypeError("resolve() takes exactly one of form_key, form_id, editor_id")
+        return from_wire(self._request(_g.OP_FORM_RESOLVE, given))
+
+    def form(self, form_key: str) -> Form:
+        """game.form("Skyrim.esm|0x012EB7") -> Form with the live form_id and type."""
+        return self.resolve(form_key=form_key)
+
+    def alias(self, quest: Form, alias_id: int, alias_type: str = _g.DEFAULT_ALIAS_TYPE) -> Alias:
+        return Alias(quest, alias_id, alias_type, quest.epoch)
+
+    def state(self) -> dict:
+        st = _expect_dict(self._request(_g.OP_GAME_STATE, {}), "game.state result")
+        if st.get("player") is not None:
+            st["player"] = from_wire(st["player"])
+        return st
+
+    def wait_ready(self, timeout: float = _g.READY_TIMEOUT_S) -> dict:
+        """Block until a save is loaded and no loading screen is up. If that takes longer than `timeout`, raise
+        NotReady with detail reason "wait_ready timed out" plus the last state (in both modes; CallTimeout means
+        the bridge itself did not answer)."""
+        deadline = time.monotonic() + timeout
+        while True:
+            st = self.state()
+            if st.get("interactive"):
+                return st
+            if time.monotonic() >= deadline:
+                raise errors.NotReady(_g.CODE_NOT_READY, f"game not interactive after {timeout:g} s",
+                                      {**st, "reason": "wait_ready timed out"})
+            time.sleep(0.25)
+
+    def close(self) -> None:
+        self.transport.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+class Batch:
+    """Several papyrus.* steps in one request, run in order. Not a transaction (spec 4.3).
+
+    Each step method takes an optional `timeout` (seconds). The plugin applies one timeout to the whole
+    batch, so run() always sends one: run(timeout=...) if given, else the SUM of the step timeouts (5 s for
+    a step with none, the plugin's default), capped at MAX_TIMEOUT_MS; it waits that long plus GRACE_S."""
+
+    def __init__(self, game: Game):
+        self._game = game
+        self._calls: list[dict] = []
+        self._step_timeouts: list[float | None] = []
+
+    def _add(self, op: str, args: dict, timeout: float | None):
+        if timeout is not None:
+            _timeout_ms(timeout)  # validate now, not at run()
+        self._calls.append({"op": op, "args": args})
+        self._step_timeouts.append(timeout)
+        return self
+
+    def call(self, script, function, *args, timeout=None, require_unpaused=False):
+        return self._add(_g.OP_PAPYRUS_CALL_STATIC, Game._call_args(script, function, args, None, require_unpaused), timeout)
+
+    def call_method(self, obj, script, function, *args, timeout=None, require_unpaused=False):
+        return self._add(_g.OP_PAPYRUS_CALL_METHOD,
+                         Game._call_args(script, function, args, None, require_unpaused, obj=obj), timeout)
+
+    def get_property(self, obj, script, prop, *, timeout=None):
+        return self._add(_g.OP_PAPYRUS_GET_PROPERTY, {"object": to_wire(obj), "script": script, "property": prop}, timeout)
+
+    def set_property(self, obj, script, prop, value, *, timeout=None):
+        return self._add(_g.OP_PAPYRUS_SET_PROPERTY,
+                         {"object": to_wire(obj), "script": script, "property": prop, "value": to_wire(value)}, timeout)
+
+    def run(self, stop_on_error: bool = True, timeout: float | None = None) -> list:
+        if not self._calls:
+            return []
+        args: dict[str, Any] = {"calls": self._calls, "stop_on_error": stop_on_error}
+        if timeout is None:  # without one the plugin would give the whole batch a single step's 5 s default
+            timeout = min(sum(_STEP_TIMEOUT if t is None else t for t in self._step_timeouts), _g.MAX_TIMEOUT_MS / 1000)
+        args["timeout_ms"] = _timeout_ms(timeout)
+        out = _expect_dict(self._game._request(_g.OP_PAPYRUS_BATCH, args, timeout), "papyrus.batch result")
+        results = out.get("results")
+        if not isinstance(results, list) or not all(isinstance(r, dict) for r in results):
+            raise errors.ProtocolViolation(f"papyrus.batch result has no list of result objects: {out!r}")
+        return [from_wire(r.get("result")) if r.get("ok") is True else errors.remote_error_from_wire(r.get("error"))
+                for r in results]
