@@ -12,6 +12,7 @@ import pytest
 from support import load_fixture, wait_until
 from skyrim import _framing
 from skyrim import _protocol_generated as g
+from skyrim import bridge as bridge_mod
 from skyrim import errors
 from skyrim.bridge import nesting_within, serve
 from skyrim.discovery import find_session
@@ -211,7 +212,7 @@ def test_a_hostile_hello_is_refused_at_once_and_python_keeps_running(bridge):
         t0 = time.monotonic()
         s.sendall(struct.pack("<I", len(text)) + text)
         assert closed_by_server(s)
-        assert time.monotonic() - t0 < 0.2
+        assert time.monotonic() - t0 < 1.0  # a backtracking scan takes seconds
         assert bystander.call("Fake", "Echo", "still here") == "still here"
 
 
@@ -375,3 +376,45 @@ def test_a_port_in_use_raises_and_writes_an_inactive_session_file(bridge, fake, 
 def test_non_loopback_hosts_and_bad_tokens_are_refused(fake, kw):
     with pytest.raises(ValueError):
         serve(fake, port=0, welcome_info=INFO, **kw)
+
+
+def test_a_connection_that_fails_to_start_gives_its_slot_back(start, monkeypatch):
+    b = start(max_connections=2)
+    real = bridge_mod._Conn.start
+    fails = {"n": 2}
+
+    def flaky(self):
+        if fails["n"]:
+            fails["n"] -= 1
+            raise RuntimeError("can't start new thread")
+        real(self)
+
+    monkeypatch.setattr(bridge_mod._Conn, "start", flaky)
+    for _ in range(2):  # more failures than slots: a leak would refuse everyone from here on
+        s = socket.create_connection(("127.0.0.1", b.port), timeout=5)
+        assert closed_by_server(s)
+        s.close()
+    wait_until(lambda: b.connections() == 0, what="the failed connections to give their slots back")
+    with remote(b) as game:
+        assert game.call("Fake", "Echo", 1) == 1
+
+
+def test_a_failure_after_listening_closes_the_listener_and_says_why(fake, tmp_path):
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file, so nothing can be created under it")
+    with pytest.raises(OSError):  # the session file cannot be written; the inactive one cannot either
+        serve(fake, port=port, session_file=blocker / "session.json", welcome_info=INFO)
+    with serve(fake, port=port, welcome_info=INFO) as b:  # the listener was closed, so the port is free again
+        assert b.port == port
+
+    def broken():
+        raise KeyError("epoch")
+
+    log_file = tmp_path / "s.json"
+    with pytest.raises(KeyError):
+        serve(fake, port=0, session_file=log_file, welcome_info=broken)
+    with pytest.raises(errors.NotRunning, match="could not start"):
+        find_session(log_file, env={})

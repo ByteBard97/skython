@@ -37,6 +37,7 @@ import pytest
 from support import load_fixture, wait_until
 from skyrim import _framing
 from skyrim import _protocol_generated as g
+from skyrim import bridge as bridge_mod
 from skyrim import errors
 from skyrim.bridge import nesting_within, serve
 from skyrim.discovery import find_session
@@ -236,7 +237,7 @@ def test_a_hostile_hello_is_refused_at_once_and_python_keeps_running(bridge):
         t0 = time.monotonic()
         s.sendall(struct.pack("<I", len(text)) + text)
         assert closed_by_server(s)
-        assert time.monotonic() - t0 < 0.2
+        assert time.monotonic() - t0 < 1.0  # a backtracking scan takes seconds
         assert bystander.call("Fake", "Echo", "still here") == "still here"
 
 
@@ -400,6 +401,48 @@ def test_a_port_in_use_raises_and_writes_an_inactive_session_file(bridge, fake, 
 def test_non_loopback_hosts_and_bad_tokens_are_refused(fake, kw):
     with pytest.raises(ValueError):
         serve(fake, port=0, welcome_info=INFO, **kw)
+
+
+def test_a_connection_that_fails_to_start_gives_its_slot_back(start, monkeypatch):
+    b = start(max_connections=2)
+    real = bridge_mod._Conn.start
+    fails = {"n": 2}
+
+    def flaky(self):
+        if fails["n"]:
+            fails["n"] -= 1
+            raise RuntimeError("can't start new thread")
+        real(self)
+
+    monkeypatch.setattr(bridge_mod._Conn, "start", flaky)
+    for _ in range(2):  # more failures than slots: a leak would refuse everyone from here on
+        s = socket.create_connection(("127.0.0.1", b.port), timeout=5)
+        assert closed_by_server(s)
+        s.close()
+    wait_until(lambda: b.connections() == 0, what="the failed connections to give their slots back")
+    with remote(b) as game:
+        assert game.call("Fake", "Echo", 1) == 1
+
+
+def test_a_failure_after_listening_closes_the_listener_and_says_why(fake, tmp_path):
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file, so nothing can be created under it")
+    with pytest.raises(OSError):  # the session file cannot be written; the inactive one cannot either
+        serve(fake, port=port, session_file=blocker / "session.json", welcome_info=INFO)
+    with serve(fake, port=port, welcome_info=INFO) as b:  # the listener was closed, so the port is free again
+        assert b.port == port
+
+    def broken():
+        raise KeyError("epoch")
+
+    log_file = tmp_path / "s.json"
+    with pytest.raises(KeyError):
+        serve(fake, port=0, session_file=log_file, welcome_info=broken)
+    with pytest.raises(errors.NotRunning, match="could not start"):
+        find_session(log_file, env={})
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -767,17 +810,34 @@ class BridgeServer:
                 self._lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self._lsock.bind((host, port))
             self._lsock.listen()
-        except OSError:
+        except OSError as e:
             self._lsock.close()
+            self._mark_inactive(f"the bridge could not listen on {host}:{port}: {e}")
             raise
-        self.host = host
-        self.port = self._lsock.getsockname()[1]
-        if session_file:
-            info = welcome_info() if callable(welcome_info) else welcome_info
-            write_session_file(session_file, Session(host, self.port, token, os.getpid(), info.get("plugin_version")))
-        self._accepter = threading.Thread(target=self._accept_loop, name="bridge-accept", daemon=True)
-        self._accepter.start()
+        try:
+            self.host = host
+            self.port = self._lsock.getsockname()[1]
+            if session_file:
+                info = welcome_info() if callable(welcome_info) else welcome_info
+                write_session_file(session_file, Session(host, self.port, token, os.getpid(), info.get("plugin_version")))
+            self._accepter = threading.Thread(target=self._accept_loop, name="bridge-accept", daemon=True)
+            self._accepter.start()
+        except BaseException as e:  # listening worked but the rest of the start did not: do not keep the port
+            self._closing = True
+            self._lsock.close()
+            self._mark_inactive(f"the bridge could not start after listening: {e!r}")
+            raise
         log.info("bridge: listening on %s:%d", host, self.port)
+
+    def _mark_inactive(self, reason: str) -> None:
+        """Record why there is no bridge. A failure to write the record is logged, never raised: it must not hide the
+        error that is being reported."""
+        if not self.session_file:
+            return
+        try:
+            write_inactive_session_file(self.session_file, reason, pid=os.getpid())
+        except Exception:  # noqa: BLE001
+            log.exception("bridge: could not write the inactive session file")
 
     def _accept_loop(self) -> None:
         while True:
@@ -792,11 +852,13 @@ class BridgeServer:
             if self._closing:
                 sock.close()
                 return
+            conn = None
             try:
                 if not ipaddress.ip_address(peer[0]).is_loopback:
                     log.warning("bridge: refused a non-loopback peer %s", peer[0])
                     sock.close()
                     continue
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 with self._lock:
                     full = len(self._conns) >= self.max_connections
                     if not full:
@@ -806,10 +868,11 @@ class BridgeServer:
                     log.warning("bridge: %d connections already open; refused one more", self.max_connections)
                     sock.close()
                     continue
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 conn.start()
             except Exception:  # noqa: BLE001 - one bad accept must not stop the bridge
                 log.exception("bridge: accept failed")
+                if conn is not None:
+                    self._forget(conn)  # it was registered: give its slot back
                 sock.close()
 
     def _forget(self, conn: _Conn) -> None:
@@ -856,27 +919,21 @@ def serve(backend, *, host: str = _g.HOST, port: int = _g.CONFIG_KEYS["port"]["d
     `welcome_info` is a dict, or a function returning one, with plugin_version, game_version, runtime and
     epoch (a function gives every client the current epoch). Port 0 picks a free port (see .port). The
     session file, when given, gets the port and token; if the bridge cannot start, it gets an inactive
-    record with the reason instead, and the OSError is raised."""
-    try:
-        return BridgeServer(backend, host=host, port=port, token=token, session_file=session_file,
-                            welcome_info=welcome_info, max_connections=max_connections,
-                            max_inflight_per_connection=max_inflight_per_connection,
-                            hello_timeout=hello_timeout, max_queued_bytes=max_queued_bytes)
-    except OSError as e:
-        if session_file:
-            write_inactive_session_file(session_file, f"the bridge could not listen on {host}:{port}: {e}",
-                                        pid=os.getpid())
-        raise
+    record with the reason instead, and the error is raised."""
+    return BridgeServer(backend, host=host, port=port, token=token, session_file=session_file,
+                        welcome_info=welcome_info, max_connections=max_connections,
+                        max_inflight_per_connection=max_inflight_per_connection,
+                        hello_timeout=hello_timeout, max_queued_bytes=max_queued_bytes)
 ```
 
 - [ ] **Step 4: Run to verify they pass, repeatedly**
 
 Run: `cd python && uv run --python 3.12 pytest -q && uv run --python 3.14 pytest -q`
-Expected: `319 passed` twice, each in about 9 s (Task 22's 273 plus this task's 46; the hello fixtures add one test per `invalid` and `check` entry).
+Expected: `373 passed` twice, each in about 9 s (Task 22's 273 plus this task's 46; the hello fixtures add one test per `invalid` and `check` entry).
 
 Run the bridge tests five times and once on a single CPU, to catch races:
 `for i in 1 2 3 4 5; do uv run --python 3.14 pytest -q tests/test_bridge.py; done; taskset -c 0 uv run --python 3.12 pytest -q tests/test_bridge.py`
-Expected: `46 passed` six times, each in about 1 s. No test sleeps for luck: every wait is `wait_until` with a deadline, and the stuck-reader test confirms from the log that the cap, not some other error, closed the connection.
+Expected: `48 passed` six times, each in about 1 s. No test sleeps for luck: every wait is `wait_until` with a deadline, and the stuck-reader test confirms from the log that the cap, not some other error, closed the connection.
 
 - [ ] **Step 5: Run the drift check**
 

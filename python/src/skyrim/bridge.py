@@ -354,17 +354,34 @@ class BridgeServer:
                 self._lsock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self._lsock.bind((host, port))
             self._lsock.listen()
-        except OSError:
+        except OSError as e:
             self._lsock.close()
+            self._mark_inactive(f"the bridge could not listen on {host}:{port}: {e}")
             raise
-        self.host = host
-        self.port = self._lsock.getsockname()[1]
-        if session_file:
-            info = welcome_info() if callable(welcome_info) else welcome_info
-            write_session_file(session_file, Session(host, self.port, token, os.getpid(), info.get("plugin_version")))
-        self._accepter = threading.Thread(target=self._accept_loop, name="bridge-accept", daemon=True)
-        self._accepter.start()
+        try:
+            self.host = host
+            self.port = self._lsock.getsockname()[1]
+            if session_file:
+                info = welcome_info() if callable(welcome_info) else welcome_info
+                write_session_file(session_file, Session(host, self.port, token, os.getpid(), info.get("plugin_version")))
+            self._accepter = threading.Thread(target=self._accept_loop, name="bridge-accept", daemon=True)
+            self._accepter.start()
+        except BaseException as e:  # listening worked but the rest of the start did not: do not keep the port
+            self._closing = True
+            self._lsock.close()
+            self._mark_inactive(f"the bridge could not start after listening: {e!r}")
+            raise
         log.info("bridge: listening on %s:%d", host, self.port)
+
+    def _mark_inactive(self, reason: str) -> None:
+        """Record why there is no bridge. A failure to write the record is logged, never raised: it must not hide the
+        error that is being reported."""
+        if not self.session_file:
+            return
+        try:
+            write_inactive_session_file(self.session_file, reason, pid=os.getpid())
+        except Exception:  # noqa: BLE001
+            log.exception("bridge: could not write the inactive session file")
 
     def _accept_loop(self) -> None:
         while True:
@@ -379,11 +396,13 @@ class BridgeServer:
             if self._closing:
                 sock.close()
                 return
+            conn = None
             try:
                 if not ipaddress.ip_address(peer[0]).is_loopback:
                     log.warning("bridge: refused a non-loopback peer %s", peer[0])
                     sock.close()
                     continue
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 with self._lock:
                     full = len(self._conns) >= self.max_connections
                     if not full:
@@ -393,10 +412,11 @@ class BridgeServer:
                     log.warning("bridge: %d connections already open; refused one more", self.max_connections)
                     sock.close()
                     continue
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 conn.start()
             except Exception:  # noqa: BLE001 - one bad accept must not stop the bridge
                 log.exception("bridge: accept failed")
+                if conn is not None:
+                    self._forget(conn)  # it was registered: give its slot back
                 sock.close()
 
     def _forget(self, conn: _Conn) -> None:
@@ -443,14 +463,8 @@ def serve(backend, *, host: str = _g.HOST, port: int = _g.CONFIG_KEYS["port"]["d
     `welcome_info` is a dict, or a function returning one, with plugin_version, game_version, runtime and
     epoch (a function gives every client the current epoch). Port 0 picks a free port (see .port). The
     session file, when given, gets the port and token; if the bridge cannot start, it gets an inactive
-    record with the reason instead, and the OSError is raised."""
-    try:
-        return BridgeServer(backend, host=host, port=port, token=token, session_file=session_file,
-                            welcome_info=welcome_info, max_connections=max_connections,
-                            max_inflight_per_connection=max_inflight_per_connection,
-                            hello_timeout=hello_timeout, max_queued_bytes=max_queued_bytes)
-    except OSError as e:
-        if session_file:
-            write_inactive_session_file(session_file, f"the bridge could not listen on {host}:{port}: {e}",
-                                        pid=os.getpid())
-        raise
+    record with the reason instead, and the error is raised."""
+    return BridgeServer(backend, host=host, port=port, token=token, session_file=session_file,
+                        welcome_info=welcome_info, max_connections=max_connections,
+                        max_inflight_per_connection=max_inflight_per_connection,
+                        hello_timeout=hello_timeout, max_queued_bytes=max_queued_bytes)
