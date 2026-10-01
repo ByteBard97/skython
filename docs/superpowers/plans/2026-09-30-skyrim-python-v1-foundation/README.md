@@ -1,5 +1,7 @@
 # skyrim-python v1 foundation (M0 spikes + M1 dispatcher): plan index
 
+> **SUPERSEDED (2026-10-01).** This plan is the out-of-process design (spec draft 3). The current plan is `docs/superpowers/plans/2026-10-01-skyrim-python-v1-embedded/` (spec draft 4: CPython embedded in the plugin). The reviewed and build-box-verified version of this plan, kept as the fallback design, is on git branch `plan-out-of-process`; the copy in this folder on `main` predates that review.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
 >
 > **How to use this plan:** it is split into one file per task. To do a task, read **this file** (overview, Global Constraints, Fixed paths) and **that task's file** only. Each task file lists the exact names and types it consumes from earlier tasks and produces for later ones (its **Interfaces** block), so earlier task files are not required reading. Open another task's file only if an Interfaces line is unclear. The design spec is background, not required reading for a single task.

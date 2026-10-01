@@ -1,0 +1,277 @@
+# skyrim-python v1 (M0 spikes + M1 embedded dispatcher): plan index
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **How to use this plan:** it is split into one file per task. To do a task, read **this file** (overview, Global Constraints, File Structure, Contracts) and **that task's file** only. Each task file has an **Interfaces** block naming what it consumes and produces; the Contracts section below is the single list of cross-task names, so earlier task files are not required reading. The design spec is background, not required reading for a single task.
+
+**Goal:** Settle the unverified premises with spikes (M0), then build the SKSE plugin that embeds CPython, the generic Papyrus dispatcher behind the built-in `_skyrim` module, the pure-Python `skyrim` package, and the dev bridge that lets a Linux process use the same API (M1).
+
+**Architecture:** A pure C++20 core (`core/`: values, form keys, request parsing, config, lifecycle state, and the `Dispatcher` with its `Backend` interface) is unit-tested on Linux. The `_skyrim` module (`pyglue/`, pybind11) passes only request/response JSON text between Python and the `Dispatcher`; on Linux it is built against uv's CPython 3.14 with a `FakeBackend`, in the plugin with the `GameBackend` that queues one `AddTask` per request and dispatches through the Papyrus VM. The plugin (`plugin/`, CommonLibSSE-NG, built on the Windows box) is two DLLs: a loader that SKSE loads, which loads CPython 3.14.8 and then the core DLL by full path from the plugin's folder, and the core, which links CPython and at `kDataLoaded` starts a host thread that initialises the interpreter and runs `skyrim._host`, which loads player scripts and, in dev builds, the dev bridge. The pure-Python `skyrim` package (`python/src/skyrim`) offers one `Game` API over two transports: in-process (`_skyrim`) and remote (`skyrim.remote` over the bridge), pinned by golden fixtures in `protocol/v1/`.
+
+**Tech Stack:** C++20 (core, pyglue; g++ 11 on Linux / MSVC v143), C++23 (plugin), CommonLibSSE-NG (alandtse `ng`, submodule), nlohmann/json 3.11.3, doctest 2.4.11 and pybind11 3.1.0 (vendored), spdlog (vcpkg), CPython 3.14.8 (embeddable zip at runtime; NuGet `python` 3.14.8 headers and import library at build time), Python ≥3.12 for the `skyrim` package and its tests, pytest, uv.
+
+**Spec:** `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4). Sections 4.1, 4.2, 4.5, 4.7, 4.10 and 9 matter most to whoever coordinates the plan.
+
+**Scope of this plan:** M0 and M1 only. M1.5 (test ESP, engine probes), M2 (events, lifecycle, save/load, harness) and the skyrim-dm acceptance test get their own plan after M0's results (see "After this plan").
+
+**Lineage:** this plan replaces `docs/superpowers/plans/2026-09-30-skyrim-python-v1-foundation/` (the out-of-process design). The reviewed and build-box-verified version of that plan is on git branch `plan-out-of-process`; many task files here adapt one of its tasks, named in each task file's first line ("Adapted from: branch `plan-out-of-process`, task N"). Read it with `git show plan-out-of-process:<path>`. `API-VERIFICATION.md` in this folder is copied from it unchanged: it holds the real CommonLibSSE-NG signatures, checked against the pinned clone and compiled on the build box.
+
+## Global Constraints
+
+- CPython **3.14.8**, standard GIL build, x64. Runtime: the unmodified `python-3.14.8-embed-amd64.zip`. Build inputs: `tools/include/` and `tools/libs/python314.lib` from the NuGet package `python` 3.14.8. Both fetched by `tools/fetch_python.sh` and checked against SHA-256 values recorded in `docs/PINS.md`. Never a free-threaded build.
+- pybind11 **3.1.0**, vendored under `third_party/pybind11/` (headers only).
+- **The game's main thread and the Papyrus VM's threads never execute Python and never take the GIL.** Event sinks and VM callbacks produce C++ values and JSON text only.
+- **Two DLLs** (spec 4.1). `python314.dll` exports data symbols, so it cannot be delay-loaded (MSVC LNK1194). The loader `Data/SKSE/Plugins/SkyrimPython.dll` has no Python headers or imports; in `SKSEPlugin_Load` it checks the runtime, checks `GetModuleHandleW(L"python314.dll")` (a module of that name from another path → Python disabled, the log names that path), then `LoadLibraryExW(<plugin dir>\SkyrimPython\python\python314.dll, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)`, then `LoadLibraryExW(<plugin dir>\SkyrimPython\SkyrimPythonCore.dll, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH)`, then calls the core's export `extern "C" __declspec(dllexport) bool SpyCore_Load(const SKSE::LoadInterface*)`. Every failure is logged and the loader still returns `true` (the game runs without Python). The core links `python314.lib` normally and holds everything that touches Python, pybind11 or the game.
+- CPython is initialised once, on the host thread, with `Py_InitializeFromConfig` and an isolated `PyConfig` (`isolated = 1`, `use_environment = 0`, `install_signal_handlers = 0`, `site_import = 1`, explicit `home`, `module_search_paths_set = 1`; the zip's `python314._pth` is then ignored). **Never `Py_Finalize`.** After `skyrim._host.main()` returns, the host thread calls `PyEval_SaveThread()` and blocks forever on a condition variable; it never ends while holding the GIL.
+- No work in `DllMain`; the host thread starts at `kDataLoaded`; game calls run only after `kDataLoaded` and the interactive signal.
+- The boundary between Python and C++ is request/response JSON text plus a few scalars (`_skyrim` Contract below). No `PyObject` is converted in C++ beyond `str`, `int`, `float`, `None`.
+- One `AddTask` per request or batch step, plus at most one more to convert a result when the VM callback runs off the main thread; a task never re-queues itself.
+- `game.load` / `game.save` use `AddUITask` (M2; not in this plan).
+- Dev bridge: TCP bound to `127.0.0.1` only, default port `45977`, non-loopback peers refused, 128-bit random token as 32 lowercase hex characters, framing 4-byte little-endian length + UTF-8 JSON, max frame 16 MiB, protocol `[1, 0]` (major mismatch refused). `bridge_enabled = false` in the shipped ini, `true` in the dev ini.
+- Papyrus Int is 32-bit signed: out of range is `type_mismatch`, never truncation. Papyrus arrays hold at most 128 elements.
+- No raw engine pointers kept across tasks; every task re-resolves by FormID.
+- No exception may escape a thread the plugin owns: every main-thread task, VM callback, sink, the reaper thread and the host thread catch `std::exception` and `...`; a failure becomes an `internal` error or disables Python, never a game crash. Every Python entry point called by the plugin or `skyrim._host` is wrapped in Python and logs the traceback.
+- JSON text that leaves C++ is produced only by core's `spy::dump_json` (invalid UTF-8 replaced, never thrown). Request text from Python is checked with `spy::nesting_within` (depth 64) before it is parsed.
+- CommonLibSSE-NG: `alandtse/CommonLibSSE-NG`, branch `ng`, pinned submodule at `39f9d07a6ffabea8fb559eee87ab7d27cd463e8a` (v10.1.0). Use the signatures in `API-VERIFICATION.md`, not memory. Never use skyrim-re-toolkit's vendored copy. Known MSVC pitfalls from the build box: define `NOMINMAX` and `WIN32_LEAN_AND_MEAN`; `#undef GetObject` after the includes in every TU that calls `Variable::GetObject()`; `REL::Module::get().version().string(".")`; `SKSE::Init(skse, { .log = false })`.
+- Verified runtime: AE 1.6.1170 under GE-Proton (`~/Games/SimpleSkyrim`). The plugin refuses to start Python on an unsupported runtime (log the version and why). Release notes list only verified runtimes.
+- `skyrim` package: Python ≥3.12, standard library only at runtime; tested on 3.12 and 3.14. Sync API only in v1.
+- Licence: MIT. Copy no code from Chronicle (AGPL), SkyrimPlatform or DevBench (GPL). IntelEngine (Apache-2.0) and SkyLink (no LICENSE file) are read-only references. Bundle the CPython licence (`LICENSE.txt` from the embeddable zip) with any deployed runtime.
+- Commits: conventional style, no AI attribution lines (global rule; overrides harness trailers). Never `git push` without the owner saying so.
+- Never delete files with `rm`; use `gio trash` only after the owner approves an itemised list (global rule). Applies to the Windows box too (no `Remove-Item`).
+- The Windows build box's default SSH shell is Windows PowerShell 5.1 (not cmd.exe); every remote command is PowerShell syntax, every ssh/scp call has a timeout and `BatchMode`, every wait loop is bounded and prints the log tail on timeout.
+- The RTX 5080 is reserved for TTS: no step may use or reconfigure the GPU.
+
+## Review Focus
+
+1. **A Python exception or a hung Python script** → the game keeps running; the traceback is in `python.log`; other scripts and the bridge keep working. Pinned in Task 24 (`test_host.py`: a script that raises in import, one that raises in `setup`, one whose `setup` blocks) and Task 31 (live).
+2. **A call while the game is at the main menu or loading** → `NotReady` with a `reason`, immediately, in both modes; never a hang. Pinned in Task 18 (dispatcher tests), Task 19 (`_skyrim` with the fake backend's not-ready switch) and Task 27 (live).
+3. **Wrong arguments** (Int out of range, string where Int expected, wrong count, unknown script or function) → `TypeMismatch` / `UnknownFunction` before dispatch, naming the parameter. Pinned in Tasks 14, 16, 27, 28.
+4. **A bridge client disconnects with calls in flight, or sends garbage or an oversized frame** → that connection closes, its outstanding tickets are cancelled; the game, other connections and in-process scripts are unaffected; late results are dropped. Pinned in Task 23 (Linux, real bridge over the fake `_skyrim`) and Task 31 (live).
+5. **Python loads but cannot start** (DLL missing, another `python314.dll` already loaded, the core DLL missing, `skyrim._host` import error, unsupported runtime) → the game runs normally with Python disabled and one clear log line. Pinned in Task 26 (live variants).
+6. **Many Python threads calling at once, or CPU-bound Python** → no deadlock, no frame stalls (the GIL is released while waiting; the game thread never runs Python); GIL hand-off latency is measured, not assumed. Pinned in Task 19 (16 threads on the fake backend), spike S9 (Task 5) and Task 31 (live throughput with a spinning thread).
+7. **One source of truth for the protocol** → error codes, ops, limits, config keys and client defaults are generated from `protocol/protocol.json` for C++ and Python; hand-edits of generated files fail a drift check. Pinned in Task 12.
+
+---
+
+## File Structure
+
+```
+skyrim-python/
+  LICENSE                                   MIT
+  README.md                                 (rewritten in Task 32)
+  .gitignore  .gitmodules
+  docs/PINS.md                              CommonLib commit, CPython/NuGet/pybind11 versions and SHA-256s (Task 0)
+  third_party/nlohmann/json.hpp             vendored, MIT
+  third_party/doctest/doctest.h             vendored, MIT
+  third_party/pybind11/include/pybind11/    vendored headers, BSD-3 (+ LICENSE)
+  third_party/cpython/                      GITIGNORED: fetched by tools/fetch_python.sh
+    embed/                                  python-3.14.8-embed-amd64.zip unpacked
+    nuget/                                  python.3.14.8.nupkg unpacked (tools/include, tools/libs)
+  protocol/
+    protocol.json                           SINGLE SOURCE OF TRUTH (Task 12)
+    PROTOCOL.md  PROTOCOL.generated.md      rules (Task 11) and generated tables (Task 12)
+    v1/fixtures/*.json                      golden fixtures (Task 11)
+  core/                                     pure C++20; no Windows, CommonLib or Python headers
+    CMakeLists.txt
+    include/spy/{protocol_generated,errors,values,refs,requests,config,json_depth,lifecycle_state,dispatcher,fake_backend}.h
+    src/{errors,values,refs,requests,config,json_depth,lifecycle_state,dispatcher,fake_backend}.cpp
+    tests/{main,test_values,test_refs,test_requests,test_config,test_json_depth,test_lifecycle_state,test_dispatcher,test_fake_backend,test_fixtures,test_generated}.cpp
+  pyglue/                                   the _skyrim module (pybind11); no CommonLib headers
+    include/spy/pymodule.h                  DefineModule + ModuleHost
+    src/pymodule.cpp
+    linux/CMakeLists.txt  linux/fake_module.cpp      Linux build: _skyrim over FakeBackend
+    tests/{conftest,test_module,test_threads}.py
+  plugin/                                   SKSE plugin (Windows build only), two DLLs from one CMake project
+    CMakeLists.txt  vcpkg.json  build.ps1   targets SkyrimPython (loader) and SkyrimPythonCore (core)
+    extern/CommonLibSSE-NG                  submodule
+    loader/main.cpp                         SKSE exports; runtime check, collision check, LoadLibraryExW x2, SpyCore_Load
+    config/SkyrimPython.ini                 shipped defaults (bridge off)
+    config/SkyrimPython.dev.ini             dev defaults (bridge on, fixed token)
+    config/variants/*.ini                   live-test variants
+    src/main.cpp                            SpyCore_Load export: SKSE::Init, messaging listener, startup order
+    src/Log.{h,cpp}  src/Settings.{h,cpp}  src/Lifecycle.{h,cpp}
+    src/PythonHost.{h,cpp}                  PyConfig, Py_InitializeFromConfig, host thread
+    src/PyModule.cpp                        PYBIND11_MODULE(_skyrim) for the game build
+    src/GameBackend.{h,cpp}                 spy::Backend over AddTask + ops::Run
+    src/Ops.{h,cpp}  src/PapyrusValues.{h,cpp}  src/Signatures.{h,cpp}
+  python/
+    pyproject.toml
+    src/skyrim/{__init__,_protocol_generated,_framing,errors,values,refs,game,inprocess,discovery,remote,bridge,_host}.py
+    tests/{support,conftest,fake_skyrim,test_framing,test_errors,test_values_refs,test_fixtures,test_generated,test_game,test_inprocess,test_discovery,test_remote,test_bridge,test_host}.py
+  spikes/
+    spike-dll/{CMakeLists.txt,vcpkg.json,build.ps1,src/main.cpp,src/Net.cpp,src/Net.h}
+    spike-pycore/{CMakeLists.txt,src/PyCore.cpp}          SpikePyCore.dll: links python314.lib; init, run code, _spike module (S8, S9)
+    spike-dll/papyrus/SkyrimPython.psc
+    spike_client.py  py_echo_client.py  RESULTS.md
+    deps/requirements-game.txt
+  tools/
+    fetch_python.sh  gen_protocol.py  test_gen_protocol.py
+    remote_build.sh  deploy.sh  launch_game.sh  env.sh  wait_for_log.sh  teardown_list.sh
+  livetest/
+    conftest.py  support.py
+    test_m1_bridge.py  test_m1_startup_variants.py  test_m1_calls.py  test_m1_mainmenu.py
+    test_m1_batch_props.py  test_m1_robustness.py  test_m1_throughput.py  results/throughput.json
+    scripts/livetest_smoke/__init__.py      in-process smoke script deployed to scripts/
+```
+
+Fixed paths:
+- Windows box: `geoff@192.168.0.211`, checkout root `C:\dev\skyrim-python`, vcpkg `C:\vcpkg`, VS2022 Build Tools.
+- Game: `~/Games/SimpleSkyrim/Stock Game`; plugin files under `Data/SKSE/Plugins/`. Proton prefix `~/.local/share/Steam/steamapps/compatdata/4190904831`.
+- Deployed layout (Task 26's `tools/deploy.sh`): `Data/SKSE/Plugins/SkyrimPython.dll` (loader), `Data/SKSE/Plugins/SkyrimPython.ini`, `Data/SKSE/Plugins/SkyrimPython/SkyrimPythonCore.dll`, `.../SkyrimPython/python/` (embeddable zip), `.../SkyrimPython/site-packages/`, `.../SkyrimPython/lib/skyrim/`, `.../SkyrimPython/scripts/`. SKSE loads only DLLs directly in `Plugins/`, so nothing in the `SkyrimPython/` subfolder is loaded by SKSE.
+- Logs (inside the prefix, `.../pfx/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition/SKSE/`): C++ `SkyrimPython.log`; Python `SkyrimPython/python.log`; bridge session file `SkyrimPython/session.json`.
+- Linux Python for builds and tests: `uv python install 3.14.8` (and 3.12 for the package tests). The `_skyrim` Linux build finds it with `uv python find 3.14`.
+
+---
+
+## Contracts (cross-task names; every task uses exactly these)
+
+### C++ core (`namespace spy`, `core/include/spy/`)
+- Generated (Task 12) `protocol_generated.h`: `kProtocolMajor/Minor`; limits `kMaxFrameBytes`, `kPreAuthFrameBytes`, `kMaxNameBytes`, `kMaxBatchCalls`, `kMinTimeoutMs`, `kMaxTimeoutMs`, `kMaxErrorMessageBytes`, `kMaxClientNameBytes`, `kMaxConnections`, `kHelloTimeoutMs`, `kMaxJsonDepth` (64), `kTokenLength`, `kIntMin`, `kIntMax`, `kFloatMaxText`, `kMaxArrayItems` (128); `enum class ErrorCode` + `kErrorCodeNames`; `kNotReadyReasons`, `kAliasTypes`, `kDefaultAliasType`, `kArrayElemTypes`; `namespace form_ids`; op table `kOps`/`find_op`/`ops::k*` (`OpSpec` gains `needs_game` — false only for `game.state`); `kConfigKeys`/`find_config_key`/`config_defaults::k*`.
+- `errors.h` (Task 14): `ErrorCode` re-export, `to_string(ErrorCode)`, `error_code_from_string`, `struct ProtocolError : std::runtime_error { ErrorCode code; }`, `clip_text`, `using json = nlohmann::json`, `dump_json(const json&, int indent = -1)`, `str_or`, `describe`.
+- `values.h` (Task 14): `Fingerprint`, `FormRef`, `AliasRef`, `ArrayValue`, `Value`, `value_from_json`, `value_to_json`, `form_ref_from_json/to_json`, `alias_ref_from_json/to_json`, `value_kind`. (Exactly as on branch `plan-out-of-process`, Task 10.)
+- `refs.h` (Task 15): `FormKey`, `parse_form_key`, `format_form_key`, `is_valid_form_key`, `is_runtime_form_id`, `is_light_form_id`, `local_form_id`, `form_key_matches_id`, `RefStatus`, `check_fingerprint`. (As branch Task 11.)
+- `json_depth.h` (Task 16): `bool nesting_within(std::string_view text, std::size_t max_depth)` (raw-text scan, O(n), strings and escapes respected).
+- `requests.h` (Task 16): `struct Request { std::uint64_t id; std::string op; json args; }`; `Request parse_request(const json&)`; `Request parse_request_text(std::string_view text)` (depth check, then parse, then `parse_request`; throws only `ProtocolError`); `CallArgs`/`parse_call_args`, `PropertyArgs`/`parse_property_args`, `BatchStep`/`BatchArgs`/`parse_batch_args` (as branch Task 12); `json make_ok(std::uint64_t id, json result)`; `json make_error(std::uint64_t id, ErrorCode, std::string_view message, json detail = json::object())`; `const std::vector<std::string>& known_ops()`; `std::optional<std::uint64_t> peek_request_id(std::string_view text)` (best-effort id for error replies to unparseable text; nullopt → id 0).
+- `config.h` (Task 16): `struct Config { bool python_enabled; bool scripts_enabled; bool bridge_enabled; std::uint16_t port; std::string fixed_token; std::string session_file; std::uint32_t default_timeout_ms; std::uint32_t max_inflight_per_connection; std::uint32_t max_inflight_total; bool enable_console; std::vector<std::string> ignored_keys; }` (defaults from `config_defaults`: true, true, false, 45977, "", "", 5000, 256, 1024, false); `Config parse_config(std::string_view ini_text)` (throws `std::invalid_argument`); `json config_to_json(const Config&)`.
+- `lifecycle_state.h` (Task 17): `LifecycleState` with `on_data_loaded()`, `on_pre_load_game()`, `on_post_load_game(bool success)`, `on_new_game()`, `on_menu(const std::string& name, bool opening)`, `set_paused(bool)`; queries `data_ready()`, `game_loaded()`, `loading()`, `interactive()`, `paused()`, `epoch()`, `loads_started()`, `not_ready_reason(bool require_unpaused) -> std::optional<std::string>` (`"starting"`, `"loading"`, `"no_game"`, then `"paused"` only when `require_unpaused`), `open_menus()`, `base_state() -> json` (`data_ready, game_loaded, loading, interactive, paused, menus, epoch`). Thread-safe (one mutex).
+- `dispatcher.h` (Task 18):
+  ```cpp
+  struct OpResult { bool ok; json result; ErrorCode code; std::string message; json detail;
+                    static OpResult Ok(json); static OpResult Err(ErrorCode, std::string, json detail = json::object()); };
+  using Done = std::function<void(OpResult)>;       // call exactly once, from any thread
+  using Cancelled = std::function<bool()>;          // true once the request timed out, was cancelled, or a load started
+  using Progress = std::function<void(json)>;       // batch: partial results so far, any thread
+  class Backend {
+   public:
+    virtual ~Backend() = default;
+    virtual void Run(const std::string& op, const json& args, Done, Cancelled, Progress) = 0;  // must not block the caller
+    virtual json BaseState() = 0;                                                              // any thread, never blocks
+    virtual std::optional<std::string> NotReadyReason(bool require_unpaused) = 0;              // any thread
+    virtual std::uint32_t LoadsStarted() = 0;                                                  // any thread
+  };
+  using Ticket = std::uint64_t;
+  struct DispatcherOptions { std::uint32_t default_timeout_ms = 5000; std::uint32_t max_inflight_total = 1024; };
+  class Dispatcher {
+   public:
+    Dispatcher(Backend&, DispatcherOptions);
+    ~Dispatcher();                                      // stops the reaper
+    Ticket Submit(std::string_view request_text);      // never throws; a bad request yields a ticket that is already done
+    std::optional<std::string> Wait(Ticket, std::chrono::milliseconds max_wait);  // response text {id, ok, result|error}; nullopt if not done in time or unknown; a returned ticket is consumed
+    std::vector<std::pair<Ticket, std::string>> WaitAny(const std::vector<Ticket>&, std::chrono::milliseconds max_wait);  // the done ones among them (consumed), as soon as at least one is done or max_wait passes
+    void Cancel(Ticket);                                // erases the ticket; a later Wait on it returns nullopt; a late backend result is dropped
+    void Tick();                                        // deadlines and load cancellation (the reaper calls it; tests call it directly)
+    void StartReaper(std::chrono::milliseconds period = std::chrono::milliseconds(50));
+    std::size_t InFlight() const;
+    std::uint64_t LateResults() const;
+  };
+  ```
+  Ticket rules: tickets come from a counter that is never reused; a `Done` for an erased or unknown ticket is a no-op that increments `LateResults()`; `Done` is idempotent per ticket (the first call wins).
+  Rules: an op with `needs_game` gets `not_ready` (detail: `reason`, plus `BaseState()`'s `paused` and `menus`) at `Submit` without reaching the backend when `NotReadyReason(require_unpaused)` has a value; over `max_inflight_total` → `busy`; a request past its deadline (`timeout_ms` from its args via the generated range, else `default_timeout_ms`) → `timeout` (batch: detail `completed` and `results` from the last `Progress`); when `LoadsStarted()` changes, every in-flight `needs_game` request → `not_ready` reason `loading`; an exception from `Backend::Run` → `internal`. Responses are built with `make_ok`/`make_error` and serialised with `dump_json`.
+- `fake_backend.h` (Task 18): `class FakeBackend : public Backend` running ops on its own worker thread. `papyrus.call_static` with `script == "Fake"`: `Echo(x)` → `x`; `Sleep(ms)` → sleeps then `ms`; `Fail(code, message)` → that error; `Throw()` → throws `std::runtime_error` inside `Run`; `Never()` → never completes; `Count()` → number of `Run` calls so far. `game.state` → `BaseState()` plus `"backend": "fake"`. Any other op or script → `unsupported`. Controls: `SetNotReady(std::optional<std::string> reason)`, `BumpLoads()`, `SetPaused(bool)`.
+
+### `_skyrim` module (Task 19; same API in the Linux fake build and the game build)
+- `pyglue/include/spy/pymodule.h`: `struct ModuleHost { Dispatcher* dispatcher; const char* backend; std::function<std::string()> config_json; std::function<void(const std::string& level, const std::string& msg)> log; FakeBackend* fake = nullptr; };` `void InstallModuleHost(ModuleHost)` (before the module is imported); `void DefineModule(pybind11::module_& m)`.
+- Python-visible: `BACKEND: str` (`"game"` | `"fake"`), `PROTOCOL: tuple[int, int]`, `submit(request: str) -> int`, `wait(ticket: int, timeout: float) -> str | None` (GIL released), `wait_any(tickets: list[int], timeout: float) -> list[tuple[int, str]]` (GIL released), `cancel(ticket: int) -> None`, `call(request: str, timeout: float) -> str` (submit + wait; if `timeout` passes first, cancel and return a `timeout` error response for that id with `detail.late_cancel = true`, so callers always see the `Timeout` class for an expired call), `state() -> str` (`BaseState()` JSON, never blocks), `config() -> str` (`config_to_json` plus `python_dir`, `scripts_dir`, `site_packages_dir`, `log_dir`, `session_file`, `plugin_version`, `game_version`, `runtime`; the fake build returns `plugin_version "0.0.0-fake"`, `game_version "0.0.0"`, `runtime "fake"` and directories under a temporary folder chosen by the test), `log(level: str, message: str) -> None`, `in_flight() -> int`. Fake build only: `_fake_set_not_ready(reason: str | None)`, `_fake_bump_loads()`, `_fake_set_paused(flag: bool)`.
+
+### Python package `skyrim` (`python/src/skyrim/`)
+- `_protocol_generated` (Task 12), `_framing`, `errors`, `values`, `refs` (Task 20): as branch Task 13, unchanged names (`encode`, `read_frame`, `MAX_FRAME`; `SkyrimPythonError`, `ConnectionLost`, `NotRunning`, `CallTimeout`, `ProtocolViolation`, `EncodeError`, `HandshakeError`/`Unauthorized`/`ProtocolMismatch`, `RemoteError` + `NotReady`, `Busy`, `BadRequest`, `UnknownFunction`, `TypeMismatch`, `StaleReference`, `NotFound`, `Timeout`, `VmError`, `Unsupported`, `InternalError`, `remote_error_from_wire`, `handshake_error_from_wire`; `Fingerprint`, `Form`, `Alias`, `PArray`, `to_wire`, `from_wire`; `parse_form_key`, `format_form_key`, `is_runtime_form_id`, `is_light_form_id`).
+- `game` (Task 21): `class Transport(Protocol)`: `request(op: str, args: dict, wait_s: float) -> dict` (returns the decoded response object `{id, ok, result|error}`; raises `ConnectionLost`/`CallTimeout`/`EncodeError`), `close() -> None`, `welcome: dict`. `class Game(transport, *, call_timeout=CALL_TIMEOUT_S, retry_not_ready: bool | float = False)` with `call`, `call_method`, `get_property`, `set_property`, `batch() -> Batch`, `resolve(*, form_key=None, form_id=None, editor_id=None) -> Form`, `form(form_key) -> Form`, `alias(quest, alias_id, alias_type="ReferenceAlias") -> Alias`, `state() -> dict`, `wait_ready(timeout=READY_TIMEOUT_S) -> dict`, `close()`, attributes `welcome`, `epoch`, `closed`; context manager. `Batch` as branch Task 14. Timeout rules as branch Task 14 (seconds, rounded up to whole ms, at most `MAX_TIMEOUT_MS`; wait = timeout + `GRACE_S`).
+- `inprocess` (Task 21): `class InProcessTransport` over `_skyrim.call`; `welcome` built from `_skyrim.config()`.
+- `discovery` (Task 22): as branch Task 14 (`Session`, `find_session`), plus `write_session_file(path, session) -> None` (atomic replace) and `write_inactive_session_file(path, reason) -> None` used by the bridge.
+- `remote` (Task 22): `class RemoteTransport` (socket, hello/welcome, reader thread, futures; branch Task 14's client internals); `connect_remote(session=None, *, host=HOST, port=None, token=None, client_name=CLIENT_NAME, connect_timeout=CONNECT_TIMEOUT_S, call_timeout=CALL_TIMEOUT_S, retry_not_ready=False, send_timeout=SEND_TIMEOUT_S) -> Game`.
+- `bridge` (Task 23): `class BridgeServer` with `.port`, `.token`, `.close()`, `.connections() -> int`; `serve(backend, *, host=HOST, port=45977, token=None, session_file=None, welcome_info: dict, max_connections=MAX_CONNECTIONS, max_inflight_per_connection=256) -> BridgeServer`. `backend` is any object with `submit(text) -> int`, `wait_any(tickets, timeout) -> list[tuple[int, str]]` and `cancel(ticket)`: the `_skyrim` module in the game, the fake `_skyrim` in tests. One reader thread and one completion thread per connection: the reader submits each request text and records `ticket → connection`; the completion thread loops on `wait_any` (50 ms) and writes each response text back as a frame. On disconnect every outstanding ticket of that connection is cancelled. The Dispatcher's reaper enforces each request's `timeout_ms`; the bridge never times calls out itself. Handshake rules as branch Task 16's server (first frame a valid hello within `HELLO_TIMEOUT_MS`, at most `PRE_AUTH_FRAME_BYTES` before it, constant-time token check, then protocol major), connection cap, per-connection in-flight cap → `busy`, garbage/oversize/too-deep frame closes that connection only.
+- `skyrim.connect(session=None, **kw) -> Game` (`__init__`, Task 22): in-process when `_skyrim` is importable and `_skyrim.BACKEND == "game"`, else `connect_remote(...)`.
+- `_host` (Task 24): `main() -> None` (called by the plugin on the host thread; returns after setup and never raises; long-running work lives on threads it starts), `load_scripts(game, scripts_dir) -> dict[str, str]` (name → `"ok"` or `"failed: <reason>"`), `reload(name) -> str`, `status() -> dict`; logs to `python.log` in `_skyrim.config()["log_dir"]` (rotating, 1 MiB × 3); starts the bridge when `bridge_enabled`.
+
+### Plugin (Windows)
+- `spy::log::Info/Warn/Error/Debug(const std::string&)`, `spy::settings::Load()`, `spy::settings::Get() -> const Config&`, `spy::settings::PluginsDir() -> std::filesystem::path` (`Data/SKSE/Plugins`, the folder of the loader DLL), `spy::settings::OwnDir() -> std::filesystem::path` (`Data/SKSE/Plugins/SkyrimPython`, the folder of the core DLL), `spy::life::*` wrappers over one `LifecycleState` (Task 25).
+- `spy::host::Start(const Config&) -> void` (starts the host thread; returns at once), `spy::host::State() -> std::string` (`"disabled: <why>"`, `"starting"`, `"running"`, `"failed: <why>"`) (Task 26).
+- `spy::game::Backend() -> spy::Backend&` (`GameBackend`), `spy::game::GetDispatcher() -> spy::Dispatcher&` (Task 27).
+- `spy::ops::Run(op, args, Done, Cancelled, Progress)` (main thread), `spy::pv::*`, `spy::sig::*` as branch Tasks 17a-17c and 18, with `ops::OpResult` replaced by core's `spy::OpResult` (Tasks 27-30).
+
+### Tools
+- `tools/fetch_python.sh [--check]` (Task 0) → `third_party/cpython/{embed,nuget}`; `--check` verifies SHA-256s against `docs/PINS.md` and exits non-zero on mismatch.
+- `tools/remote_build.sh <cmake-source-dir> <dll-name>` → `out/<dll-name>` (Task 1; also syncs `third_party/cpython/nuget` and `third_party/pybind11`).
+- `tools/deploy.sh out/<dll-name> [ini-file]` (Task 1; extended in Task 3 with `--python` and in Task 26 with `--package` and `--scripts DIR`) records every copied path in `out/deployed.txt`; `tools/teardown_list.sh` LISTS what was deployed and removes nothing.
+- `tools/launch_game.sh`, `tools/wait_for_log.sh <file> <regex> [seconds]`, `source tools/env.sh` (exports `SKYRIM_PYTHON_SESSION`, `SIMPLESKYRIM_DATA`, `SKSE_LOG_DIR`, `SKYRIM_PYTHON_LOG`) as branch Task 1.
+
+---
+
+## Tasks
+
+**Gates.**
+- S1 (Task 2) must pass before Task 3. **S8 (Task 3) must pass before Tasks 18-32 start.** If S8 fails, STOP and ask the owner: the fallback is the out-of-process plan on branch `plan-out-of-process` (Tasks 11-17 here are useful in both designs and may continue).
+- S2, S9 and S4 (Tasks 4-6) gate Part C (Tasks 25-32): if any fails, STOP and ask the owner.
+- S7 (Task 9) must pass before Tasks 28 and 29. S5, S6 and S10 (Tasks 7, 8, 10) gate only the M2 plan and skyrim-dm's packaging; they do not block M1, but M1 is complete only when all three are recorded.
+
+**STOP and ask the owner (do not improvise) when:** a gating spike fails; the game does not launch within 10 minutes; the Windows build box does not answer; the game runs on any runtime other than AE 1.6.1170; a downloaded file's SHA-256 differs from `docs/PINS.md`; or a step would delete, overwrite or `git push` anything not itemised in this plan.
+
+**Where tasks run.** Part A (M0) is sequential on the spike DLLs. Part B (Tasks 11-24) is pure Linux work and needs no game; Tasks 11-17 may run in parallel with the spikes, Tasks 18-24 after S8 passes. Part C (Tasks 25-32) needs the Windows build box and a running game.
+
+**Task size.** Task files aim at 600 lines or fewer, so a worker reads this index plus one small file. A task that would be longer is split by topic (as 22 and 23 are).
+
+**Suggested order.** 0 → 1 → 2 → 3 (S8) → 4 → 5 → 6 → 7 → 8 → 9 → 10, with 11-17 in parallel; then 18 → 19 → 20 → 21 → 22 → 23 → 24; then 25 → 26 → 27 (first real Papyrus call from Linux through the bridge) → 28 → 29 → 30 → 31 → 32.
+
+### Part A: M0 spikes
+
+| # | Task | Runs on | Depends on |
+|---|---|---|---|
+| 0 | [Repository bootstrap, vendored headers, pinned CPython](task-00-repository-bootstrap.md) | Linux | - |
+| 1 | [Build tooling and a spike DLL that loads](task-01-build-tooling-and-spike-dll.md) | Windows box + game | 0 |
+| 2 | [Spike S1: Linux reaches a socket inside Proton (spike harness)](task-02-spike-s1-harness-socket.md) | Windows box + game | 1 |
+| 3 | [Spike S8: two-DLL load and CPython embedded in the game; Python socket from Linux](task-03-spike-s8-embedded-cpython.md) | Windows box + game | 2 |
+| 4 | [Spike S2: VM callback thread, nested dispatch, argument ownership](task-04-spike-s2-vm-callback-thread.md) | Windows box + game | 3 |
+| 5 | [Spike S9: Python threads drive VM calls; frame time and call latency under CPU-bound Python](task-05-spike-s9-python-threads-and-frame-time.md) | Windows box + game | 3, 4 |
+| 6 | [Spike S4: bind a quest alias, `ForceRefTo`, read back](task-06-spike-s4-quest-alias.md) | Windows box + game | 4 |
+| 7 | [Spike S5: mod events and native `SkyrimPython.Send`](task-07-spike-s5-mod-events-and-send.md) | Windows box + game | 6 |
+| 8 | [Spike S6: load a save through `AddUITask`](task-08-spike-s6-load-save.md) | Windows box + game | 7 |
+| 9 | [Spike S7: function lookup, bound-object dispatch, alias handles, object arrays](task-09-spike-s7-function-lookup-and-dispatch.md) | Windows box + game | 6, 8 |
+| 10 | [Spike S10: skyrim-dm's dependencies as wheels in the embedded interpreter](task-10-spike-s10-dependency-wheels.md) | Linux, then game | 3 |
+
+### Part B: M1 on Linux
+
+| # | Task | Runs on | Depends on |
+|---|---|---|---|
+| 11 | [Protocol v1 document and golden fixtures](task-11-protocol-document-and-fixtures.md) | Linux | - |
+| 12 | [Protocol table generator](task-12-protocol-table-generator.md) | Linux | 11 |
+| 13 | [Core library scaffold](task-13-core-scaffold.md) | Linux | 0, 12 |
+| 14 | [Errors and the value codec](task-14-errors-and-value-codec.md) | Linux | 13 |
+| 15 | [Form keys and the fingerprint rule](task-15-form-keys-and-fingerprints.md) | Linux | 14 |
+| 16 | [Requests, op arguments, JSON depth, config](task-16-requests-op-args-config.md) | Linux | 11, 15 |
+| 17 | [Lifecycle state](task-17-lifecycle-state.md) | Linux | 13 |
+| 18 | [Dispatcher and fake backend](task-18-dispatcher-and-fake-backend.md) | Linux | 16, 17; S8 PASS |
+| 19 | [The `_skyrim` module, Linux build and tests](task-19-skyrim-module-linux.md) | Linux | 18 |
+| 20 | [Python package basics: framing, errors, values, form keys](task-20-python-basics.md) | Linux | 12 |
+| 21 | [`Game` API and the in-process transport](task-21-game-api-and-inprocess.md) | Linux | 19, 20 |
+| 22 | [Discovery and the remote transport](task-22-discovery-and-remote.md) | Linux | 21 |
+| 23 | [The dev bridge server](task-23-bridge-server.md) | Linux | 22 |
+| 24 | [`skyrim._host`: logging, script loader, reload, bridge startup](task-24-python-host.md) | Linux | 23 |
+
+### Part C: M1 plugin
+
+| # | Task | Runs on | Depends on |
+|---|---|---|---|
+| 25 | [Plugin skeleton: loader and core DLLs, logging, settings, lifecycle](task-25-plugin-skeleton.md) | Linux, then Windows box + game | 16, 17, 19; S2, S4, S8, S9 PASS |
+| 26 | [Python host thread, `_skyrim` in the game, deploy layout](task-26-python-host-thread.md) | Windows box + game | 24, 25 |
+| 27 | [Game backend, `call_static` and `game.state`](task-27-game-backend-call-static.md) | Windows box + game | 26 |
+| 28 | [Papyrus value conversion and signatures](task-28-papyrus-values-and-signatures.md) | Windows box + game | 27; S7 |
+| 29 | [`call_method`, aliases and `form.resolve`](task-29-call-method-aliases-resolve.md) | Windows box + game | 28; S4, S7 |
+| 30 | [Properties and batch](task-30-properties-and-batch.md) | Windows box + game | 29 |
+| 31 | [Robustness, throughput and the in-process smoke script](task-31-robustness-throughput-smoke.md) | Windows box + game | 30 |
+| 32 | [README and milestone tag](task-32-readme-and-tag.md) | Linux | 31 |
+
+---
+
+## After this plan
+
+Write the next plan when this one is done and `spikes/RESULTS.md` is final. It covers, per spec section 9:
+
+1. **M1.5: test ESP and engine probes.** Decide with skyrim-dm's integration work which repo owns the production shell quest (spec open question 5). Choose the authoring tool; author `SkyrimPythonTest.esp` (≥3 reference aliases, 1 location alias, stages 10/20/100/200, one objective, a quest script with an auto property, a full property, `SetupContract(...)` and stage fragments calling `SkyrimPython.Send`). Add the property happy-path live tests deferred from Task 30. Run the three probes and write `docs/probes/`.
+2. **M2: events and lifecycle.** C++ per-subscription bounded queues with `dropped` counts; `events.subscribe/unsubscribe` with filters; `_skyrim.next_events(timeout)`; the Python event dispatch thread and `on_*` helpers; bridge event frames; the v1 event list in spec 4.6; mod events and `SkyrimPython.Send` (per S5); `game.load`/`game.save` via `AddUITask` (per S6); a harness that loads a fixed save before each module.
+3. **skyrim-dm acceptance test** (spec section 8), through the bridge and as an in-process player script, with skyrim-dm's `GameClient` implemented on `skyrim` and its dependencies vendored as S10 recorded.
+
+M3 (`pscgen`, typed bindings, signature table, client-side defaults) and M4 (packaging, MO2/Vortex, antivirus, Nexus) follow v1 with their own plans.
+</content>
+</invoke>
+<invoke name="Bash">
+<parameter name="command">cd /home/geoff/projects/games/skyrim/skyrim-python && git show plan-out-of-process:docs/superpowers/plans/2026-09-30-skyrim-python-v1-foundation/API-VERIFICATION.md > docs/superpowers/plans/2026-10-01-skyrim-python-v1-embedded/API-VERIFICATION.md && wc -l docs/superpowers/plans/2026-10-01-skyrim-python-v1-embedded/*
