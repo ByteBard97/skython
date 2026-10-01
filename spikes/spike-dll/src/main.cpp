@@ -252,11 +252,11 @@ std::string S2(int n)
     // Logged BEFORE phase C: a failed-dispatch probe crashed the engine once (SkyrimSE.exe+1447D3E), and this must survive that.
     Log(std::format("spike: S2 AB main_tid={} nested_done={}/{} nested_ints={} outer_failed={} nested_failed={} latent={}/{} latent_refused={} "
         "cb_first_tid={} cb_on_main={} cb_off_main={} nested_first_tid={} nested_on_main={} nested_off_main={} latent_first_tid={} latent_on_main={} latent_off_main={} "
-        "args_ctor_ok={} args_dtor_ok={} live_ok={} owner_ok_path={} elapsed_ms={}",
+        "args_ctor_ok={} args_dtor_ok={} args_live_after_settle={} vm_frees_args={} elapsed_ms={}",
         mainTid, st->nestedDone.load(), n, st->nestedInts.load(), st->outerFailed.load(), st->nestedFailed.load(), st->latentDone.load(), kLatent,
         st->latentRefused.load(), st->firstCbTid, st->cbOnMain.load(), st->cbOffMain.load(), st->firstNestedTid, st->nestedOnMain.load(),
         st->nestedOffMain.load(), st->firstLatentTid, st->latentOnMain.load(), st->latentOffMain.load(), ctorOk, dtorOk, liveOk,
-        liveOk == 0 ? "vm" : "NOT_FREED", elapsedMs));
+        liveOk == 0 ? "true" : "false", elapsedMs));
 
     // Phase D: the plugin owns the arguments. Utility.RandomInt(5, 5) always returns 5; each callback records its
     // result and THEN deletes that call's args object (never before the callback). A refused dispatch deletes at once.
@@ -326,12 +326,12 @@ std::string S2(int n)
         "S2 {} note={} n={} nested_done={} nested_ints={} outer_failed={} nested_failed={} elapsed_ms={} "
         "main_tid={} first_cb_tid={} cb_on_main={} cb_off_main={} first_nested_tid={} nested_on_main={} nested_off_main={} "
         "latent={}/{} latent_refused={} first_latent_tid={} latent_on_main={} latent_off_main={} "
-        "args_ctor_ok={} args_dtor_ok={} live_ok={} owner_ok_path={} failed_dispatch_false={} failed_dispatch_true={} live_failed_path={} owner_failed_path={} {}",
+        "args_ctor_ok={} args_dtor_ok={} args_live_after_settle={} vm_frees_args={} failed_dispatch_false={} failed_dispatch_true={} live_failed_path={} owner_failed_path={} {}",
         (threadPhase && dPass) ? "PASS" : "FAIL", verdictNote, n, st->nestedDone.load(), st->nestedInts.load(),
         st->outerFailed.load(), st->nestedFailed.load(), elapsedMs, mainTid, st->firstCbTid, st->cbOnMain.load(),
         st->cbOffMain.load(), st->firstNestedTid, st->nestedOnMain.load(), st->nestedOffMain.load(), st->latentDone.load(),
         kLatent, st->latentRefused.load(), st->firstLatentTid, st->latentOnMain.load(), st->latentOffMain.load(), ctorOk, dtorOk,
-        liveOk, ownsOk ? "vm" : "NOT_FREED", st->failedFalse.load(), st->failedTrue.load(), liveFail, failPathOwner, dLine);
+        liveOk, ownsOk ? "true" : "false", st->failedFalse.load(), st->failedTrue.load(), liveFail, failPathOwner, dLine);
 }
 }
 

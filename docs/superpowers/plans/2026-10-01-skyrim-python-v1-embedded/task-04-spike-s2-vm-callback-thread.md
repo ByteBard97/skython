@@ -14,7 +14,7 @@ Adapted from: branch `plan-out-of-process`, task 3 (`task-03-spike-s2-which-thre
 **Interfaces:**
 - Consumes (Tasks 1-3): `spike::Log`, `spike::ParseInt`, `spike::Handle`, `spikes/spike_client.py` (Task 2). The includes `<algorithm> <atomic> <chrono> <cstdint> <format> <functional> <future> <memory> <mutex> <sstream> <string> <thread> <vector>` are already at the top of `main.cpp` (Task 1); add **no** includes inside `namespace spike`. Task 3's Python commands (`py_load`, `py_init`, `py_exec`) stay in the spike DLL untouched; S2 does not use them.
 - Produces (used by Tasks 5, 6, 7, 8, 9): `spike::Tid()`, `spike::TidOf(id)`, `spike::g_mainTid`, `spike::Functor`, `spike::OnMainThread(fn, timeout)`, `spike::WaitUntil(pred, timeout)`, `spike::CountedArgs` (an `IFunctionArguments` that counts constructions and destructions), `spike::NoArgs()`, `spike::IntArgs(a, b)`, `spike::FloatArg(f)`.
-- Produces for Tasks 18, 27, 29 and 30 (in the S2 row of `spikes/RESULTS.md`): the callback-thread answer for native and latent functions (which thread calls the `Dispatcher`'s `Done`; whether `GameBackend` needs one extra `AddTask` to convert a Form result), the argument-ownership answer on success and on a failed dispatch (whether Task 27's `CallStatic` and Task 29's `CallMethod` must `delete` the `DynArgs` when `Dispatch*` returns false), and the nested-dispatch answer (Task 30's batch).
+- Produces for Tasks 18, 27, 29 and 30 (in the S2 row of `spikes/RESULTS.md`): the callback-thread answer for native and latent functions (which thread calls the `Dispatcher`'s `Done`; whether `GameBackend` needs one extra `AddTask` to convert a Form result), the argument-ownership answer (measured: the VM never frees `IFunctionArguments`, so the plugin owns them and frees them in the callback after reading the result, phase D; failed-dispatch ownership was not measured because no dispatch returned false, so Tasks 27 and 29 keep the args on a false return, log once and leak, per R37), and the nested-dispatch answer (Task 30's batch).
 
 - [ ] **Step 0: Check the gates, and prepare the game**
 
@@ -227,11 +227,11 @@ std::string S2(int n)
     // Logged BEFORE phase C: a failed-dispatch probe crashed the engine once (SkyrimSE.exe+1447D3E), and this must survive that.
     Log(std::format("spike: S2 AB main_tid={} nested_done={}/{} nested_ints={} outer_failed={} nested_failed={} latent={}/{} latent_refused={} "
         "cb_first_tid={} cb_on_main={} cb_off_main={} nested_first_tid={} nested_on_main={} nested_off_main={} latent_first_tid={} latent_on_main={} latent_off_main={} "
-        "args_ctor_ok={} args_dtor_ok={} live_ok={} owner_ok_path={} elapsed_ms={}",
+        "args_ctor_ok={} args_dtor_ok={} args_live_after_settle={} vm_frees_args={} elapsed_ms={}",
         mainTid, st->nestedDone.load(), n, st->nestedInts.load(), st->outerFailed.load(), st->nestedFailed.load(), st->latentDone.load(), kLatent,
         st->latentRefused.load(), st->firstCbTid, st->cbOnMain.load(), st->cbOffMain.load(), st->firstNestedTid, st->nestedOnMain.load(),
         st->nestedOffMain.load(), st->firstLatentTid, st->latentOnMain.load(), st->latentOffMain.load(), ctorOk, dtorOk, liveOk,
-        liveOk == 0 ? "vm" : "NOT_FREED", elapsedMs));
+        liveOk == 0 ? "true" : "false", elapsedMs));
 
     // Phase D: the plugin owns the arguments. Utility.RandomInt(5, 5) always returns 5; each callback records its
     // result and THEN deletes that call's args object (never before the callback). A refused dispatch deletes at once.
@@ -301,12 +301,12 @@ std::string S2(int n)
         "S2 {} note={} n={} nested_done={} nested_ints={} outer_failed={} nested_failed={} elapsed_ms={} "
         "main_tid={} first_cb_tid={} cb_on_main={} cb_off_main={} first_nested_tid={} nested_on_main={} nested_off_main={} "
         "latent={}/{} latent_refused={} first_latent_tid={} latent_on_main={} latent_off_main={} "
-        "args_ctor_ok={} args_dtor_ok={} live_ok={} owner_ok_path={} failed_dispatch_false={} failed_dispatch_true={} live_failed_path={} owner_failed_path={} {}",
+        "args_ctor_ok={} args_dtor_ok={} args_live_after_settle={} vm_frees_args={} failed_dispatch_false={} failed_dispatch_true={} live_failed_path={} owner_failed_path={} {}",
         (threadPhase && dPass) ? "PASS" : "FAIL", verdictNote, n, st->nestedDone.load(), st->nestedInts.load(),
         st->outerFailed.load(), st->nestedFailed.load(), elapsedMs, mainTid, st->firstCbTid, st->cbOnMain.load(),
         st->cbOffMain.load(), st->firstNestedTid, st->nestedOnMain.load(), st->nestedOffMain.load(), st->latentDone.load(),
         kLatent, st->latentRefused.load(), st->firstLatentTid, st->latentOnMain.load(), st->latentOffMain.load(), ctorOk, dtorOk,
-        liveOk, ownsOk ? "vm" : "NOT_FREED", st->failedFalse.load(), st->failedTrue.load(), liveFail, failPathOwner, dLine);
+        liveOk, ownsOk ? "true" : "false", st->failedFalse.load(), st->failedTrue.load(), liveFail, failPathOwner, dLine);
 }
 }
 ```
@@ -330,12 +330,12 @@ SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/S
 python3 spikes/spike_client.py s2 1000
 python3 spikes/spike_client.py s2 10000
 ```
-Expected PASS (first line of the run): `S2 PASS note=ok n=1000 nested_done=1000 nested_ints=1000 outer_failed=0 nested_failed=0 ... latent=10/10 ... live_ok=0 owner_ok_path=vm ...`, with `first_cb_tid`, `first_nested_tid` and `first_latent_tid` recorded next to `main_tid`, and the game still responsive after the 10000 run. The client's receive timeout is 180 s, so a slow 10000 run is not cut off; the DLL bounds itself (each 100-call chunk must finish in 30 s). `S2 NOT_RUN (PAUSED)` means a menu is open: close it and retry.
+Expected PASS (first line of the run): `S2 PASS note=ok n=1000 nested_done=1000 nested_ints=1000 outer_failed=0 nested_failed=0 ... latent=10/10 ... args_live_after_settle=2010 vm_frees_args=false ... D PASS done=1000/1000 mismatches=0 refused=0 exceptions=0 args_ctor_d=1000 args_dtor_d=1000 ...` (the VM does not free the arguments: the plugin does, in the callback, and phase D proves that is safe), with `first_cb_tid`, `first_nested_tid` and `first_latent_tid` recorded next to `main_tid`. The 10000-call run and the RSS check below were not run on the box; only n=1000 was. The client's receive timeout is 180 s; the DLL bounds itself (each 100-call chunk must finish in 30 s). `S2 NOT_RUN (PAUSED)` means a menu is open: close it and retry.
 
 PASS criteria (all must hold):
 1. every nested dispatch completed (`nested_done == n`, `nested_ints == n`) with no refused dispatch;
 2. all 10 latent `Utility.Wait(0.1)` callbacks arrived;
-3. **argument ownership:** on the success path `live_ok == 0` (every `CountedArgs` built in phases A and B was destroyed by the VM; it is counted after a 3 s settle and **before** phase C starts, so late destructions cannot fall into the failed-path bucket). `live_failed_path` is counted from that split point after a second 3 s settle. Separately record `owner_failed_path`: `vm` means the VM also destroys the arguments when `Dispatch*` returns false; `CALLER(...)` means it does not, and Task 27's `CallStatic` and Task 29's `CallMethod` must `delete` the `DynArgs` when `Dispatch*` returns false (write this into the RESULTS.md row; those tasks read it);
+3. **argument ownership:** measured, not assumed. Phases A and B show the VM never frees the arguments (`args_live_after_settle` equals the constructions, `vm_frees_args=false`), so the plugin owns every `IFunctionArguments`. Phase D passes when the plugin deletes each call's args object inside the callback, after reading the result (never before): 1000 `Utility.RandomInt(5, 5)` calls, 0 mismatches, `args_dtor_d == args_ctor_d`, no crash. Failed-dispatch ownership is not measured (no dispatch returned false; a nonexistent script or function crashes the engine, so phase C is opt-in and off by default): Tasks 27 and 29 keep the args on a false return, log once and leak (R37), and never `Dispatch*Call` an unvalidated target;
 4. no hang or crash.
 
 The thread answers are findings, not pass/fail: record whether callbacks ran on the main thread (`cb_on_main`/`cb_off_main`) for the native case and separately for the latent case. If the latent callbacks come from a different thread than the native ones, `GameBackend` (Task 27) must not assume either: the `Dispatcher`'s `Done` (Task 18) is already safe from any thread, and must stay free of Python and of engine access. Also check the logged thread ids against `main_tid`: Task 27 converts object results with one extra `AddTask` only when the callback is off the main thread.
@@ -352,7 +352,7 @@ Record A and B. A steady growth of many MB per run (B minus A over about 20 MB) 
 
 - [ ] **Step 3: Record and commit**
 
-Fill the S2 row in `spikes/RESULTS.md`: date, PASS/FAIL, the full output line (thread ids for native and latent, nested result, `live_ok`, `owner_failed_path`), A and B, and "spec section changed": 4.3/4.5 if nested dispatch failed, and Tasks 27/29 (`DynArgs` delete-on-false) if `owner_failed_path` is `CALLER`. **If nested dispatch hangs, crashes or never completes, or the game crashes: record FAIL and STOP and ask the owner** (the plan's fallback is Task 30's `batch` using a fresh `AddTask` per step, which is already the default, so the owner's answer is expected to be "proceed", but it is theirs to give).
+Fill the S2 row in `spikes/RESULTS.md`: date, PASS/FAIL, the callback-thread mix for native and latent callbacks, the nested result, `args_live_after_settle`/`vm_frees_args`, the phase D line, and "spec section changed": 4.3/4.5 if nested dispatch failed. **If nested dispatch hangs, crashes or never completes, or the game crashes: record FAIL and STOP and ask the owner** (the plan's fallback is Task 30's `batch` using a fresh `AddTask` per step, which is already the default, so the owner's answer is expected to be "proceed", but it is theirs to give).
 ```bash
 git add spikes && git commit -m "test(spike): S2 VM callback thread, nested dispatch, latent callback, argument ownership"
 ```
