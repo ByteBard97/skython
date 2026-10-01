@@ -282,7 +282,3 @@ Write the next plan when this one is done and `spikes/RESULTS.md` is final. It c
 3. **skyrim-dm acceptance test** (spec section 8), through the bridge and as an in-process player script, with skyrim-dm's `GameClient` implemented on `skyrim` and its dependencies vendored as S10 recorded.
 
 M3 (`pscgen`, typed bindings, signature table, client-side defaults) and M4 (packaging, MO2/Vortex, antivirus, Nexus) follow v1 with their own plans.
-</content>
-</invoke>
-<invoke name="Bash">
-<parameter name="command">cd /home/geoff/projects/games/skyrim/skyrim-python && git show plan-out-of-process:docs/superpowers/plans/2026-09-30-skyrim-python-v1-foundation/API-VERIFICATION.md > docs/superpowers/plans/2026-10-01-skyrim-python-v1-embedded/API-VERIFICATION.md && wc -l docs/superpowers/plans/2026-10-01-skyrim-python-v1-embedded/*
