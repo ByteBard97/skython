@@ -14,7 +14,9 @@ a script whose setup blocks is reported as "timeout: ..." and keeps running, and
 loads. setup should return quickly (a setup over SETUP_WARN_S is logged) and start a thread for long work.
 Each script gets its own Game, so a script that closes its Game (`with game:` in setup) does not close
 anyone else's. reload(name) closes that script's Game after teardown(), so a thread teardown() did not stop
-gets ConnectionLost instead of driving the game; the new setup gets a fresh Game.
+gets ConnectionLost instead of driving the game; the new setup gets a fresh Game. Each load of a name takes a
+new generation: a load that a reload has replaced (its setup timed out, then the reload loaded the script again)
+records nothing when it finally finishes, closes the Game it made and does not run its setup.
 No game is loaded while setup runs: in the game, main() runs when the data has loaded, at the main menu,
 so a needs_game call made in setup answers NotReady. Game work belongs on a thread that setup starts and
 that first calls game.wait_ready().
@@ -22,6 +24,7 @@ A script name must not clash with a standard-library or site-packages module: th
 after them on sys.path."""
 import importlib
 import io
+import itertools
 import json
 import logging
 import logging.handlers
@@ -45,12 +48,13 @@ LOG_BACKUPS = 3
 
 _LOCK = threading.RLock()
 _RELOAD_LOCK = threading.Lock()  # one reload at a time: no two setups of the same script at once
+_GENERATIONS = itertools.count(1)  # never reset (not even by _reset), so an old thread can never match a new load
 _STATE: dict = {}
 
 
 def _fresh_state() -> dict:
     return {"config": None, "game": None, "bridge": None, "bridge_status": "not started", "scripts": {},
-            "modules": {}, "games": {}, "scripts_dir": None, "log_file": None}
+            "modules": {}, "games": {}, "generations": {}, "scripts_dir": None, "log_file": None}
 
 
 _STATE.update(_fresh_state())
@@ -196,8 +200,16 @@ def _load_one(name: str) -> str:
     from .inprocess import connect_in_process
 
     holder: dict = {}
+    with _LOCK:  # this load's generation: only the newest load of a name may write the host's records for it
+        generation = next(_GENERATIONS)
+        _STATE["generations"][name] = generation
+
+    def current() -> bool:  # call with _LOCK held
+        return _STATE["generations"].get(name) == generation
 
     def final_status() -> str:
+        if holder.get("stale"):
+            return "superseded: a newer load of this script replaced it"
         if "error" in holder:
             return f"failed: {holder['error']}"
         if holder.get("missing"):
@@ -206,7 +218,9 @@ def _load_one(name: str) -> str:
 
     def report(status: str, took: float, late: bool) -> None:
         suffix = " (finished after its timeout)" if late else ""
-        if status.startswith("failed: no setup"):
+        if status.startswith("superseded"):
+            log.info("script %s: %s", name, status)
+        elif status.startswith("failed: no setup"):
             log.error("script %s: %s", name, status)
         elif status.startswith("failed"):
             log.error("script %s %s%s\n%s", name, status, suffix, holder.get("traceback"))
@@ -222,25 +236,42 @@ def _load_one(name: str) -> str:
         try:
             module = importlib.import_module(name)
             with _LOCK:  # recorded as soon as it imports, so a later reload can tear it down
-                _STATE["modules"][name] = module
+                if current():
+                    _STATE["modules"][name] = module
+                else:
+                    holder["stale"] = True
             setup = getattr(module, "setup", None)
-            if not callable(setup):
+            if holder.get("stale"):
+                pass
+            elif not callable(setup):
                 holder["missing"] = True
             else:
                 game = connect_in_process()  # the script's own Game: closing it closes no one else's
                 with _LOCK:  # recorded before setup runs, so reload can close it even if setup times out
-                    _STATE["games"][name] = game
-                setup(game)
+                    if current():
+                        _STATE["games"][name] = game
+                    else:
+                        holder["stale"] = True
+                if holder.get("stale"):
+                    game.close()  # a reload replaced this load: its Game must not drive the game
+                else:
+                    setup(game)
         except BaseException as e:  # noqa: BLE001 - SystemExit from a script is a failure, not an exit
             holder["error"] = f"{type(e).__name__}: {e}"
             holder["traceback"] = traceback.format_exc()
         with _LOCK:
             holder["done"] = True
-            if holder.get("timed_out"):  # the host gave up on it earlier: record how it ended
+            if not holder.get("timed_out"):
+                return
+            if not current():  # a reload replaced this load: its outcome is not the script's status any more
+                stale = True
+            else:  # the host gave up on it earlier: record how it ended
+                stale = False
                 status = final_status()
                 _STATE["scripts"][name] = status
-            else:
-                return
+        if stale:
+            log.info("script %s: an earlier load finished after a reload replaced it; discarded", name)
+            return
         report(status, time.monotonic() - t0, late=True)
 
     t = threading.Thread(target=run, name=f"script:{name}", daemon=True)
@@ -250,12 +281,12 @@ def _load_one(name: str) -> str:
         if not holder.get("done"):
             holder["timed_out"] = True
             status = f"timeout: setup still running after {SETUP_TIMEOUT_S:g} s"
-            _STATE["scripts"][name] = status
             timed_out = True
         else:
             status = final_status()
-            _STATE["scripts"][name] = status
             timed_out = False
+        if current():
+            _STATE["scripts"][name] = status
     if timed_out:
         log.error("script %s: %s (it keeps running; the other scripts still load)", name, status)
     else:

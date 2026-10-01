@@ -8,7 +8,7 @@
 
 **Decisions this task makes, and why.**
 - **A script's import and `setup(game)` run on their own thread; the host thread waits up to `SETUP_TIMEOUT_S` (10 s).** A setup that blocks is reported as `"timeout: setup still running after 10 s"` and keeps running, and the next script still loads; a setup that finishes after `SETUP_WARN_S` (1 s) is `"ok"` with a warning in the log.
-- **Each script gets its own `Game`** (`connect_in_process()` on the script's thread), so a script that closes its `Game` (`with game:` in `setup`) closes no one else's. The host keeps each script's `Game` and `reload` closes it after `teardown()`: a thread `teardown()` did not stop gets `ConnectionLost` instead of driving the game (SkyrimPlatform comparison, Top 4; ruling R38).
+- **Each script gets its own `Game`** (`connect_in_process()` on the script's thread), so a script that closes its `Game` (`with game:` in `setup`) closes no one else's. The host keeps each script's `Game` and `reload` closes it after `teardown()`: a thread `teardown()` did not stop gets `ConnectionLost` instead of driving the game (SkyrimPlatform comparison, Top 4; ruling R38). Each load of a name takes a new generation: a load that a reload replaced (its setup timed out, then the reload loaded the script again) records nothing in `_STATE` when it finally finishes, closes the `Game` it made and skips its `setup`, so it can never overwrite the reload's `Game`, module or status (ruling R42).
 - **No game is loaded while `setup` runs.** In the game, `main()` runs at `kDataLoaded`, at the main menu, so a `needs_game` call in `setup` answers `NotReady`. The module docstring says so: game work belongs on a thread that `setup` starts and that first calls `game.wait_ready()`; a test pins that pattern.
 - **The switch interval stays at CPython's default (0.005 s)**: `SWITCH_INTERVAL_S = None`. Spike S9 (Task 5) measures what a CPU-bound Python thread adds to other threads' game calls and records a recommendation in `spikes/RESULTS.md`; if it says `set 0.001`, change this one constant (the owner can veto). `status()` reports the interval in use and `main()` logs it.
 - **Log files:** `python.log` in `_skyrim.config()["log_dir"]` (the folder that also holds `session.json`), rotating at 1 MiB with 3 backups, all levels from INFO; WARNING and above also go to the plugin's `SkyrimPython.log` through `_skyrim.log`. There is no console in the game, so stdout and stderr are replaced by line-buffered writers into the log.
@@ -436,6 +436,38 @@ def test_concurrent_reloads_never_run_setup_twice_at_once(host, fake, tmp_path):
         for attr in ("t24_active", "t24_max"):
             if hasattr(builtins, attr):
                 delattr(builtins, attr)
+
+
+def test_a_stale_load_never_overwrites_the_reloads_game(host, fake, tmp_path, monkeypatch):
+    # The first load times out while creating its Game; a reload then loads the script again. When the first load
+    # finally gets its Game, it must not replace the reload's in the host's records, nor run the old setup.
+    from skyrim import inprocess
+    real = inprocess.connect_in_process
+    release = threading.Event()
+    made = []
+
+    def slow_first(*args, **kwargs):
+        if "module" in kwargs:  # the host's own Game (main()), not a script's
+            return real(*args, **kwargs)
+        game = real(*args, **kwargs)
+        made.append(game)
+        if len(made) == 1:
+            release.wait(5)
+        return game
+
+    monkeypatch.setattr(inprocess, "connect_in_process", slow_first)
+    script(tmp_path, "t24_gen", 'def setup(game):\n    game.call("Fake", "Echo", "setup ran")\n')
+    host.main()
+    assert host.status()["scripts"]["t24_gen"].startswith("timeout:")
+    assert host.reload("t24_gen") == "ok"
+    stale, current = made
+    release.set()
+    wait_until(lambda: not any(t.name == "script:t24_gen" and t.is_alive() for t in threading.enumerate()),
+               what="the stale load thread to finish")
+    assert host._STATE["games"]["t24_gen"] is current
+    assert stale.closed and not current.closed
+    assert echoes(fake) == ["setup ran"]  # only the reload's setup ran
+    assert host.status()["scripts"]["t24_gen"] == "ok"
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -463,7 +495,9 @@ a script whose setup blocks is reported as "timeout: ..." and keeps running, and
 loads. setup should return quickly (a setup over SETUP_WARN_S is logged) and start a thread for long work.
 Each script gets its own Game, so a script that closes its Game (`with game:` in setup) does not close
 anyone else's. reload(name) closes that script's Game after teardown(), so a thread teardown() did not stop
-gets ConnectionLost instead of driving the game; the new setup gets a fresh Game.
+gets ConnectionLost instead of driving the game; the new setup gets a fresh Game. Each load of a name takes a
+new generation: a load that a reload has replaced (its setup timed out, then the reload loaded the script again)
+records nothing when it finally finishes, closes the Game it made and does not run its setup.
 No game is loaded while setup runs: in the game, main() runs when the data has loaded, at the main menu,
 so a needs_game call made in setup answers NotReady. Game work belongs on a thread that setup starts and
 that first calls game.wait_ready().
@@ -471,6 +505,7 @@ A script name must not clash with a standard-library or site-packages module: th
 after them on sys.path."""
 import importlib
 import io
+import itertools
 import json
 import logging
 import logging.handlers
@@ -494,12 +529,13 @@ LOG_BACKUPS = 3
 
 _LOCK = threading.RLock()
 _RELOAD_LOCK = threading.Lock()  # one reload at a time: no two setups of the same script at once
+_GENERATIONS = itertools.count(1)  # never reset (not even by _reset), so an old thread can never match a new load
 _STATE: dict = {}
 
 
 def _fresh_state() -> dict:
     return {"config": None, "game": None, "bridge": None, "bridge_status": "not started", "scripts": {},
-            "modules": {}, "games": {}, "scripts_dir": None, "log_file": None}
+            "modules": {}, "games": {}, "generations": {}, "scripts_dir": None, "log_file": None}
 
 
 _STATE.update(_fresh_state())
@@ -645,8 +681,16 @@ def _load_one(name: str) -> str:
     from .inprocess import connect_in_process
 
     holder: dict = {}
+    with _LOCK:  # this load's generation: only the newest load of a name may write the host's records for it
+        generation = next(_GENERATIONS)
+        _STATE["generations"][name] = generation
+
+    def current() -> bool:  # call with _LOCK held
+        return _STATE["generations"].get(name) == generation
 
     def final_status() -> str:
+        if holder.get("stale"):
+            return "superseded: a newer load of this script replaced it"
         if "error" in holder:
             return f"failed: {holder['error']}"
         if holder.get("missing"):
@@ -655,7 +699,9 @@ def _load_one(name: str) -> str:
 
     def report(status: str, took: float, late: bool) -> None:
         suffix = " (finished after its timeout)" if late else ""
-        if status.startswith("failed: no setup"):
+        if status.startswith("superseded"):
+            log.info("script %s: %s", name, status)
+        elif status.startswith("failed: no setup"):
             log.error("script %s: %s", name, status)
         elif status.startswith("failed"):
             log.error("script %s %s%s\n%s", name, status, suffix, holder.get("traceback"))
@@ -671,25 +717,42 @@ def _load_one(name: str) -> str:
         try:
             module = importlib.import_module(name)
             with _LOCK:  # recorded as soon as it imports, so a later reload can tear it down
-                _STATE["modules"][name] = module
+                if current():
+                    _STATE["modules"][name] = module
+                else:
+                    holder["stale"] = True
             setup = getattr(module, "setup", None)
-            if not callable(setup):
+            if holder.get("stale"):
+                pass
+            elif not callable(setup):
                 holder["missing"] = True
             else:
                 game = connect_in_process()  # the script's own Game: closing it closes no one else's
                 with _LOCK:  # recorded before setup runs, so reload can close it even if setup times out
-                    _STATE["games"][name] = game
-                setup(game)
+                    if current():
+                        _STATE["games"][name] = game
+                    else:
+                        holder["stale"] = True
+                if holder.get("stale"):
+                    game.close()  # a reload replaced this load: its Game must not drive the game
+                else:
+                    setup(game)
         except BaseException as e:  # noqa: BLE001 - SystemExit from a script is a failure, not an exit
             holder["error"] = f"{type(e).__name__}: {e}"
             holder["traceback"] = traceback.format_exc()
         with _LOCK:
             holder["done"] = True
-            if holder.get("timed_out"):  # the host gave up on it earlier: record how it ended
+            if not holder.get("timed_out"):
+                return
+            if not current():  # a reload replaced this load: its outcome is not the script's status any more
+                stale = True
+            else:  # the host gave up on it earlier: record how it ended
+                stale = False
                 status = final_status()
                 _STATE["scripts"][name] = status
-            else:
-                return
+        if stale:
+            log.info("script %s: an earlier load finished after a reload replaced it; discarded", name)
+            return
         report(status, time.monotonic() - t0, late=True)
 
     t = threading.Thread(target=run, name=f"script:{name}", daemon=True)
@@ -699,12 +762,12 @@ def _load_one(name: str) -> str:
         if not holder.get("done"):
             holder["timed_out"] = True
             status = f"timeout: setup still running after {SETUP_TIMEOUT_S:g} s"
-            _STATE["scripts"][name] = status
             timed_out = True
         else:
             status = final_status()
-            _STATE["scripts"][name] = status
             timed_out = False
+        if current():
+            _STATE["scripts"][name] = status
     if timed_out:
         log.error("script %s: %s (it keeps running; the other scripts still load)", name, status)
     else:
@@ -911,11 +974,11 @@ def _reset() -> None:
 - [ ] **Step 4: Run to verify they pass, on both Python versions**
 
 Run: `cd python && uv run --python 3.12 pytest -q && uv run --python 3.14 pytest -q`
-Expected: `398 passed, 7 skipped` twice, each in about 15 s (373 before this task plus its 25 host tests; the 7 skipped are test_real_module.py). The blocking-setup test leaves a daemon thread sleeping for 3 s after it ends; that is intended (it shows main() returning while a script is still stuck).
+Expected: `399 passed, 7 skipped` twice, each in about 15 s (373 before this task plus its 26 host tests; the 7 skipped are test_real_module.py). The blocking-setup test leaves a daemon thread sleeping for 3 s after it ends; that is intended (it shows main() returning while a script is still stuck).
 
 Run the host, bridge and remote tests together five times, to catch races between them:
 `for i in 1 2 3 4 5; do uv run --python 3.14 pytest -q tests/test_bridge.py tests/test_host.py tests/test_remote.py; done`
-Expected: `108 passed` five times.
+Expected: `109 passed` five times.
 
 - [ ] **Step 5: Run the drift check**
 

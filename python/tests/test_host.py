@@ -403,3 +403,35 @@ def test_concurrent_reloads_never_run_setup_twice_at_once(host, fake, tmp_path):
         for attr in ("t24_active", "t24_max"):
             if hasattr(builtins, attr):
                 delattr(builtins, attr)
+
+
+def test_a_stale_load_never_overwrites_the_reloads_game(host, fake, tmp_path, monkeypatch):
+    # The first load times out while creating its Game; a reload then loads the script again. When the first load
+    # finally gets its Game, it must not replace the reload's in the host's records, nor run the old setup.
+    from skyrim import inprocess
+    real = inprocess.connect_in_process
+    release = threading.Event()
+    made = []
+
+    def slow_first(*args, **kwargs):
+        if "module" in kwargs:  # the host's own Game (main()), not a script's
+            return real(*args, **kwargs)
+        game = real(*args, **kwargs)
+        made.append(game)
+        if len(made) == 1:
+            release.wait(5)
+        return game
+
+    monkeypatch.setattr(inprocess, "connect_in_process", slow_first)
+    script(tmp_path, "t24_gen", 'def setup(game):\n    game.call("Fake", "Echo", "setup ran")\n')
+    host.main()
+    assert host.status()["scripts"]["t24_gen"].startswith("timeout:")
+    assert host.reload("t24_gen") == "ok"
+    stale, current = made
+    release.set()
+    wait_until(lambda: not any(t.name == "script:t24_gen" and t.is_alive() for t in threading.enumerate()),
+               what="the stale load thread to finish")
+    assert host._STATE["games"]["t24_gen"] is current
+    assert stale.closed and not current.closed
+    assert echoes(fake) == ["setup ran"]  # only the reload's setup ran
+    assert host.status()["scripts"]["t24_gen"] == "ok"
