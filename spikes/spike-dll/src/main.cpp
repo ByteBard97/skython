@@ -10,6 +10,7 @@
 #include <chrono>
 #include <cstdint>
 #include <format>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <memory>
@@ -335,6 +336,134 @@ std::string S2(int n)
 }
 }
 
+namespace spike {
+// ---- S9 (Task 5) ----
+// One Python -> game round trip. SpikePyCore's _spike.call_rt calls this on a Python thread with the GIL
+// released. The main-thread task and the VM callback run C++ only (never Python); everything they touch
+// is owned by shared_ptr, so a callback that fires after a timeout still has valid memory.
+// Returns 0 ok, 1 timeout, 2 dispatch refused, 3 anything else.
+int CallRealTime(int timeoutMs, double* out)
+{
+    try {
+        if (timeoutMs < 1 || timeoutMs > 600000) return 3;
+        auto p = std::make_shared<std::promise<double>>();
+        auto fut = p->get_future();
+        auto once = std::make_shared<std::atomic_bool>(false);
+        SKSE::GetTaskInterface()->AddTask([p, once] {
+            auto finish = [p, once](double v) {
+                if (!once->exchange(true)) p->set_value(v);
+            };
+            try {
+                auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+                RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{ new Functor([finish](Var v) {
+                    finish(v.IsFloat() ? static_cast<double>(v.GetFloat()) : -1.0);
+                }) };
+                if (!vm->DispatchStaticCall(RE::BSFixedString("Utility"), RE::BSFixedString("GetCurrentRealTime"), NoArgs(), cb))
+                    finish(-2.0);
+            } catch (...) {
+                finish(-3.0);
+            }
+        });
+        if (fut.wait_for(std::chrono::milliseconds(timeoutMs)) != std::future_status::ready) return 1;
+        const double v = fut.get();
+        if (v == -2.0) return 2;
+        if (v < 0) return 3;
+        *out = v;
+        return 0;
+    } catch (...) {
+        return 3;
+    }
+}
+
+// Frame-cap state, written into every s9 sample header. Skyrim runs vsync-capped by default
+// (iPresentInterval=1); under vsync or any frame limiter the median frame time cannot move until the frame
+// budget overflows, so s9_analyze.py reports such a run as capped (verdict carried by p99 and long frames).
+// iPresentInterval is read on the main thread from the game's own settings (SkyrimPrefs.ini's collection
+// first, then Skyrim.ini's); Display Tweaks is detected by its DLL; DXVK's limiter by DXVK_FRAME_RATE.
+std::string S9CapState()
+{
+    auto pi = std::make_shared<std::string>("unknown");
+    (void)OnMainThread([pi](std::function<void(std::string)> finish) {
+        RE::Setting* s = nullptr;
+        if (auto* prefs = RE::INIPrefSettingCollection::GetSingleton()) s = prefs->GetSetting("iPresentInterval:Display");
+        if (!s)
+            if (auto* ini = RE::INISettingCollection::GetSingleton()) s = ini->GetSetting("iPresentInterval:Display");
+        if (s) *pi = std::to_string(s->GetInteger());
+        finish("ok");
+    }, std::chrono::seconds(10));
+    char dxvk[64] = {};
+    const DWORD n = GetEnvironmentVariableA("DXVK_FRAME_RATE", dxvk, sizeof dxvk);
+    const std::string dxvkText = (n > 0 && n < sizeof dxvk) ? std::string(dxvk) : std::string("unset");
+    return std::format("iPresentInterval={} displaytweaks={} dxvk_frame_rate={}", *pi,
+                       GetModuleHandleW(L"SSEDisplayTweaks.dll") ? "loaded" : "absent", dxvkText);
+}
+
+std::string S9PauseState()
+{
+    return OnMainThread([](std::function<void(std::string)> finish) {
+        auto* ui = RE::UI::GetSingleton();
+        finish(!ui ? "NO_UI" : ui->GameIsPaused() ? "PAUSED" : "ok");
+    }, std::chrono::seconds(10));
+}
+
+struct S9Samples
+{
+    std::mutex mx;
+    std::vector<long long> us;
+};
+
+// s9_sample <seconds> <label>: a sampler thread (this one) posts one AddTask about every millisecond for
+// <seconds>; each task records when it ran. Tasks run once per frame, so the timestamps cluster by frame
+// (spikes/s9_analyze.py turns them into frame times). Writes <SKSE log dir>/SkyrimPythonSpike_s9_<label>.txt.
+std::string S9Sample(const std::string& args)
+{
+    std::istringstream in(args);
+    std::string secText, label;
+    in >> secText >> label;
+    const int seconds = ParseInt(secText, -1);
+    if (seconds < 10 || seconds > 120) return "S9_SAMPLE ERR usage: s9_sample <10..120 seconds> <label>";
+    const bool labelOk = !label.empty() && label.size() <= 32 &&
+        std::all_of(label.begin(), label.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'; });
+    if (!labelOk) return "S9_SAMPLE ERR label: 1..32 of a-z 0-9 _";
+    const auto before = S9PauseState();
+    if (before != "ok") return "S9_SAMPLE NOT_RUN (" + before + "): load the save, unpause, close every menu";
+    const auto dir = SKSE::log::log_directory();
+    if (!dir) return "S9_SAMPLE ERR no SKSE log directory";
+    const auto cap = S9CapState();
+
+    auto st = std::make_shared<S9Samples>();
+    st->us.reserve(static_cast<std::size_t>(seconds) * 1200);
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto end = t0 + std::chrono::seconds(seconds);
+    long long posted = 0;
+    auto next = t0;
+    while (std::chrono::steady_clock::now() < end) {
+        SKSE::GetTaskInterface()->AddTask([st, t0] {
+            const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t0).count();
+            std::lock_guard l(st->mx);
+            st->us.push_back(us);
+        });
+        ++posted;
+        next += std::chrono::milliseconds(1);
+        std::this_thread::sleep_until(next);  // a coarse timer makes bursts; the clustering still works
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));  // let the last tasks run
+    const auto after = S9PauseState();
+    std::vector<long long> copy;
+    {
+        std::lock_guard l(st->mx);
+        copy = st->us;
+    }
+    const auto path = *dir / std::format("SkyrimPythonSpike_s9_{}.txt", label);
+    std::ofstream f(path, std::ios::trunc);
+    f << std::format("# s9 label={} seconds={} posted={} ran={} paused_before={} paused_after={} {}\n", label, seconds, posted, copy.size(), before, after, cap);
+    for (const auto v : copy) f << v << '\n';
+    f.close();
+    return std::format("S9_SAMPLE {} label={} posted={} ran={} paused_after={} {} file={}",
+                       after == "ok" && f ? "OK" : "INVALID", label, posted, copy.size(), after, cap, path.string());
+}
+}
+
 // Handle has a namespace block of its own: Tasks 3-9 add their code as new `namespace spike { ... }` blocks
 // directly above this one, after Log and ParseInt, which they use.
 namespace spike {
@@ -346,6 +475,11 @@ std::string Handle(const std::string& line)
     if (line == "py_init") return py::Init(g_dataLoaded.load());
     if (line == "py_status") return py::Status();
     if (line.rfind("py_exec ", 0) == 0) return py::Exec(line.substr(8));
+    if (line == "py_arm_rt") {
+        py::SetCaller(&CallRealTime);
+        return "PY_ARM_RT OK";
+    }
+    if (line.rfind("s9_sample ", 0) == 0) return S9Sample(line.substr(10));
     if (line == "s2mode0" || line == "s2mode1") { g_s2Mode = line.back() - '0'; return "OK s2 phase C mode " + line.substr(6); }
     if (line.rfind("s2", 0) == 0) return S2(ParseInt(line.size() > 3 ? line.substr(3) : "", 1000));
     return "ERR unknown command";
