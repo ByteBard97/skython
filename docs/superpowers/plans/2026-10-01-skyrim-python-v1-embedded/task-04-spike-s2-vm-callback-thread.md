@@ -128,8 +128,9 @@ struct S2State
     std::atomic_int nestedDone{0}, nestedInts{0}, nestedFailed{0}, outerFailed{0}, latentDone{0};
     std::atomic_int cbOnMain{0}, cbOffMain{0}, nestedOnMain{0}, nestedOffMain{0}, latentOnMain{0}, latentOffMain{0};
     std::atomic_int failedFalse{0}, failedTrue{0}, latentRefused{0};
+    std::atomic_int dDone{0}, dMismatch{0}, dRefused{0}, dExc{0}, dOnMain{0}, dOffMain{0};
     std::mutex mx;
-    std::string firstCbTid, firstNestedTid, firstLatentTid;
+    std::string firstCbTid, firstNestedTid, firstLatentTid, firstDTid;
 };
 
 void NoteThread(S2State& st, std::atomic_int& on, std::atomic_int& off, std::string& first)
@@ -139,7 +140,7 @@ void NoteThread(S2State& st, std::atomic_int& on, std::atomic_int& off, std::str
     if (first.empty()) first = Tid();
 }
 
-std::atomic_int g_s2Mode{0};  // phase C probe: 0 = existing script, missing function; 1 = existing native, wrong argument count
+std::atomic_int g_s2Mode{-1};  // phase C probe, OFF by default (it can crash the engine): 0 = existing script, missing function; 1 = existing native, wrong argument count
 constexpr int kChunk = 100;  // dispatches per main-thread task: 10,000 in one task can hit VM stack limits
 
 void DispatchChunk(const std::shared_ptr<S2State>& st, int count)
@@ -232,13 +233,50 @@ std::string S2(int n)
         st->nestedOffMain.load(), st->firstLatentTid, st->latentOnMain.load(), st->latentOffMain.load(), ctorOk, dtorOk, liveOk,
         liveOk == 0 ? "vm" : "NOT_FREED", elapsedMs));
 
+    // Phase D: the plugin owns the arguments. Utility.RandomInt(5, 5) always returns 5; each callback records its
+    // result and THEN deletes that call's args object (never before the callback). A refused dispatch deletes at once.
+    constexpr int kD = 1000;
+    const int cD0 = CountedArgs::ctor, dD0 = CountedArgs::dtor;
+    for (int base = 0; base < kD; base += kChunk) {
+        auto r = OnMainThread([st](std::function<void(std::string)> finish) {
+            auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+            for (int i = 0; i < kChunk; ++i) {
+                CountedArgs* args = IntArgs(5, 5);
+                RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{ new Functor([st, args](Var v) {
+                    try {
+                        NoteThread(*st, st->dOnMain, st->dOffMain, st->firstDTid);
+                        if (!v.IsInt() || v.GetSInt() != 5) st->dMismatch.fetch_add(1);
+                    } catch (...) {
+                        st->dExc.fetch_add(1);
+                    }
+                    delete args;  // after the result was read, never before
+                    st->dDone.fetch_add(1);
+                }) };
+                if (!vm->DispatchStaticCall(RE::BSFixedString("Utility"), RE::BSFixedString("RandomInt"), args, cb)) {
+                    delete args;
+                    st->dRefused.fetch_add(1);
+                }
+            }
+            finish("posted");
+        }, std::chrono::seconds(10));
+        if (r != "posted" || !WaitUntil([&] { return st->dDone.load() + st->dRefused.load() >= base + kChunk; }, std::chrono::seconds(30))) break;
+    }
+    std::this_thread::sleep_for(std::chrono::seconds(3));  // spike only
+    const int ctorD = CountedArgs::ctor - cD0, dtorD = CountedArgs::dtor - dD0;
+    const bool dPass = st->dDone == kD && st->dMismatch == 0 && st->dRefused == 0 && st->dExc == 0 && ctorD == dtorD && ctorD == kD;
+    const std::string dLine = std::format("D {} done={}/{} mismatches={} refused={} exceptions={} args_ctor_d={} args_dtor_d={} first_d_tid={} d_on_main={} d_off_main={}",
+        dPass ? "PASS" : "FAIL", st->dDone.load(), kD, st->dMismatch.load(), st->dRefused.load(), st->dExc.load(), ctorD, dtorD, st->firstDTid,
+        st->dOnMain.load(), st->dOffMain.load());
+    Log("spike: S2 " + dLine);  // before phase C
+
+    const int mode = g_s2Mode.load();
+    const int cC2 = CountedArgs::ctor, dC2 = CountedArgs::dtor;
     // Phase C: the FAILED-dispatch path, probed SAFELY. A script that does not exist crashed the engine
     // (SkyrimSE.exe+1447D3E, null deref inside DispatchStaticCall), so the target must resolve: mode 0 is an existing
     // script with a missing function, mode 1 an existing native with the wrong argument count.
     // Does the VM still destroy the arguments object when Dispatch* returns false, or must the caller?
-    const int mode = g_s2Mode.load();
     Log(std::format("spike: S2 phase C starting, mode={}", mode));
-    (void)OnMainThread([st, mode](std::function<void(std::string)> finish) {
+    if (mode >= 0) (void)OnMainThread([st, mode](std::function<void(std::string)> finish) {
         auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
         for (int i = 0; i < 100; ++i) {
             RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{ new Functor([](Var) {}) };
@@ -252,7 +290,7 @@ std::string S2(int n)
     std::this_thread::sleep_for(std::chrono::seconds(3));  // spike only: let the VM release anything it is going to release
 
     // failed path = everything after the first settle (phase C only)
-    const int ctorFail = CountedArgs::ctor - cC, dtorFail = CountedArgs::dtor - dC;
+    const int ctorFail = CountedArgs::ctor - cC2, dtorFail = CountedArgs::dtor - dC2;
     const int liveFail = ctorFail - dtorFail;
 
     const bool threadPhase = verdictNote == "ok" && st->nestedDone == n && st->nestedInts == n &&
@@ -263,12 +301,12 @@ std::string S2(int n)
         "S2 {} note={} n={} nested_done={} nested_ints={} outer_failed={} nested_failed={} elapsed_ms={} "
         "main_tid={} first_cb_tid={} cb_on_main={} cb_off_main={} first_nested_tid={} nested_on_main={} nested_off_main={} "
         "latent={}/{} latent_refused={} first_latent_tid={} latent_on_main={} latent_off_main={} "
-        "args_ctor_ok={} args_dtor_ok={} live_ok={} owner_ok_path={} failed_dispatch_false={} failed_dispatch_true={} live_failed_path={} owner_failed_path={}",
-        (threadPhase && ownsOk) ? "PASS" : "FAIL", verdictNote, n, st->nestedDone.load(), st->nestedInts.load(),
+        "args_ctor_ok={} args_dtor_ok={} live_ok={} owner_ok_path={} failed_dispatch_false={} failed_dispatch_true={} live_failed_path={} owner_failed_path={} {}",
+        (threadPhase && dPass) ? "PASS" : "FAIL", verdictNote, n, st->nestedDone.load(), st->nestedInts.load(),
         st->outerFailed.load(), st->nestedFailed.load(), elapsedMs, mainTid, st->firstCbTid, st->cbOnMain.load(),
         st->cbOffMain.load(), st->firstNestedTid, st->nestedOnMain.load(), st->nestedOffMain.load(), st->latentDone.load(),
         kLatent, st->latentRefused.load(), st->firstLatentTid, st->latentOnMain.load(), st->latentOffMain.load(), ctorOk, dtorOk,
-        liveOk, ownsOk ? "vm" : "NOT_FREED", st->failedFalse.load(), st->failedTrue.load(), liveFail, failPathOwner);
+        liveOk, ownsOk ? "vm" : "NOT_FREED", st->failedFalse.load(), st->failedTrue.load(), liveFail, failPathOwner, dLine);
 }
 }
 ```
@@ -320,3 +358,5 @@ git add spikes && git commit -m "test(spike): S2 VM callback thread, nested disp
 ```
 
 > **Measured on the box (2026-10-01, Windows-native), ruling R35:** the original phase C (a script that does not exist) crashed the engine at `SkyrimSE.exe+1447D3E` (null deref inside `DispatchStaticCall`), and so did an existing script with a missing function (`Utility.NoSuchFn`). The code above is the safe version: phase A/B results are logged before phase C (`spike: S2 AB ...`), and `s2mode1` probes a wrong argument type/count on an existing native, which the VM accepts (`Dispatch*` returned true, no crash). Never `Dispatch*Call` an unvalidated class or function.
+
+> **Phase D, measured on the box (2026-10-01, R36):** the VM never destroys `IFunctionArguments` (phases A and B: `args_ctor=2010`, `args_dtor=0`), so the plugin owns them. Phase D deletes each call's args object inside its callback, after the result is read: `D PASS done=1000/1000 mismatches=0 refused=0 exceptions=0 args_ctor_d=1000 args_dtor_d=1000`, no crash. Phase C is now opt-in (`s2mode0`/`s2mode1`), off by default, because an unresolvable target crashes the engine. The overall S2 PASS is `threadPhase && dPass`. Tasks 27 and 29: free the `DynArgs` in the callback, after reading the result, and delete at once when `Dispatch*` returns false.
