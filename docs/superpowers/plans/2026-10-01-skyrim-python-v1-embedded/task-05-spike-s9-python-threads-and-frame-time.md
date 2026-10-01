@@ -287,18 +287,23 @@ int CallRealTime(int timeoutMs, double* out)
 std::string S9CapState()
 {
     auto pi = std::make_shared<std::string>("unknown");
-    (void)OnMainThread([pi](std::function<void(std::string)> finish) {
-        RE::Setting* s = nullptr;
-        if (auto* prefs = RE::INIPrefSettingCollection::GetSingleton()) s = prefs->GetSetting("iPresentInterval:Display");
-        if (!s)
-            if (auto* ini = RE::INISettingCollection::GetSingleton()) s = ini->GetSetting("iPresentInterval:Display");
-        if (s) *pi = std::to_string(s->GetInteger());
+    auto vs = std::make_shared<std::string>("unknown");  // the box's SkyrimPrefs.ini key is iVSyncPresentInterval
+    (void)OnMainThread([pi, vs](std::function<void(std::string)> finish) {
+        auto read = [](const char* name) -> RE::Setting* {
+            RE::Setting* s = nullptr;
+            if (auto* prefs = RE::INIPrefSettingCollection::GetSingleton()) s = prefs->GetSetting(name);
+            if (!s)
+                if (auto* ini = RE::INISettingCollection::GetSingleton()) s = ini->GetSetting(name);
+            return s;
+        };
+        if (auto* s = read("iPresentInterval:Display")) *pi = std::to_string(s->GetInteger());
+        if (auto* s = read("iVSyncPresentInterval:Display")) *vs = std::to_string(s->GetInteger());
         finish("ok");
     }, std::chrono::seconds(10));
     char dxvk[64] = {};
     const DWORD n = GetEnvironmentVariableA("DXVK_FRAME_RATE", dxvk, sizeof dxvk);
     const std::string dxvkText = (n > 0 && n < sizeof dxvk) ? std::string(dxvk) : std::string("unset");
-    return std::format("iPresentInterval={} displaytweaks={} dxvk_frame_rate={}", *pi,
+    return std::format("iPresentInterval={} iVSyncPresentInterval={} displaytweaks={} dxvk_frame_rate={}", *pi, *vs,
                        GetModuleHandleW(L"SSEDisplayTweaks.dll") ? "loaded" : "absent", dxvkText);
 }
 
