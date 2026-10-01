@@ -20,3 +20,13 @@ __pycache__/
 
 # subagent-driven-development workspace (ledgers, briefs, review packages)
 .superpowers/
+
+# plugin and Papyrus build artifacts
+**/build/
+*.dll
+*.pdb
+*.pex
+*.egg-info/
+
+# CPython runtime and build inputs, fetched by tools/fetch_python.sh (never committed)
+third_party/cpython/
