@@ -3,16 +3,20 @@
 #   place:  file -> Copy-Item to Dest (parent created), prints "PLACED <sha256>";
 #           tar  -> extracts into a fresh folder next to the .tar, then robocopy /E merges it into Dest (
 #                   files with the same name are replaced, nothing else in Dest is touched), prints "PLACED <n> files".
-# Only box_deploy.sh calls this, and only for paths under the game's Data\SKSE\Plugins.
+# Only box_deploy.sh calls this, for paths under the game's Data\SKSE\Plugins and for Data\Scripts\SkyrimPython.pex.
 param([string]$Mode, [string]$DestB64, [string]$SrcB64 = '', [string]$Kind = 'file')
 $ErrorActionPreference = 'Stop'
 function From-B64([string]$s) { return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s)) }
 $dest = From-B64 $DestB64
-if (-not $dest.StartsWith('C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\')) { "REFUSED $dest is outside Data\SKSE\Plugins"; exit 2 }
+# Allowed destinations: the Data\SKSE\Plugins tree, and exactly one file outside it, the spike's compiled Papyrus
+# script Data\Scripts\SkyrimPython.pex (Task 7; box_deploy.sh --pex).
+$PexDest = 'C:\ChronicleDev\Stock Game\Data\Scripts\SkyrimPython.pex'
+if (-not $dest.StartsWith('C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\') -and $dest -ne $PexDest) { "REFUSED $dest is outside Data\SKSE\Plugins and is not $PexDest"; exit 2 }
 switch ($Mode) {
   'exists' { if (Test-Path -LiteralPath $dest) { 'EXISTS' } else { 'ABSENT' }; exit 0 }
   'list'   { if (Test-Path -LiteralPath $dest) { Get-ChildItem -LiteralPath $dest -Force | ForEach-Object { $_.Name } }; exit 0 }
   'place' {
+    if ($dest -eq $PexDest -and $Kind -ne 'file') { "REFUSED $PexDest takes a single file"; exit 2 }
     $src = From-B64 $SrcB64
     if ($Kind -eq 'file') {
       New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null

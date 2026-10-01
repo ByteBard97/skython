@@ -6,7 +6,7 @@
 
 > **Never on the Linux desktop:** no step of this task (or of Tasks 3-10 after it) launches the game on Linux, uses xdotool, or starts Linux Steam. Linux Steam logged in to the same account makes the box's Steam log off ("Logged In Elsewhere"); the game keeps running when that happens, but leave Linux Steam alone either way: it is the owner's.
 
-> **Deploy safety (unchanged from Task 1):** the spike DLL opens an unauthenticated port that runs arbitrary Python after Task 3. Use only the box's throwaway save `spikebase` (made in Step 6), never save over another save, and remove nothing on the box without the owner's sign-off on `tools/box/box_teardown_list.sh`'s list. New files on the box go only under `C:\dev\skyrim-python-box`, `...\Data\SKSE\Plugins` (our DLLs, ini) and `...\Data\SKSE\Plugins\SkyrimPython`. Never `Remove-Item`, `del`, `Unregister-ScheduledTask`; never modify or remove `ChronicleLiveDirect` or any other existing task, file, ini or save.
+> **Deploy safety (unchanged from Task 1):** the spike DLL opens an unauthenticated port that runs arbitrary Python after Task 3. Use only the box's throwaway save `spikebase` (made in Step 6), never save over another save, and remove nothing on the box without the owner's sign-off on `tools/box/box_teardown_list.sh`'s list. New files on the box go only under `C:\dev\skyrim-python-box`, `...\Data\SKSE\Plugins` (our DLLs, ini) and `...\Data\SKSE\Plugins\SkyrimPython`, plus exactly one file outside them, `...\Data\Scripts\SkyrimPython.pex` (Task 7, owner-approved, ruling R30). Never `Remove-Item`, `del`, `Unregister-ScheduledTask`; never modify or remove `ChronicleLiveDirect` or any other existing task, file, ini or save.
 
 **What is on the box (investigated 2026-10-01, `.superpowers/sdd/README/windows-box-investigation.md`):** `C:\ChronicleDev\Stock Game\SkyrimSE.exe` 1.6.1170.0 with SKSE 2.2.6; SteamStub DRM, so Steam (`C:\Steam`) must be logged on before `skse64_loader.exe` starts (a launch that raced the logon gave no game: the loader started 5 s before Steam's `Logged On` line). DevBench 1.15.1 (`devbench.dll`, an SKSE plugin) serves REST on the box's `127.0.0.1:8920` while the game runs: `GET /api/tools`, `POST /api/tool/<name>`. CrashLogger writes `crash-*.log` in the SKSE log folder. 236 saves exist; none is named `spikebase*`. Other SKSE plugins in that Stock Game: ChronicleBridge, CountenanceNeuralFaceSpike, CrashLogger, devbench, mfgfix, PapyrusUtil, po3_PapyrusExtender, RuntimeHarness.
 
@@ -20,13 +20,13 @@
 - Produces (Tasks 3-10 use these through the substitution table below):
   - `source tools/box/box_env.sh`: `BOX`, `BOX_GAME_DIR='C:\ChronicleDev\Stock Game'`, `BOX_DATA`, `BOX_PLUGINS='C:\ChronicleDev\Stock Game\Data\SKSE\Plugins'`, `BOX_OWN` (`...\Plugins\SkyrimPython`), `BOX_MYGAMES`, `BOX_SKSE_LOG_DIR='C:\Users\geoff\Documents\My Games\Skyrim Special Edition\SKSE'`, `BOX_SAVES_DIR`, `BOX_DIR='C:\dev\skyrim-python-box'`, `BOX_TASK=SkyrimPythonGame`; functions `bssh CMD` (60 s), `bssh_t SECONDS CMD`, `bscp ARGS` (600 s), `bps SECONDS SCRIPT.ps1 ARGS` (runs one of our box scripts), `b64 TEXT`. All calls carry `timeout`, `ConnectTimeout=10` and `BatchMode=yes`; remote commands are PowerShell 5.1.
   - `tools/box/box_setup.sh` (re-runnable): installs the `.ps1` files after the box's PowerShell parser accepts each one; registers `SkyrimPythonGame` once (prints `REGISTERED ...` or `EXISTS ...`).
-  - `tools/box/box_deploy.sh out/<Dll>.dll [ini] | --python [out/<Core>.dll] | --site-packages DIR | --package | --scripts DIR | --file LOCAL REL` → records Windows paths in `out/box-deployed.txt`; refuses a target that exists and is not recorded there; refuses while the game runs; spike DLLs need `CONFIRM_THROWAWAY_SAVE=1`.
+  - `tools/box/box_deploy.sh out/<Dll>.dll [ini] | --python [out/<Core>.dll] | --site-packages DIR | --package | --scripts DIR | --file LOCAL REL | --pex path/to/SkyrimPython.pex` → records Windows paths in `out/box-deployed.txt`; refuses a target that exists and is not recorded there (so `--pex` places `C:\ChronicleDev\Stock Game\Data\Scripts\SkyrimPython.pex` only if it is absent or ours; `place.ps1` accepts no other path outside `Data\SKSE\Plugins`); refuses while the game runs; spike DLLs need `CONFIRM_THROWAWAY_SAVE=1`.
   - `tools/box/box_launch.sh`: refuses if the game runs; writes the launch stamp on the box (box clock) and a snapshot of the SKSE log folder; copies the stamp to `$SKYRIM_PYTHON_STATE/box-launch.stamp`; runs the task; waits (`LAUNCH_WAIT`, 240 s) for `launch.ps1`'s result; prints `launched: ok pid=<n>` or fails.
   - `tools/box/box_wait_log.sh <log name> <regex> [seconds=600]`: `<log name>` relative to the box's SKSE log folder; only text written since the last launch stamp counts; prints `MATCH <line>` (exit 0) or `TIMEOUT ...` plus the tail (exit 1).
   - `tools/box/box_tunnel.sh up [--reverse PORT]... | down | status`: Linux `127.0.0.1:45978` and `:45979` → the box's; `--reverse PORT` maps the box's `127.0.0.1:PORT` to Linux's.
   - `tools/box/box_console.sh "<console command>" | --tool NAME [json] | --list`: DevBench. `save <name>` and `load <name>` typed as console commands are rerouted by DevBench to its `game` tool (`{"redirected":"game"}`); running them raw would deadlock the engine.
   - `tools/box/box_quit.sh`: console `qqq`, then `quit_check.ps1`: prints `EXITED`/`STILL_RUNNING`, `NO_NEW_CRASH_LOG`/`NEW_CRASH_LOGS ...`, and `CLEAN_EXIT` (exit 0) or `NOT_CLEAN` (exit 1).
-  - `tools/box/box_stop.sh`: `Stop-Process -Name SkyrimSE,skse64_loader -Force`, then a 20 s check (`GONE`, `NOTHING_RUNNING`, or `STILL_RUNNING`, exit 1).
+  - `tools/box/box_stop.sh`: `Stop-Process -Name SkyrimSE,skse64_loader -Force` and a 20 s check; if either is still alive, CIM `Win32_Process.Terminate` for exactly `Name='SkyrimSE.exe'` and `Name='skse64_loader.exe'` and another 20 s check. Prints `NOTHING_RUNNING`, `GONE via Stop-Process` or `GONE via CIM Terminate` (exit 0), or `STILL_RUNNING ...` (exit 1: STOP and ask the owner).
   - `tools/box/box_teardown_list.sh`: lists, removes nothing.
 
 - [ ] **Step 1: Write the offline test and see it fail**
@@ -58,7 +58,7 @@ for f in "${SH[@]}"; do
 done
 for f in "${PS[@]}"; do [ -f "$B/win/$f" ] && ok "present win/$f" || bad "missing tools/box/win/$f"; done
 
-# 2. raw ssh/scp only inside box_env.sh (the wrappers bssh/bscp/bssh_long carry timeout + BatchMode)
+# 2. raw ssh/scp only inside box_env.sh (the wrappers bssh/bssh_t/bscp/bps carry timeout + BatchMode)
 raw="$(grep -HnE '(^\s*|[;&|({]\s*|\$\(\s*|timeout +[^ ]+ +|then +|do +)(ssh|scp) ' "$B"/*.sh 2>/dev/null | grep -v '^[^:]*/box_env.sh:' | grep -v '^[^:]*/test_box_tools.sh:' | grep -vE ':[0-9]+:\s*#' )"
 if [ -z "$raw" ]; then ok "no raw ssh/scp outside box_env.sh"; else bad "raw ssh/scp outside box_env.sh:"; echo "$raw"; fi
 if grep -q 'BatchMode=yes' "$B/box_env.sh" 2>/dev/null && grep -q 'ConnectTimeout=' "$B/box_env.sh" 2>/dev/null \
@@ -70,10 +70,33 @@ destr="$(grep -HnEi '(^|[^-a-z])(Remove-Item|Unregister-ScheduledTask|rmdir|rd /
         "$B"/*.sh "$B"/win/*.ps1 2>/dev/null | grep -v '/test_box_tools.sh:' | grep -vE ':[0-9]+:\s*#')"
 if [ -z "$destr" ]; then ok "no destructive verbs"; else bad "destructive verbs:"; echo "$destr"; fi
 
-# 4. Stop-Process only by name SkyrimSE / skse64_loader
-sp="$(grep -nh 'Stop-Process' "$B"/win/*.ps1 2>/dev/null | grep -vE '^\s*[0-9]+:\s*#')"
+# 4. Stop-Process (as a command, not in a message) only by name SkyrimSE / skse64_loader
+sp="$(grep -nhE '(^\s*|[;|{]\s*)Stop-Process' "$B"/win/*.ps1 2>/dev/null | grep -vE '^\s*[0-9]+:\s*#')"
 if [ -n "$sp" ] && ! echo "$sp" | grep -vq -- '-Name SkyrimSE,skse64_loader'; then ok "Stop-Process only by the game names"
 else bad "Stop-Process used otherwise:"; echo "$sp"; fi
+
+# 4b. CIM Terminate fallback: exactly two Win32_Process lines, pinned to the exact image names
+cim="$(grep -hE 'Win32_Process|Invoke-CimMethod' "$B"/win/*.ps1 2>/dev/null | grep -vE '^\s*#')"
+want1="Get-CimInstance Win32_Process -Filter \"Name='SkyrimSE.exe'\" | Invoke-CimMethod -MethodName Terminate"
+want2="Get-CimInstance Win32_Process -Filter \"Name='skse64_loader.exe'\" | Invoke-CimMethod -MethodName Terminate"
+if [ "$(echo "$cim" | grep -c .)" = 2 ] && echo "$cim" | grep -qF -- "$want1" && echo "$cim" | grep -qF -- "$want2"; then
+  ok "CIM Terminate only for Name='SkyrimSE.exe' and Name='skse64_loader.exe'"
+else bad "CIM Terminate lines are not exactly the two pinned ones:"; echo "$cim"; fi
+for m in 'GONE via Stop-Process' 'GONE via CIM Terminate' 'STILL_RUNNING'; do
+  grep -qF "\"$m" "$B/win/stop.ps1" 2>/dev/null && ok "stop.ps1 reports '$m'" || bad "stop.ps1 does not report '$m'"
+done
+
+# 4c. .pex mode: box_deploy.sh --pex resolves to exactly Data\Scripts\SkyrimPython.pex (no ssh in this mode)
+tmpd="$(mktemp -d)"; : > "$tmpd/SkyrimPython.pex"; : > "$tmpd/Other.pex"; : > "$tmpd/x.txt"
+t="$(BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --pex "$tmpd/SkyrimPython.pex" 2>&1)"
+[ "$t" = 'C:\ChronicleDev\Stock Game\Data\Scripts\SkyrimPython.pex' ] && ok "--pex target is Data\\Scripts\\SkyrimPython.pex" || bad "--pex target: '$t'"
+if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --pex "$tmpd/Other.pex" >/dev/null 2>&1; then bad "--pex accepted Other.pex"; else ok "--pex refuses a file not named SkyrimPython.pex"; fi
+if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --pex "$tmpd/missing.pex" >/dev/null 2>&1; then bad "--pex accepted a missing file"; else ok "--pex refuses a missing file"; fi
+# place.ps1 allows exactly one destination outside Data\SKSE\Plugins: that .pex
+grep -qF "\$PexDest = 'C:\ChronicleDev\Stock Game\Data\Scripts\SkyrimPython.pex'" "$B/win/place.ps1" 2>/dev/null \
+  && grep -qF -- '-and $dest -ne $PexDest' "$B/win/place.ps1" && ok "place.ps1 allow-list: Plugins tree + the one .pex" || bad "place.ps1 allow-list"
+# box_deploy records through put_file, which refuses a target that exists and is not recorded
+grep -qE 'put_file "\$PEX" "\$PEX_DEST"' "$B/box_deploy.sh" 2>/dev/null && ok "--pex goes through put_file (absent or ours; recorded)" || bad "--pex does not use put_file"
 
 # 5. box paths
 if [ -f "$B/box_env.sh" ]; then
@@ -173,6 +196,9 @@ bps 60 setup_task.ps1 | tr -d '\r'
 #   tools/box/box_deploy.sh --package                        -> Plugins\SkyrimPython\lib\skyrim\ (python/src/skyrim)
 #   tools/box/box_deploy.sh --scripts DIR                    -> Plugins\SkyrimPython\scripts\<entries>
 #   tools/box/box_deploy.sh --file LOCAL REL                 -> Plugins\SkyrimPython\REL (one file: s10_check.py, markers)
+#   tools/box/box_deploy.sh --pex path/to/SkyrimPython.pex   -> exactly Data\Scripts\SkyrimPython.pex (Task 7; the only
+#                                                               target outside Plugins; placed only if absent or ours)
+#   BOX_DEPLOY_PRINT_TARGET=1 with --pex prints the resolved target and exits before any ssh (offline test).
 # Every target is recorded in out/box-deployed.txt. A target that exists on the box and is not recorded there
 # was not deployed by this tool: the deploy refuses (it never overwrites what it did not put there).
 # A *Spike* DLL needs CONFIRM_THROWAWAY_SAVE=1. Refuses while the game runs (DLLs are locked).
@@ -227,6 +253,13 @@ put_entries() {  # put_entries <local dir> <windows dest dir>: each top-level en
 spike_ok() { case "$(basename "$1")" in *Spike*) [ "${CONFIRM_THROWAWAY_SAVE:-0}" = 1 ] || box_die "$1 is spike code (unauthenticated port); use a throwaway save and re-run with CONFIRM_THROWAWAY_SAVE=1" ;; esac; }
 
 [ $# -ge 1 ] || box_die "usage: see the header of $0"
+if [ "$1" = --pex ]; then
+  PEX="${2:?usage: box_deploy.sh --pex path/to/SkyrimPython.pex}"
+  [ -f "$PEX" ] || box_die "no such file: $PEX"
+  [ "$(basename "$PEX")" = SkyrimPython.pex ] || box_die "--pex places only SkyrimPython.pex (got $(basename "$PEX"))"
+  PEX_DEST="$BOX_DATA\\Scripts\\SkyrimPython.pex"
+  if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then echo "$PEX_DEST"; exit 0; fi
+fi
 st="$(bssh 'if (Get-Process -Name SkyrimSE,skse64_loader -ErrorAction SilentlyContinue) { "RUNNING" } else { "IDLE" }' | tr -d '\r')" \
   || box_die "cannot ssh to $BOX (STOP and ask the owner)"
 [ "$st" = IDLE ] || box_die "the game is running on the box; quit it first (tools/box/box_quit.sh)"
@@ -257,6 +290,9 @@ case "$1" in
     REL="${3:?usage: box_deploy.sh --file LOCAL REL}"
     case "$REL" in *..*) box_die "REL must not contain .." ;; esac
     put_file "$2" "$BOX_OWN\\${REL//\//\\}"
+    ;;
+  --pex)
+    put_file "$PEX" "$PEX_DEST"
     ;;
   -*) box_die "unknown option $1" ;;
   *)
@@ -623,18 +659,30 @@ try {
 
 `tools/box/win/stop.ps1`:
 ```powershell
-# stop.ps1: force-stop the game and its loader, by process name only; bounded check that they are gone.
-$p = Get-Process -Name SkyrimSE,skse64_loader -ErrorAction SilentlyContinue
+# stop.ps1: force-stop the game and its loader, by process name only, in two stages with a bounded check after each:
+#   1. Stop-Process -Name SkyrimSE,skse64_loader -Force                     -> "GONE via Stop-Process"
+#   2. if either is still alive: CIM Win32_Process.Terminate, matched by the exact image names
+#      SkyrimSE.exe and skse64_loader.exe                                   -> "GONE via CIM Terminate"
+#   otherwise "STILL_RUNNING" (exit 1): STOP and ask the owner.
+# Stage 2 exists because on 2026-10-01 a game hung at exit (one thread in a kernel wait) survived Stop-Process and
+# taskkill /F, and Win32_Process.Terminate ended it.
+function Alive { Get-Process -Name SkyrimSE,skse64_loader -ErrorAction SilentlyContinue }
+function WaitGone([int]$Seconds) {
+  $end = (Get-Date).AddSeconds($Seconds)
+  while ((Get-Date) -lt $end) { if (-not (Alive)) { return $true }; Start-Sleep -Seconds 1 }
+  return (-not (Alive))
+}
+$p = Alive
 if (-not $p) { "NOTHING_RUNNING"; exit 0 }
 $p | ForEach-Object { "STOPPING $($_.Name) $($_.Id)" }
 Stop-Process -Name SkyrimSE,skse64_loader -Force -ErrorAction SilentlyContinue
-$end = (Get-Date).AddSeconds(20)
-while ((Get-Date) -lt $end) {
-  if (-not (Get-Process -Name SkyrimSE,skse64_loader -ErrorAction SilentlyContinue)) { "GONE"; exit 0 }
-  Start-Sleep -Seconds 1
-}
-"STILL_RUNNING after 20 s: the process ignores termination (seen 2026-10-01: hung at exit, one thread in a kernel wait,"
-"still holding 45978). STOP and ask the owner; a box reboot is their call."; exit 1
+if (WaitGone 20) { "GONE via Stop-Process"; exit 0 }
+(Alive) | ForEach-Object { "still alive after Stop-Process: $($_.Name) $($_.Id); trying CIM Terminate" }
+Get-CimInstance Win32_Process -Filter "Name='SkyrimSE.exe'" | Invoke-CimMethod -MethodName Terminate | ForEach-Object { "CIM Terminate SkyrimSE.exe returned $($_.ReturnValue)" }
+Get-CimInstance Win32_Process -Filter "Name='skse64_loader.exe'" | Invoke-CimMethod -MethodName Terminate | ForEach-Object { "CIM Terminate skse64_loader.exe returned $($_.ReturnValue)" }
+if (WaitGone 20) { "GONE via CIM Terminate"; exit 0 }
+"STILL_RUNNING after Stop-Process and CIM Terminate: " + (((Alive) | ForEach-Object { "$($_.Name) $($_.Id)" }) -join ', ')
+"STOP and ask the owner."; exit 1
 ```
 
 `tools/box/win/quit_check.ps1`:
@@ -664,16 +712,20 @@ if ($gone -and $crash.Count -eq 0) { "CLEAN_EXIT"; exit 0 }
 #   place:  file -> Copy-Item to Dest (parent created), prints "PLACED <sha256>";
 #           tar  -> extracts into a fresh folder next to the .tar, then robocopy /E merges it into Dest (
 #                   files with the same name are replaced, nothing else in Dest is touched), prints "PLACED <n> files".
-# Only box_deploy.sh calls this, and only for paths under the game's Data\SKSE\Plugins.
+# Only box_deploy.sh calls this, for paths under the game's Data\SKSE\Plugins and for Data\Scripts\SkyrimPython.pex.
 param([string]$Mode, [string]$DestB64, [string]$SrcB64 = '', [string]$Kind = 'file')
 $ErrorActionPreference = 'Stop'
 function From-B64([string]$s) { return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s)) }
 $dest = From-B64 $DestB64
-if (-not $dest.StartsWith('C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\')) { "REFUSED $dest is outside Data\SKSE\Plugins"; exit 2 }
+# Allowed destinations: the Data\SKSE\Plugins tree, and exactly one file outside it, the spike's compiled Papyrus
+# script Data\Scripts\SkyrimPython.pex (Task 7; box_deploy.sh --pex).
+$PexDest = 'C:\ChronicleDev\Stock Game\Data\Scripts\SkyrimPython.pex'
+if (-not $dest.StartsWith('C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\') -and $dest -ne $PexDest) { "REFUSED $dest is outside Data\SKSE\Plugins and is not $PexDest"; exit 2 }
 switch ($Mode) {
   'exists' { if (Test-Path -LiteralPath $dest) { 'EXISTS' } else { 'ABSENT' }; exit 0 }
   'list'   { if (Test-Path -LiteralPath $dest) { Get-ChildItem -LiteralPath $dest -Force | ForEach-Object { $_.Name } }; exit 0 }
   'place' {
+    if ($dest -eq $PexDest -and $Kind -ne 'file') { "REFUSED $PexDest takes a single file"; exit 2 }
     $src = From-B64 $SrcB64
     if ($Kind -eq 'file') {
       New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
@@ -771,9 +823,9 @@ Clean exit:
 tools/box/box_quit.sh; echo "rc=$?"
 tools/box/box_tunnel.sh down
 ```
-Expected for a clean exit: DevBench's reply to `qqq` (or `(no reply to qqq; ...)`), `EXITED`, `NO_NEW_CRASH_LOG`, `CLEAN_EXIT`, `rc=0`; `tunnel down`. **2026-10-01 result: `STILL_RUNNING after 120s`, `NO_NEW_CRASH_LOG`, `NOT_CLEAN`** (see "Known issue" below). On `NOT_CLEAN`, run `tools/box/box_stop.sh`; if it prints `STILL_RUNNING`, STOP and ask the owner (do not retry, do not reboot the box yourself).
+Expected for a clean exit: DevBench's reply to `qqq` (or `(no reply to qqq; ...)`), `EXITED`, `NO_NEW_CRASH_LOG`, `CLEAN_EXIT`, `rc=0`; `tunnel down`. **2026-10-01 result: `STILL_RUNNING after 120s`, `NO_NEW_CRASH_LOG`, `NOT_CLEAN`** (see "Known issue" below). On `NOT_CLEAN`, run `tools/box/box_stop.sh`: it prints `GONE via Stop-Process` or `GONE via CIM Terminate`. Only if it prints `STILL_RUNNING` after both stages, STOP and ask the owner (do not retry, do not reboot the box yourself).
 
-**Known issue (2026-10-01): the game hangs at exit on the box.** After `qqq` the game saved SKSE's co-save state (`skse64.log` ends with `cleared save path`), DevBench's server stopped, and the process sat with one thread in a kernel wait (no CPU, working set falling to 80 MB), still holding the spike's 45978 listener (`Listen` and `CloseWait`). `Stop-Process -Force` did not end it either. Python was not loaded in that run (no `py_load`; neither `python314.dll` nor `SpikePyCore.dll` among the process's modules), so the embedded interpreter is not the cause; the other SKSE plugins in that Stock Game were. Whether the box's game also hangs at exit without `SkyrimPythonSpike.dll` is not known (testing it means taking our DLL out of `Plugins`, which needs the owner's sign-off). Until the owner decides, a box `NOT_CLEAN` with no new crash log is a **baseline question**, not an S8 verdict: Task 3's clean-exit criterion needs a baseline run without our DLLs first.
+**Known issue (2026-10-01): the game hangs at exit on the box.** After `qqq` the game saved SKSE's co-save state (`skse64.log` ends with `cleared save path`), DevBench's server stopped, and the process sat with one thread in a kernel wait (no CPU, working set falling to 80 MB), still holding the spike's 45978 listener (`Listen` and `CloseWait`). `Stop-Process -Force` and `taskkill /F` did not end it; `Get-CimInstance Win32_Process -Filter "ProcessId=11312" | Invoke-CimMethod -MethodName Terminate` did (no reboot), which is why `box_stop.sh` now falls back to CIM Terminate by exact image name. Python was not loaded in that run (no `py_load`; neither `python314.dll` nor `SpikePyCore.dll` among the process's modules), so the embedded interpreter is not the cause; the other SKSE plugins in that Stock Game were loaded, so the cause is open. Whether the box's game also hangs at exit without `SkyrimPythonSpike.dll` is not known (testing it means taking our DLL out of `Plugins`, which needs the owner's sign-off). Until the owner decides, a box `NOT_CLEAN` with no new crash log is a **baseline question**, not an S8 verdict: Task 3's clean-exit criterion needs a baseline run without our DLLs first.
 
 - [ ] **Step 7: Commit**
 
@@ -784,36 +836,110 @@ git commit -m "chore(tools): game harness on the Windows box"
 
 ## Substitutions for Tasks 3-10
 
-From Task 3's remaining runs on, read every Linux game step in Tasks 3-10 through this table. Run `tools/box/box_tunnel.sh up` once after each launch (it survives a game restart; bring it down at the end of the session). Nothing else in those tasks changes: the spike DLLs, `remote_build.sh`, the clients and the pass criteria stay as written.
+From Task 3's remaining runs on, read every Linux game step in Tasks 3-10 through this table. Run `tools/box/box_tunnel.sh up` once after each launch (it survives a game restart; bring it down at the end of the session). Nothing else in those tasks changes: the spike DLLs, `remote_build.sh`, the clients and the pass criteria stay as written. Commands that need a pipe are in the numbered blocks under the table (B1, B2, ...); the table names the block.
 
 | Linux step in Tasks 3-10 | On the box |
 |---|---|
 | `source tools/env.sh` (`SIMPLESKYRIM_DATA`, `SKSE_LOG_DIR`, `SKYRIM_PYTHON_STATE`) | `source tools/box/box_env.sh` (`BOX_DATA`, `BOX_PLUGINS`, `BOX_OWN`, `BOX_SKSE_LOG_DIR`, `BOX_SAVES_DIR`, `BOX_MYGAMES`, `SKYRIM_PYTHON_STATE`). Box paths are Windows paths: read them with `bssh "Get-Content '...'"`, never with Linux tools. |
+| Task 3 Step 5 and Task 10 Step 4: edits to the Linux `tools/deploy.sh` (`--python`, `--site-packages`) | Skip them on the box path: `tools/box/box_deploy.sh` already has `--python` and `--site-packages`. (`tools/deploy.sh` already carries Task 3's `--python` from the Linux run; leave it as it is.) |
 | `CONFIRM_THROWAWAY_SAVE=1 tools/deploy.sh out/SkyrimPythonSpike.dll [ini]` | `CONFIRM_THROWAWAY_SAVE=1 tools/box/box_deploy.sh out/SkyrimPythonSpike.dll [ini]` (record: `out/box-deployed.txt`) |
 | `tools/deploy.sh --python out/SpikePyCore.dll` (Task 3) | `CONFIRM_THROWAWAY_SAVE=1 tools/box/box_deploy.sh --python out/SpikePyCore.dll` |
 | `tools/deploy.sh --site-packages out/site-packages` (Task 10) | `tools/box/box_deploy.sh --site-packages out/site-packages` |
 | `--package`, `--scripts DIR` (Task 26, later plan) | `tools/box/box_deploy.sh --package`, `tools/box/box_deploy.sh --scripts DIR` |
-| `cp ... "$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython/<f>"` + append to `out/deployed.txt` (Task 10's `s10_check.py`) | `tools/box/box_deploy.sh --file spikes/deps/s10_check.py s10_check.py` |
+| `cp ... "$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython/<f>"` and append to `out/deployed.txt` (Task 10's `s10_check.py`) | `tools/box/box_deploy.sh --file spikes/deps/s10_check.py s10_check.py` |
 | `touch "$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython/spike-autostart"` (Task 3 run B) | `: > out/spike-autostart && tools/box/box_deploy.sh --file out/spike-autostart spike-autostart` (an empty marker file) |
+| Task 7 Step 2: compile `SkyrimPython.psc` to `.pex` | Unchanged: compile on Linux exactly as Task 7 says (the Creation Kit's Papyrus compiler under Wine; it opens no window and takes no focus). Only the game runs on the box. |
+| Task 7: `cp spikes/spike-dll/papyrus/compiled/SkyrimPython.pex "$SIMPLESKYRIM_DATA/Scripts/SkyrimPython.pex"` and append to `out/deployed.txt` | `tools/box/box_deploy.sh --pex spikes/spike-dll/papyrus/compiled/SkyrimPython.pex`: places exactly `C:\ChronicleDev\Stock Game\Data\Scripts\SkyrimPython.pex`, only if it is absent or was deployed by this tool, and records it in `out/box-deployed.txt`. |
+| Task 8 (S6, load a save through `AddUITask`) | Runs on the box as written through this table, and is recorded as a **Windows-native data point** ("S6 on the Windows box, native"), not as the S6 verdict. The Proton S6 run stays pending until the Linux machine is idle; the S6 row says both. |
 | `tools/launch_game.sh` (and `LAUNCH_DRY_RUN=1`) | `tools/box/box_launch.sh` (no dry run; it refuses while the game runs and prints the launch log) |
-| "quit the game first (console: `qqq`)" | `tools/box/box_quit.sh` (on `NOT_CLEAN`: see Known issue in Step 6; `tools/box/box_stop.sh`) |
+| "quit the game first (console: `qqq`)" | `tools/box/box_quit.sh`; on `NOT_CLEAN`, `tools/box/box_stop.sh` (Stop-Process, then CIM Terminate by exact name; `STILL_RUNNING` after both: STOP and ask the owner). See Known issue in Step 6. |
 | `SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/<log>" "<regex>" [s]` | `tools/box/box_wait_log.sh <log> "<regex>" [s]` with `<log>` relative to the SKSE log folder, e.g. `SkyrimPythonSpike.log`, `SkyrimPython/python.log`. The launch stamp is implicit. |
-| `grep -E '<re>' "$SKSE_LOG_DIR/SkyrimPythonSpike.log"`, `cat`/`tail` of a log | `bssh "Select-String -Path '$BOX_SKSE_LOG_DIR\\SkyrimPythonSpike.log' -Pattern '<re>' \| % Line"` / `bssh "Get-Content '$BOX_SKSE_LOG_DIR\\SkyrimPythonSpike.log' -Tail 50"` |
-| `cp "$SKSE_LOG_DIR"/SkyrimPythonSpike_s9_*.txt out/s9/` (Task 5) | `mkdir -p out/s9 && for n in base_a spin combo base_b; do bscp -s "$BOX:C:/Users/geoff/Documents/My Games/Skyrim Special Edition/SKSE/SkyrimPythonSpike_s9_$n.txt" out/s9/SkyrimPythonSpike_s9_$n.txt; done` (`-s`: SFTP mode, which takes the path with spaces as is; plain scp 8.9 splits it at the spaces, and quoting it fails with "filename does not match request") |
-| `grep -i iPresentInterval "$(dirname "$SKSE_LOG_DIR")"/Skyrim*.ini` (Task 5) | `bssh "Select-String -Path '$BOX_MYGAMES\\Skyrim*.ini' -Pattern iPresentInterval \| % Line"` (no line: game default 1, vsync). There is no DXVK on the box: `dxvk_frame_rate` is `unset`. |
-| The spike ports 45978 (harness) and 45979 (S8 echo server) on Linux's `127.0.0.1` | The same commands after `tools/box/box_tunnel.sh up`. Through the tunnel a listener that is missing on the box shows as `FAIL: ConnectionError: server closed the connection` (exit 1) instead of `connection refused`, and a listener held by a hung process shows as `FAIL: TIMEOUT` (exit 2). Latency includes the LAN and ssh: compare S1/S8 timings with box runs only. |
-| Task 10's Linux HTTP server on 45981 reached from the game | Start it on Linux as written, and bring the tunnel up with `tools/box/box_tunnel.sh up --reverse 45981` (down first if it is already up without it). The game's `http://127.0.0.1:45981/s10.txt` then reaches Linux. |
-| Task 10's `W="Z:$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython"` and reading `$RESULT` on Linux | `W="C:/ChronicleDev/Stock Game/Data/SKSE/Plugins/SkyrimPython"`; register the result path with nothing (it is under `BOX_OWN`, listed by the teardown list) and fetch it with `bscp -s "$BOX:C:/ChronicleDev/Stock Game/Data/SKSE/Plugins/SkyrimPython/s10-result.json" out/s10-result.json`, then run Task 10's printing one-liner on `out/s10-result.json`. |
-| Manual in-game actions: load the throwaway save (Continue/Load), "wait for gameplay", type in the console | `tools/box/box_console.sh "load spikebase"` (rerouted to DevBench's `game` tool `load`, which also skips the mod-mismatch prompt; not yet exercised on the box), then wait until `tools/box/box_console.sh --tool inspect '{"kind":"state"}'` shows `"playerLoaded":true` and `--tool menu '{"action":"list"}'` shows only `"HUD Menu"` (unpaused, no menu open; a console command sent through DevBench leaves no console open). Any console command: `tools/box/box_console.sh "<command>"`; output of printing commands: `--tool console '{"command":"getpos x","capture":true}'` then `--tool console '{"action":"read"}'`. |
-| `save <name>` in the console (Task 6 `s4test`, Task 8 `spytest`) | First `bssh "@(Get-ChildItem '$BOX_SAVES_DIR' -Filter '<name>*').Count"` must print 0; then `tools/box/box_console.sh "save <name>"`; confirm the `.ess` appears. |
-| "Load the save in an interior" (Task 5) | `tools/box/box_console.sh "load spikebase"`, wait as above, then `tools/box/box_console.sh "coc QASmoke"` (DevBench's configured quiet test cell) and wait for `--tool inspect '{"kind":"scene"}'` to name it. |
-| "Play for about a minute (walk, open and close the inventory)" (Task 3 soak), any xdotool step | Not available as input; run the soak with the save loaded and the game unpaused (`--tool menu '{"action":"open","name":"InventoryMenu"}'` then `close` stands in for the inventory). Record "no player movement (box harness)" in the evidence. |
-| `pgrep -x SkyrimSE.exe`, `/proc/$PID/status` `VmRSS` (Task 4) | `bssh "Get-Process SkyrimSE \| % { \$_.Id; [int](\$_.WorkingSet64/1KB) }"` (one PID; working set in kB stands in for VmRSS) |
-| `ss -ltnp \| grep 45978` (Task 2 check 4) | `bssh "Get-NetTCPConnection -LocalPort 45978 \| % { \$_.State.ToString() + ' pid ' + \$_.OwningProcess }"` |
-| Clean-exit check: `timeout 120 bash -c 'while pgrep -x SkyrimSE.exe ...'`, `tail "$SKYRIM_PYTHON_STATE/launch.log"`, `find "$SKSE_LOG_DIR" -newer launch.stamp -iname 'crash*'` | `tools/box/box_quit.sh`: console `qqq` through DevBench, then a bounded wait (`QUIT_WAIT`, 120 s) for `SkyrimSE` to end, then any `crash-*.log` in `BOX_SKSE_LOG_DIR` that was not there at the launch stamp. `CLEAN_EXIT` = process gone and no new crash log. Launch log: `bssh "Get-Content '$BOX_DIR\\launch.log' -Tail 20"`. |
+| `grep -E '<re>' "$SKSE_LOG_DIR/SkyrimPythonSpike.log"`, `cat` or `tail` of a log | Block B1 |
+| `cp "$SKSE_LOG_DIR"/SkyrimPythonSpike_s9_*.txt out/s9/` (Task 5) | Block B2 (`bscp -s`: SFTP mode takes the path with spaces as is; plain scp 8.9 splits it, and quoting it fails with "filename does not match request") |
+| Task 5 Step 6: `grep ... iPresentInterval "$(dirname "$SKSE_LOG_DIR")"/Skyrim*.ini` | Block B3. The box's key is `iVSyncPresentInterval` in `SkyrimPrefs.ini` (2026-10-01: `iVSyncPresentInterval=1`, vsync on), so the pattern is `PresentInterval`; no line means the game default 1. |
+| Task 5 Step 6: `grep ... "$SIMPLESKYRIM_DATA/SKSE/Plugins/SSEDisplayTweaks.ini"` | Block B4: the same keys in `$BOX_PLUGINS\SSEDisplayTweaks.ini` (prints "no Display Tweaks ini" when it is absent, as on 2026-10-01). The sample header's `displaytweaks=` (the DLL check) stays the verdict input. |
+| Task 5 Step 6: `grep ... maxFrameRate "$SIMPLESKYRIM_DATA/../dxvk.conf"`, `DXVK_FRAME_RATE` | No DXVK on the box: record "no DXVK on the box (dxvk.conf present but inert)". Checked 2026-10-01: the game folder has a 43-byte `dxvk.conf` (2026-08-28) whose only setting is `dxvk.enableGraphicsPipelineLibrary = False` (no `maxFrameRate`), and no `d3d11.dll` or `dxgi.dll` beside the exe, so the game runs native D3D11 and that file is never read. The header's `dxvk_frame_rate=` reads `unset`. Block B11 re-checks it. |
+| The spike ports 45978 (harness) and 45979 (S8 echo server) on Linux's `127.0.0.1` | The same commands after `tools/box/box_tunnel.sh up`. Through the tunnel a listener that is missing on the box shows as `FAIL: ConnectionError: server closed the connection` (exit 1) instead of `connection refused`, and a listener held by a hung process shows as `FAIL: TIMEOUT` (exit 2). Latency includes the LAN and ssh: compare S1/S8 timings only with box runs. |
+| Task 10's Linux HTTP server on 45981, reached from the game | Start it on Linux as written, and bring the tunnel up with `tools/box/box_tunnel.sh up --reverse 45981` (`down` first if it is already up without it). The game's `http://127.0.0.1:45981/s10.txt` then reaches Linux. |
+| Task 10's `W="Z:$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython"` and reading `$RESULT` on Linux | `W="C:/ChronicleDev/Stock Game/Data/SKSE/Plugins/SkyrimPython"`; the result file is under `BOX_OWN` (the teardown list shows it); fetch it with block B5, then run Task 10's printing one-liner on `out/s10-result.json`. |
+| Manual in-game actions: load the throwaway save (Continue/Load), "wait for gameplay" | `tools/box/box_console.sh "load spikebase"` (DevBench reroutes it to its `game` tool `load`, which also skips the mod-mismatch prompt; not yet exercised on the box), then wait with block B6: `"playerLoaded":true` and only `"HUD Menu"` open (unpaused, no menu; a console command sent through DevBench leaves no console open). |
+| Typing a console command | `tools/box/box_console.sh "<command>"`. Output of printing commands: `tools/box/box_console.sh --tool console '{"command":"getpos x","capture":true}'` then `tools/box/box_console.sh --tool console '{"action":"read"}'`. |
+| `save <name>` in the console (Task 6 `s4test`, Task 8 `spytest`) | Block B7: check the name is unused (must print 0), save through DevBench, confirm the `.ess`. |
+| "Load the save in an interior" (Task 5) | `tools/box/box_console.sh "load spikebase"`, wait with block B6, then `tools/box/box_console.sh "coc QASmoke"` (DevBench's configured quiet test cell) and wait until `tools/box/box_console.sh --tool inspect '{"kind":"scene"}'` names it. |
+| "Play for about a minute (walk, open and close the inventory)" (Task 3 soak), any xdotool step | No player input on the box: run the soak with the save loaded and the game unpaused; `tools/box/box_console.sh --tool menu '{"action":"open","name":"InventoryMenu"}'` then `'{"action":"close","name":"InventoryMenu"}'` stands in for the inventory. Record "no player movement (box harness)" in the evidence. |
+| `pgrep -x SkyrimSE.exe`, `/proc/$PID/status` `VmRSS` (Task 4) | Block B8 (one PID; the working set in kB stands in for VmRSS) |
+| `ss -ltnp` filtered for 45978 (Task 2 check 4) | Block B9 |
+| Clean-exit check: `timeout 120 bash -c 'while pgrep -x SkyrimSE.exe ...'`, the `launch.log` tail, `find "$SKSE_LOG_DIR" -newer launch.stamp -iname 'crash*'` | `tools/box/box_quit.sh`: console `qqq` through DevBench, a bounded wait (`QUIT_WAIT`, 120 s) for `SkyrimSE` to end, then any `crash-*.log` in `BOX_SKSE_LOG_DIR` that was not there at the launch stamp. `CLEAN_EXIT` = process gone and no new crash log. Launch log: block B10. |
 | `objdump -p out/*.dll` | Unchanged (Linux, on the built DLLs). |
-| `tools/teardown_list.sh` | `tools/box/box_teardown_list.sh` (also lists `C:\dev\skyrim-python-box` and the task `SkyrimPythonGame`). |
+| `tools/teardown_list.sh` | `tools/box/box_teardown_list.sh` (also lists `C:\dev\skyrim-python-box`, the task `SkyrimPythonGame` and the `.pex` if deployed). |
 | The runtime note "GE-Proton10-14" in `spikes/RESULTS.md` | Box rows say "Windows 11 box, native" next to the runtime version from the spike log. |
+
+Each block assumes `source tools/box/box_env.sh` has run.
+
+B1, grep or tail a box log:
+```bash
+bssh "Select-String -Path '$BOX_SKSE_LOG_DIR\\SkyrimPythonSpike.log' -Pattern '<re>' | % Line" | tr -d '\r'
+bssh "Get-Content '$BOX_SKSE_LOG_DIR\\SkyrimPythonSpike.log' -Tail 50" | tr -d '\r'
+```
+
+B2, fetch Task 5's sample files:
+```bash
+mkdir -p out/s9
+for n in base_a spin combo base_b; do
+  bscp -s "$BOX:C:/Users/geoff/Documents/My Games/Skyrim Special Edition/SKSE/SkyrimPythonSpike_s9_$n.txt" "out/s9/SkyrimPythonSpike_s9_$n.txt"
+done
+```
+
+B3, the present interval in the My Games ini files:
+```bash
+bssh "Select-String -Path '$BOX_MYGAMES\\Skyrim*.ini' -Pattern PresentInterval | % { \$_.Filename + ': ' + \$_.Line }" | tr -d '\r'
+```
+
+B4, Display Tweaks settings:
+```bash
+bssh "if (Test-Path '$BOX_PLUGINS\\SSEDisplayTweaks.ini') { Select-String -Path '$BOX_PLUGINS\\SSEDisplayTweaks.ini' -Pattern 'EnableVSync|FramerateLimit|PresentInterval' | % Line } else { 'no Display Tweaks ini' }" | tr -d '\r'
+```
+
+B5, fetch Task 10's result:
+```bash
+bscp -s "$BOX:C:/ChronicleDev/Stock Game/Data/SKSE/Plugins/SkyrimPython/s10-result.json" out/s10-result.json
+```
+
+B6, wait for gameplay (bounded, about 3 minutes):
+```bash
+for i in $(seq 1 60); do
+  st="$(tools/box/box_console.sh --tool inspect '{"kind":"state"}' 2>&1)"; m="$(tools/box/box_console.sh --tool menu '{"action":"list"}' 2>&1)"
+  case "$st" in *'"playerLoaded":true'*) case "$m" in *'"openMenus":["HUD Menu"]'*) break ;; esac ;; esac
+  sleep 3
+done; echo "$st"; echo "$m"
+```
+
+B7, a new save name (never over an existing one):
+```bash
+bssh "@(Get-ChildItem '$BOX_SAVES_DIR' -Filter '<name>*').Count" | tr -d '\r'      # must print 0
+tools/box/box_console.sh "save <name>"
+for i in $(seq 1 30); do n="$(bssh "@(Get-ChildItem '$BOX_SAVES_DIR' -Filter '<name>*.ess').Count" | tr -d '\r')"; [ "$n" != 0 ] && break; sleep 2; done; echo "$n"
+```
+
+B8, the game's PID and working set (Task 4):
+```bash
+bssh "Get-Process SkyrimSE | % { 'pid ' + \$_.Id + ' ws_kB ' + [int](\$_.WorkingSet64/1KB) }" | tr -d '\r'
+```
+
+B9, who holds 45978:
+```bash
+bssh "Get-NetTCPConnection -LocalPort 45978 -ErrorAction SilentlyContinue | % { \$_.State.ToString() + ' pid ' + \$_.OwningProcess }" | tr -d '\r'
+```
+
+B10, the launch log:
+```bash
+bssh "Get-Content '$BOX_DIR\\launch.log' -Tail 20" | tr -d '\r'
+```
+
+B11, DXVK on the box (expect `dxvk.conf` lines without `maxFrameRate`, then `False` `False`):
+```bash
+bssh "if (Test-Path '$BOX_GAME_DIR\\dxvk.conf') { Get-Content '$BOX_GAME_DIR\\dxvk.conf' } else { 'no dxvk.conf' }; Test-Path '$BOX_GAME_DIR\\d3d11.dll'; Test-Path '$BOX_GAME_DIR\\dxgi.dll'" | tr -d '\r'
+```
 
 ## For the controller: add to the plan index (`README.md`)
 
@@ -822,4 +948,5 @@ From Task 3's remaining runs on, read every Linux game step in Tasks 3-10 throug
 3. Fixed paths: game on the box `C:\ChronicleDev\Stock Game` (1.6.1170.0, SKSE 2.2.6), plugins `...\Data\SKSE\Plugins`, logs `C:\Users\geoff\Documents\My Games\Skyrim Special Edition\SKSE`, saves `...\Saves`, harness folder `C:\dev\skyrim-python-box`, scheduled task `SkyrimPythonGame`, DevBench `127.0.0.1:8920` on the box.
 4. Contracts → Tools: the `tools/box/*` interfaces from this task's Interfaces block.
 5. Global Constraints: "The game runs on the Windows box (Task 1b); no step launches the game on the Linux desktop, uses xdotool, or starts Linux Steam."
-6. The open question on the box exit hang (Step 6, Known issue) before Task 3's clean-exit criterion is judged on the box.
+6. Ruling R30's scope in the index's deploy-safety text: one file outside `Data\SKSE\Plugins` on the box, `Data\Scripts\SkyrimPython.pex`; Task 8's box run is a Windows-native data point and the Proton S6 stays pending.
+7. The open question on the box exit hang (Step 6, Known issue) before Task 3's clean-exit criterion is judged on the box.

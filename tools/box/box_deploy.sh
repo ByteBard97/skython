@@ -10,6 +10,9 @@
 #   tools/box/box_deploy.sh --package                        -> Plugins\SkyrimPython\lib\skyrim\ (python/src/skyrim)
 #   tools/box/box_deploy.sh --scripts DIR                    -> Plugins\SkyrimPython\scripts\<entries>
 #   tools/box/box_deploy.sh --file LOCAL REL                 -> Plugins\SkyrimPython\REL (one file: s10_check.py, markers)
+#   tools/box/box_deploy.sh --pex path/to/SkyrimPython.pex   -> exactly Data\Scripts\SkyrimPython.pex (Task 7; the only
+#                                                               target outside Plugins; placed only if absent or ours)
+#   BOX_DEPLOY_PRINT_TARGET=1 with --pex prints the resolved target and exits before any ssh (offline test).
 # Every target is recorded in out/box-deployed.txt. A target that exists on the box and is not recorded there
 # was not deployed by this tool: the deploy refuses (it never overwrites what it did not put there).
 # A *Spike* DLL needs CONFIRM_THROWAWAY_SAVE=1. Refuses while the game runs (DLLs are locked).
@@ -64,6 +67,13 @@ put_entries() {  # put_entries <local dir> <windows dest dir>: each top-level en
 spike_ok() { case "$(basename "$1")" in *Spike*) [ "${CONFIRM_THROWAWAY_SAVE:-0}" = 1 ] || box_die "$1 is spike code (unauthenticated port); use a throwaway save and re-run with CONFIRM_THROWAWAY_SAVE=1" ;; esac; }
 
 [ $# -ge 1 ] || box_die "usage: see the header of $0"
+if [ "$1" = --pex ]; then
+  PEX="${2:?usage: box_deploy.sh --pex path/to/SkyrimPython.pex}"
+  [ -f "$PEX" ] || box_die "no such file: $PEX"
+  [ "$(basename "$PEX")" = SkyrimPython.pex ] || box_die "--pex places only SkyrimPython.pex (got $(basename "$PEX"))"
+  PEX_DEST="$BOX_DATA\\Scripts\\SkyrimPython.pex"
+  if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then echo "$PEX_DEST"; exit 0; fi
+fi
 st="$(bssh 'if (Get-Process -Name SkyrimSE,skse64_loader -ErrorAction SilentlyContinue) { "RUNNING" } else { "IDLE" }' | tr -d '\r')" \
   || box_die "cannot ssh to $BOX (STOP and ask the owner)"
 [ "$st" = IDLE ] || box_die "the game is running on the box; quit it first (tools/box/box_quit.sh)"
@@ -94,6 +104,9 @@ case "$1" in
     REL="${3:?usage: box_deploy.sh --file LOCAL REL}"
     case "$REL" in *..*) box_die "REL must not contain .." ;; esac
     put_file "$2" "$BOX_OWN\\${REL//\//\\}"
+    ;;
+  --pex)
+    put_file "$PEX" "$PEX_DEST"
     ;;
   -*) box_die "unknown option $1" ;;
   *)
