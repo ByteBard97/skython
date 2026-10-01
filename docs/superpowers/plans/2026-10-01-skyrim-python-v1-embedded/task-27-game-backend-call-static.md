@@ -13,11 +13,11 @@ Adapted from: branch `plan-out-of-process`, task 17a (`task-17a-dispatch-skeleto
 > **Verify (grep `plugin/extern/CommonLibSSE-NG`; `API-VERIFICATION.md` has already checked these at the pin):** `VirtualMachine::GetScriptObjectType(BSFixedString, BSTSmartPointer<ObjectTypeInfo>&)`; `ObjectTypeInfo::GetParent`, `GetNumMemberFuncs`, `GetMemberFuncIter`, `GetNumGlobalFuncs`, `GetGlobalFuncIter`; `IFunction::GetName`, `GetParamCount`, `GetParam(i, BSFixedString&, TypeInfo&)`; `Variable::GetType`, `IsBool/IsInt/IsFloat/IsString`, `SetSInt/SetFloat/SetBool/SetString`, `IsNoneObject`; `DispatchStaticCall(BSFixedString, BSFixedString, IFunctionArguments*, BSTSmartPointer<IStackCallbackFunctor>&)` (non-const lvalue callback); `RE::UI::GameIsPaused()`; `RE::Calendar::GetDaysPassed()`.
 
 **Files:**
-- Create: `plugin/src/GameBackend.h`, `plugin/src/GameBackend.cpp` (final)
+- Replace: `plugin/src/GameBackend.h`, `plugin/src/GameBackend.cpp` (Task 26 created interim versions with the same names; this task overwrites both files whole)
 - Create: `plugin/src/Ops.h` (final), `plugin/src/Ops.cpp` (`game.state` extras and `papyrus.call_static`; Tasks 29 and 30 add ops)
 - Create: `plugin/src/Signatures.h` (final), `plugin/src/Signatures.cpp` (`IEquals`, `FindFunction`, `BindArgs`; Task 28 adds `IsA` and `FindProperty`)
 - Create: `plugin/src/PapyrusValues.h` (final), `plugin/src/PapyrusValues.cpp` (primitives, `None`, `DescribeForm`; Tasks 28 and 29 fill in the rest)
-- Modify: the file where Task 26 calls `spy::InstallModuleHost` (point `_skyrim` at the game dispatcher; remove Task 26's interim backend)
+- Unchanged: `plugin/src/PythonHost.cpp`'s `InstallModuleHost` call (marked `// interim backend: replaced in Task 27`); it already uses `spy::game::GetDispatcher()`, which now resolves to the real backend. Only that comment is updated.
 - Modify: `plugin/CMakeLists.txt` (add the four new `.cpp` files to the `SkyrimPythonCore` target)
 - Modify: `livetest/support.py` (append `send_request` if Task 26 did not define it)
 - Create: `livetest/test_m1_mainmenu.py`, `livetest/test_m1_calls.py` (Tasks 28 and 29 append to `test_m1_calls.py`)
@@ -753,13 +753,13 @@ spy::Dispatcher& GetDispatcher()
 
 - [ ] **Step 6: Point `_skyrim` at the game dispatcher**
 
-Find Task 26's module-host installation and its interim backend:
+Task 26's `plugin/src/PythonHost.cpp` installs the module host with `.dispatcher = &spy::game::GetDispatcher()` and marks the call `// interim backend: replaced in Task 27`. Overwriting `GameBackend.{h,cpp}` in Step 5 is the whole switch: the call site needs no code change. Update only its comment:
 ```bash
-grep -n "InstallModuleHost\|ModuleHost\|Interim\|interim" plugin/src/*.cpp plugin/src/*.h
+grep -n "interim backend: replaced in Task 27" plugin/src/PythonHost.cpp
 ```
-In the `spy::InstallModuleHost(...)` call, set `.dispatcher = &spy::game::GetDispatcher()` (add `#include "GameBackend.h"`) and delete the interim backend class and its `Dispatcher` instance, plus any include or CMake source entry that only they used. Keep everything else Task 26 put in that call (`backend = "game"`, `config_json`, `log`). The call still happens on the host thread before `skyrim._host` is imported, which is after `settings::Load()`; `GetDispatcher()` needs the loaded settings.
+Expected: one line. Replace that comment line (and the one continuation comment line under it) with `// _skyrim talks to the game dispatcher (GameBackend, Task 27).`
 
-Add `src/GameBackend.cpp src/Ops.cpp src/Signatures.cpp src/PapyrusValues.cpp` to the `SkyrimPythonCore` target's sources in `plugin/CMakeLists.txt` (next to Task 26's `src/PyModule.cpp`). They go in the core DLL, never in the loader.
+`plugin/CMakeLists.txt`: Task 26 already added `src/GameBackend.cpp src/PyModule.cpp` to `SPY_CORE_SOURCES`. Add `src/Ops.cpp src/Signatures.cpp src/PapyrusValues.cpp` to the same list. They go in the core DLL, never in the loader.
 
 Check that no Python header is included by any of the four new files (they must compile without `Python.h`):
 ```bash
@@ -771,18 +771,18 @@ Expected: `no Python includes: OK`.
 
 Every wait is bounded; loading a save is a manual step (the owner presses Continue). If nobody is at the keyboard, STOP and ask.
 ```bash
-tools/remote_build.sh plugin SkyrimPython.dll
-tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package --scripts livetest/scripts
+tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
+tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --python --package --scripts livetest/scripts
 tools/launch_game.sh
 source tools/env.sh
 tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "game backend: dispatcher ready" 600 || echo "STOP: the dispatcher did not start; ask the owner"
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "Main Menu" 600
+SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "Main Menu opened" 600
 uv run --project python pytest livetest/test_m1_mainmenu.py -q
 # Manual: press Continue in the game. Then:
 tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "interactive = true" 300
 uv run --project python pytest livetest/test_m1_calls.py -q
 ```
-(`tools/deploy.sh` copies both DLLs the build produced, as Task 26 set it up; if `livetest/scripts` does not exist yet, drop `--scripts livetest/scripts`. Use the exact log phrases Task 25 logs for the main menu and the interactive signal if they differ.)
+(Two `remote_build.sh` calls: the script fetches one DLL per call, and `deploy.sh` refuses a core DLL older than the loader. `livetest/scripts` exists since Task 26.)
 
 Expected at the main menu: `test_m1_mainmenu.py` passes (3 tests). After the save is loaded: `test_m1_calls.py` passes (all tests; `test_odd_timeout_values_never_hang_or_crash` counts 6). This is the first time a Papyrus call travels from Linux through the dev bridge, `_skyrim`, the Dispatcher and the VM. If `StringUtil` fails, SKSE's script is not loaded: check `Scripts/StringUtil.pex` and substitute, recording which. If `Utility.RandomInt` fails with `vm_error`, read `Papyrus.0.log` and STOP: the argument-ownership result from S2 does not hold here. If `test_timeout_carries_game_state` fails only because `paused`/`menus` are missing from the timeout detail, the Dispatcher (Task 18) is not adding `BaseState()`'s `paused` and `menus` to timeout errors as spec 4.1 requires: fix it there, not here.
 
