@@ -1,0 +1,3 @@
+# mwparserfromhell 0.7.2 sdist (spike S10). No cp314 wheel and no pure-Python wheel exists upstream, so
+# fetch_wheels.sh downloads this sdist (--no-binary :all: --no-deps --require-hashes) and builds it locally.
+mwparserfromhell==0.7.2 --hash=sha256:f4193072e9ea93b9e88f772f60a02125c0602d32890d0bbdcb275ed58c8b3763

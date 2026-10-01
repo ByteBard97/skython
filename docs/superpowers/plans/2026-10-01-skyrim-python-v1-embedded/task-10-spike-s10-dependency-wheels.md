@@ -12,12 +12,12 @@ New in this plan (no counterpart on branch `plan-out-of-process`).
 
 **What was already found on Linux while this task was written (2026-10-01):**
 - `httpx` 0.28.1 and its dependencies (`anyio`, `certifi`, `h11`, `httpcore`, `idna`, `typing_extensions`) and `jsonschema` 4.26.0 with `attrs`, `jsonschema-specifications`, `referencing` are pure-Python wheels. `rpds-py` (pulled in by `referencing`) is the one compiled dependency and has a `cp314-cp314-win_amd64` wheel (2026.6.3).
-- `mwparserfromhell` 0.7.2 publishes **no cp314 wheel and no pure-Python wheel** (only cp39-cp313 and the sdist). Building the sdist with `WITHOUT_EXTENSION=1` gives a `py3-none-any` wheel that uses its pure-Python tokenizer (`mwparserfromhell.parser.use_c` is `False`); it parses correctly on Linux 3.14.
+- `mwparserfromhell` 0.7.2 publishes **no cp314 wheel and no pure-Python wheel** (only cp39-cp313 and the sdist). Building the hash-pinned sdist (with a hash-pinned build backend, `--no-build-isolation`) with `WITHOUT_EXTENSION=1` gives a `py3-none-any` wheel that uses its pure-Python tokenizer (`mwparserfromhell.parser.use_c` is `False`); it parses correctly on Linux 3.14.
 - `pip download --only-binary=:all: --platform win_amd64 --python-version 3.14 --implementation cp --abi cp314` also accepts `py3-none-any` wheels, so one command fetches everything except `mwparserfromhell`.
 - uv offers CPython 3.14.7 for Linux, not 3.14.8 (the index's `uv python install 3.14.8` fails with "No download found"); `uv python install 3.14` is what the script below expects. The game's interpreter is 3.14.8 from the embeddable zip; a patch-level difference does not change wheel tags.
 
 **Files:**
-- Create: `spikes/deps/requirements-game.txt`, `spikes/deps/fetch_wheels.sh`, `spikes/deps/s10_check.py`
+- Create: `spikes/deps/requirements-game.txt`, `spikes/deps/mwparserfromhell-sdist.txt`, `spikes/deps/build-requirements.txt`, `spikes/deps/fetch_wheels.sh`, `spikes/deps/s10_check.py`
 - Modify: `tools/deploy.sh` (add the `--site-packages DIR` mode)
 - Modify: `spikes/RESULTS.md` (the S10 row; then review every row)
 
@@ -41,7 +41,7 @@ Expected: the S8 row prints, and a CPython 3.14 path prints. If the S8 row does 
 # Fetched by spikes/deps/fetch_wheels.sh with --only-binary=:all: --no-deps --require-hashes.
 # Versions and hashes found on 2026-10-01. rpds-py is the only compiled wheel (jsonschema -> referencing -> rpds).
 # mwparserfromhell is NOT here: 0.7.2 publishes no cp314 wheel and no pure-Python wheel, so fetch_wheels.sh
-# builds a pure-Python wheel from its sdist (MWPARSERFROMHELL_VERSION below the list in fetch_wheels.sh).
+# builds a pure-Python wheel from its hash-pinned sdist (mwparserfromhell-sdist.txt, build-requirements.txt).
 anyio==4.15.1 --hash=sha256:6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101
 attrs==26.1.0 --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309
 certifi==2026.7.22 --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775
@@ -55,6 +55,22 @@ referencing==0.37.0 --hash=sha256:381329a9f99628c9069361716891d34ad94af76e461dcb
 rpds-py==2026.6.3 --hash=sha256:0be972be84cfcaf46c8c6edf690ca0f154ac17babf1f6a955a51579b34ad2dc5
 typing-extensions==4.16.0 --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
 ```
+The `mwparserfromhell` sdist and its build backend are pinned the same way. `spikes/deps/mwparserfromhell-sdist.txt`:
+```text
+# mwparserfromhell 0.7.2 sdist (spike S10). No cp314 wheel and no pure-Python wheel exists upstream, so
+# fetch_wheels.sh downloads this sdist (--no-binary :all: --no-deps --require-hashes) and builds it locally.
+mwparserfromhell==0.7.2 --hash=sha256:f4193072e9ea93b9e88f772f60a02125c0602d32890d0bbdcb275ed58c8b3763
+```
+`spikes/deps/build-requirements.txt`:
+```text
+# Build backend for the mwparserfromhell sdist (its pyproject: setuptools >= 77.0.3, setuptools-scm >= 8), pinned.
+# fetch_wheels.sh installs exactly these (--require-hashes) into a throwaway venv, then builds with --no-build-isolation.
+# Found 2026-10-01.
+packaging==26.3 --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+setuptools==84.0.0 --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670
+setuptools-scm==10.3.4 --hash=sha256:82f34c3e3084fc2b57d397200637cc13f2338004052d2fee47baa5f0e902464e
+vcs-versioning==2.5.0 --hash=sha256:dbf44f6303dc817e5792cb7d0e9cc90e3046ee1e32eaa357b20ad368811313d0
+```
 If a pin can no longer be downloaded, **STOP and ask the owner** (do not loosen a pin or drop a hash on your own).
 
 - [ ] **Step 2: Write the fetch script and run it**
@@ -65,22 +81,26 @@ If a pin can no longer be downloaded, **STOP and ask the owner** (do not loosen 
 # Spike S10: fetch skyrim-dm's in-game dependencies as CPython 3.14 / win_amd64 wheels and unpack them into a
 # staging site-packages. Writes only under out/ (git-ignored): out/wheels/, out/wheels/SHA256SUMS,
 # out/site-packages/. Refuses to write into a non-empty out/site-packages (it never deletes anything).
-# Usage: spikes/deps/fetch_wheels.sh
+# Usage: [S10_OUT=out] spikes/deps/fetch_wheels.sh   (S10_OUT: another output root, e.g. out/s10-r2)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-MWPARSERFROMHELL_VERSION=0.7.2
+OUTDIR="${S10_OUT:-out}"
 REQ=spikes/deps/requirements-game.txt
-WHEELS=out/wheels
-STAGE=out/site-packages
-VENV=out/s10-venv
+SDIST_REQ=spikes/deps/mwparserfromhell-sdist.txt
+BUILD_REQ=spikes/deps/build-requirements.txt
+WHEELS=$OUTDIR/wheels
+STAGE=$OUTDIR/site-packages
+SDIST=$OUTDIR/sdist
+VENV=$OUTDIR/s10-venv
+BUILD_VENV=$OUTDIR/s10-build-venv
 
 PY="$(uv python find 3.14 2>/dev/null)" || { echo "fetch_wheels: no CPython 3.14 (run: uv python install 3.14)" >&2; exit 1; }
 if [ -d "$STAGE" ] && [ -n "$(ls -A "$STAGE")" ]; then
   echo "fetch_wheels: $STAGE is not empty; ask the owner to approve moving it to the trash (gio trash $STAGE), then re-run" >&2
   exit 1
 fi
-mkdir -p "$WHEELS" "$STAGE"
+mkdir -p "$WHEELS" "$STAGE" "$SDIST"
 # A private venv only for pip (the download flags need a recent pip); nothing is installed into it.
 [ -x "$VENV/bin/pip" ] || { "$PY" -m venv "$VENV" && "$VENV/bin/python" -m pip install -q --upgrade pip; }
 
@@ -88,10 +108,16 @@ mkdir -p "$WHEELS" "$STAGE"
 "$VENV/bin/pip" download -q --no-deps --require-hashes -r "$REQ" -d "$WHEELS" \
   --only-binary=:all: --platform win_amd64 --python-version 3.14 --implementation cp --abi cp314
 
-# 2) mwparserfromhell: no cp314 wheel exists, so build a pure-Python wheel from the sdist. WITHOUT_EXTENSION=1
-#    skips its C tokenizer; the package then uses its Python tokenizer (mwparserfromhell.parser.use_c is False).
-WITHOUT_EXTENSION=1 "$VENV/bin/pip" wheel -q --no-deps --no-binary :all: \
-  "mwparserfromhell==$MWPARSERFROMHELL_VERSION" -w "$WHEELS"
+# 2) mwparserfromhell: no cp314 wheel exists, so build a pure-Python wheel from the hash-pinned sdist, with the
+#    build backend pinned too (build-requirements.txt, --require-hashes, throwaway venv, --no-build-isolation).
+#    WITHOUT_EXTENSION=1 skips its C tokenizer; the package then uses its Python tokenizer (use_c is False).
+#    The built wheel is not byte-reproducible (two builds give identical content but different zip bytes), so its hash
+#    is recorded in SHA256SUMS but not pinned; what is verified is the sdist hash and the pinned build backend.
+"$VENV/bin/pip" download -q --no-deps --no-binary :all: --require-hashes -r "$SDIST_REQ" -d "$SDIST"
+[ -x "$BUILD_VENV/bin/pip" ] || "$PY" -m venv "$BUILD_VENV"
+"$BUILD_VENV/bin/pip" install -q --require-hashes -r "$BUILD_REQ"
+WITHOUT_EXTENSION=1 "$BUILD_VENV/bin/pip" wheel -q --no-build-isolation --no-deps --no-index \
+  "$SDIST"/mwparserfromhell-*.tar.gz -w "$WHEELS"
 
 # 3) Record what we have, then unpack (a wheel is a zip) into the staging site-packages.
 ( cd "$WHEELS" && sha256sum ./*.whl | sed 's# \./# #' > SHA256SUMS )

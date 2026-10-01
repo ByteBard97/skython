@@ -2,7 +2,7 @@
 # Fetched by spikes/deps/fetch_wheels.sh with --only-binary=:all: --no-deps --require-hashes.
 # Versions and hashes found on 2026-10-01. rpds-py is the only compiled wheel (jsonschema -> referencing -> rpds).
 # mwparserfromhell is NOT here: 0.7.2 publishes no cp314 wheel and no pure-Python wheel, so fetch_wheels.sh
-# builds a pure-Python wheel from its sdist (MWPARSERFROMHELL_VERSION below the list in fetch_wheels.sh).
+# builds a pure-Python wheel from its hash-pinned sdist (mwparserfromhell-sdist.txt, build-requirements.txt).
 anyio==4.15.1 --hash=sha256:6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101
 attrs==26.1.0 --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309
 certifi==2026.7.22 --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775
