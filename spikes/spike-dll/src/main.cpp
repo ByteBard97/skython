@@ -1,4 +1,5 @@
 #include "Net.h"
+#include "PyLoad.h"
 
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
@@ -48,6 +49,10 @@ int ParseInt(const std::string& s, int fallback)
 }
 }
 
+namespace spike {
+std::atomic_bool g_dataLoaded{ false };  // set in OnMessage at kDataLoaded; py_init refuses before it
+}
+
 // Handle has a namespace block of its own: Tasks 3-9 add their code as new `namespace spike { ... }` blocks
 // directly above this one, after Log and ParseInt, which they use.
 namespace spike {
@@ -55,6 +60,10 @@ std::string Handle(const std::string& line)
 {
     if (line.rfind("echo ", 0) == 0) return line.substr(5);
     // Tasks 3-9 add their commands here, before the fallback.
+    if (line == "py_load") return py::Load();
+    if (line == "py_init") return py::Init(g_dataLoaded.load());
+    if (line == "py_status") return py::Status();
+    if (line.rfind("py_exec ", 0) == 0) return py::Exec(line.substr(8));
     return "ERR unknown command";
 }
 }
@@ -85,6 +94,9 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
         break;
     case SKSE::MessagingInterface::kDataLoaded:
         spike::Log("kDataLoaded");
+        spike::g_dataLoaded.store(true);
+        if (spike::py::AutostartRequested())  // run B (Step 7): the real plugin's timing; py::Load ran in SKSEPluginLoad
+            spike::Log("spike: autostart at kDataLoaded " + spike::py::Init(true));
         break;
     default:
         break;
@@ -97,6 +109,8 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse)
     SKSE::Init(skse, { .log = false });  // InitInfo aggregate (SKSE/API.h); the old Init(skse, bool) is [[deprecated]]
     SetupLog();
     spike::Log(std::format("SkyrimPythonSpike loading on Skyrim {}", REL::Module::get().version().string(".")));  // string() alone joins with '-' (1-6-1170-0)
+    if (spike::py::AutostartRequested())  // run B (Step 7): python314.dll + SpikePyCore.dll at plugin load
+        spike::Log("spike: autostart at plugin load " + spike::py::Load());
     SKSE::GetMessagingInterface()->RegisterListener(OnMessage);
     return true;
 }
