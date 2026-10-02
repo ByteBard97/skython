@@ -13,9 +13,13 @@ Rules (protocol/PROTOCOL.md, "Dev bridge transport" and "Handshake"):
   same response shape the plugin uses.
 - Replies waiting to be sent above `max_queued_bytes` mean the client stopped reading: the connection closes.
 - When a connection ends, every request it still has in flight is cancelled.
-Three threads per connection: a reader (handshake, then requests), a completion thread (wait_any on the
+Four threads per connection: a reader (handshake, then requests), a completion thread (wait_any on the
 connection's tickets, 5 ms at a time, so a request submitted meanwhile is picked up quickly even when the
-others are slow) and a writer (the only thread that sends after the welcome). The Dispatcher's reaper enforces
+others are slow), a writer (the only thread that sends after the welcome) and an event pump (next_events on the
+connection's consumer, 0.25 s at a time; each event object becomes one frame through the writer, so the
+max_queued_bytes cap covers events too). The connection's consumer is opened once its hello is accepted, travels
+beside every request text it submits (the text is forwarded unchanged, so a client cannot name another consumer),
+and is closed with the connection, which drops its subscriptions. The Dispatcher's reaper enforces
 each request's timeout_ms: the bridge never times a call out itself. An error from accept() (a client that
 reset before it was accepted, no descriptors left) is logged and the bridge keeps accepting."""
 import collections
@@ -39,6 +43,8 @@ log = logging.getLogger("skython.bridge")
 _U64_MAX = 2**64 - 1
 _POLL_S = 0.005  # how long the completion thread waits on its tickets per round (it releases the GIL meanwhile)
 _IDLE_S = 0.05  # how long it sleeps with no tickets (a new ticket wakes it at once)
+_EVENT_POLL_S = 0.25  # how long the pump waits in next_events per round (it releases the GIL meanwhile)
+_no_hub_logged = False  # "no event hub" is logged once per process, not once per connection
 _ACCEPT_RETRY_S = 0.05  # after a failed accept()
 _DRAIN_S = 0.5  # after a handshake_error, how long to read and discard so the error is not lost to a reset
 _TOKEN = re.compile(r"[0-9a-f]{%d}" % _g.TOKEN_LENGTH)
@@ -46,6 +52,13 @@ _TOKEN = re.compile(r"[0-9a-f]{%d}" % _g.TOKEN_LENGTH)
 # end in one pass instead of being retried from every later quote (a pre-auth frame could otherwise hold the GIL
 # for seconds).
 _STRUCTURE = re.compile(r'"(?:[^"\\]++|\\.)*+"?|[\[\]{}]', re.S)
+
+
+def _log_no_hub_once(e: Exception) -> None:
+    global _no_hub_logged
+    if not _no_hub_logged:
+        _no_hub_logged = True
+        log.warning("bridge: no event hub (%s); events are unsupported on this connection", e)
 
 
 class _Violation(Exception):
@@ -160,6 +173,7 @@ class _Conn:
         self.out: collections.deque[bytes] = collections.deque()
         self.out_bytes = 0
         self.closed = False
+        self.consumer = 0  # the _skython event consumer; 0 until the hello is accepted
 
     def start(self) -> None:
         threading.Thread(target=self._read_loop, name=f"bridge-read-{self.peer[1]}", daemon=True).start()
@@ -173,6 +187,8 @@ class _Conn:
             self.sock.settimeout(None)
             threading.Thread(target=self._write_loop, name=f"bridge-write-{self.peer[1]}", daemon=True).start()
             threading.Thread(target=self._complete_loop, name=f"bridge-done-{self.peer[1]}", daemon=True).start()
+            if self.consumer:  # no consumer (no event hub): no events to pump, and next_events(0) would spin
+                threading.Thread(target=self._pump_loop, name=f"bridge-pump-{self.peer[1]}", daemon=True).start()
             while True:
                 text = _read_text(self.sock, _g.MAX_FRAME_BYTES)
                 self._on_request(text, _parse_object(text))
@@ -195,6 +211,17 @@ class _Conn:
         if code is not None:
             self._refuse(code, message)
             return False
+        try:
+            consumer = self.server.backend.open_consumer()  # before the welcome: every request has a consumer
+        except Exception as e:  # noqa: BLE001 - no event hub (the game build before Task 39): serve without events
+            _log_no_hub_once(e)
+            consumer = 0  # requests still go with consumer 0; events.* answer unsupported (the hub is null)
+        with self.cond:  # set under cond, so exactly one of this thread and close() closes the consumer
+            if not self.closed:
+                self.consumer, consumer = consumer, 0
+        if consumer:  # the connection was closed meanwhile (BridgeServer.close): do not leak the consumer
+            self.server.backend.close_consumer(consumer)
+            raise _Ended("the connection was closed during the handshake")
         if isinstance(hello.get("client"), str):
             self.client = hello["client"].encode("utf-8")[:_g.MAX_CLIENT_NAME_BYTES].decode("utf-8", "ignore")
         info = self.server.welcome_info() if callable(self.server.welcome_info) else self.server.welcome_info
@@ -233,7 +260,7 @@ class _Conn:
         if refusal is not None:
             self._enqueue(refusal)
             return
-        ticket = self.server.backend.submit(text)
+        ticket = self.server.backend.submit(text, self.consumer)  # the consumer travels beside the text, never in it
         with self.cond:
             if not self.closed:
                 self.tickets[ticket] = rid
@@ -261,6 +288,20 @@ class _Conn:
                     self._enqueue(text)
         except Exception:  # noqa: BLE001
             log.exception("bridge: waiting for results failed")
+            self.close("internal error")
+
+    # -- events ---------------------------------------------------------------------------------------
+    def _pump_loop(self) -> None:
+        backend = self.server.backend
+        try:
+            while not self.closed:
+                text = backend.next_events(self.consumer, _EVENT_POLL_S)  # close_consumer wakes it
+                if self.closed:
+                    return
+                for event in json.loads(text):
+                    self._enqueue(_dumps(event))  # one frame per event, under the same max_queued_bytes cap
+        except Exception:  # noqa: BLE001
+            log.exception("bridge: the event pump failed")
             self.close("internal error")
 
     # -- writer ---------------------------------------------------------------------------------------
@@ -314,6 +355,11 @@ class _Conn:
                 self.server.backend.cancel(ticket)
             except Exception:  # noqa: BLE001
                 log.exception("bridge: cancel failed")
+        if self.consumer:
+            try:
+                self.server.backend.close_consumer(self.consumer)  # drops its subscriptions, wakes the pump
+            except Exception:  # noqa: BLE001
+                log.exception("bridge: closing the event consumer failed")
         try:
             self.sock.shutdown(socket.SHUT_RDWR)
         except OSError:
@@ -458,7 +504,8 @@ def serve(backend, *, host: str = _g.HOST, port: int = _g.CONFIG_KEYS["port"]["d
           max_inflight_per_connection: int = _g.CONFIG_KEYS["max_inflight_per_connection"]["default"],
           hello_timeout: float = _g.HELLO_TIMEOUT_MS / 1000,
           max_queued_bytes: int = _g.MAX_QUEUED_BYTES_PER_CONNECTION) -> BridgeServer:
-    """Start a dev bridge over `backend` (anything with submit, wait_any and cancel: the _skython module).
+    """Start a dev bridge over `backend` (anything with submit(text, consumer), wait_any, cancel, open_consumer,
+    close_consumer and next_events: the _skython module).
 
     `welcome_info` is a dict, or a function returning one, with plugin_version, game_version, runtime and
     epoch (a function gives every client the current epoch). Port 0 picks a free port (see .port). The

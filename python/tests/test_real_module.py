@@ -167,3 +167,24 @@ def test_bridge_over_the_real_module(real):
         assert real.in_flight() == 0
     finally:
         srv.close()
+
+
+def test_bridge_connections_are_isolated_over_the_real_module(real):
+    # Task 37 (Review A#12): two connections over the real C++ hub. One cannot unsubscribe the other's subscription,
+    # and each sees only its own events.
+    srv = bridge.serve(real, port=0, token=TOKEN,
+                       welcome_info={"plugin_version": "0.0.0-fake", "game_version": "0.0.0", "runtime": "fake", "epoch": 0})
+    try:
+        with connect_remote(port=srv.port, token=TOKEN) as a, connect_remote(port=srv.port, token=TOKEN) as b:
+            a_seen, b_seen = [], []
+            sa = a.on_channel("real_a", a_seen.append)
+            b.on_channel("real_b", b_seen.append)
+            with pytest.raises(errors.NotFound):
+                b._request("events.unsubscribe", {"sub": sa.sub})
+            for name in ("real_a", "real_b"):
+                real._fake_push_event("channel", json.dumps({"channel": name, "payload": name, "truncated": False}))
+            wait_until(lambda: a_seen and b_seen, what="each connection's own event")
+            assert [e.data["channel"] for e in a_seen] == ["real_a"]
+            assert [e.data["channel"] for e in b_seen] == ["real_b"]
+    finally:
+        srv.close()
