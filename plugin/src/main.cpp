@@ -64,10 +64,11 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
 {
     try {
         spy::life::OnMessage(m);
+        if (m->type == SKSE::MessagingInterface::kDataLoaded) spy::host::Start(spy::settings::Get());
     } catch (const std::exception& e) {
-        spy::log::Error(std::string("lifecycle handler threw: ") + e.what());
+        spy::log::Error(std::string("message handler threw: ") + e.what());
     } catch (...) {
-        spy::log::Error("lifecycle handler threw");
+        spy::log::Error("message handler threw");
     }
 }
 }

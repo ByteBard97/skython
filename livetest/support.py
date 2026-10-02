@@ -1,0 +1,167 @@
+import json
+import os
+import pathlib
+import socket
+import struct
+import subprocess
+import time
+from dataclasses import dataclass
+
+MAX_FRAME = 16 * 1024 * 1024
+REPO = pathlib.Path(__file__).resolve().parent.parent
+# The game runs on the Windows box (Task 1c): out/box-live.env sets SKYTHON_BOX=1, SKSE_LOG_DIR and
+# SKYTHON_LOG to the local mirror out/box-skse, and SKYTHON_SESSION to the tunnel's session file.
+BOX = os.environ.get("SKYTHON_BOX") == "1"
+
+
+@dataclass
+class Session:
+    port: int
+    token: str
+
+
+def load_session() -> Session:
+    path = os.environ.get("SKYTHON_SESSION")
+    if not path:
+        raise RuntimeError("SKYTHON_SESSION is not set (tools/box/box_session.sh up && source out/box-live.env)")
+    data = json.loads(pathlib.Path(path).read_text())
+    if data.get("active") is False:
+        raise RuntimeError(f"the bridge is not serving: {data.get('reason')}")
+    return Session(port=int(data["port"]), token=str(data["token"]))
+
+
+def encode(obj) -> bytes:
+    body = json.dumps(obj, separators=(",", ":")).encode()
+    return struct.pack("<I", len(body)) + body
+
+
+def _read_exact(sock: socket.socket, n: int) -> bytes:
+    buf = b""
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise EOFError("connection closed")
+        buf += chunk
+    return buf
+
+
+def read_frame(sock: socket.socket) -> dict:
+    (n,) = struct.unpack("<I", _read_exact(sock, 4))
+    return json.loads(_read_exact(sock, n))
+
+
+def hello(session: Session, **override) -> bytes:
+    msg = {"type": "hello", "protocol": [1, 0], "token": session.token, "client": "livetest-raw"}
+    msg.update(override)
+    return encode(msg)
+
+
+def raw_connect(session: Session) -> socket.socket:
+    s = socket.create_connection(("127.0.0.1", session.port), timeout=5)
+    s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    s.sendall(hello(session))
+    assert read_frame(s)["type"] == "welcome"
+    return s
+
+
+def send_request(sock: socket.socket, op: str, args: dict | None = None, req_id: int = 1) -> None:
+    sock.sendall(encode({"type": "request", "id": req_id, "op": op, "args": args or {}}))
+
+
+def rpc(sock: socket.socket, op: str, args: dict | None = None, req_id: int = 1, timeout: float = 30.0) -> dict:
+    """Send one request and return the reply with that id (replies may arrive out of order)."""
+    sock.settimeout(timeout)
+    send_request(sock, op, args, req_id)
+    while True:
+        r = read_frame(sock)
+        if r.get("id") == req_id:
+            return r
+
+
+def send_raw(sock: socket.socket, data: bytes) -> None:
+    sock.sendall(data)
+
+
+def closed_by_server(sock: socket.socket, timeout: float = 3.0) -> bool:
+    sock.settimeout(timeout)
+    deadline = time.monotonic() + timeout
+    try:
+        while time.monotonic() < deadline:
+            if sock.recv(65536) == b"":
+                return True
+    except (ConnectionResetError, ConnectionAbortedError):
+        return True
+    except socket.timeout:
+        return False
+    return False
+
+
+def frame_header(n: int) -> bytes:
+    return struct.pack("<I", n)
+
+
+def read_frame_or_none(sock: socket.socket, timeout: float = 3.0):
+    sock.settimeout(timeout)
+    try:
+        return read_frame(sock)
+    except Exception:  # noqa: BLE001 - EOF, reset, timeout or a truncated frame all mean "no frame"
+        return None
+
+
+def still_serving(session: Session) -> bool:
+    raw_connect(session).close()
+    return True
+
+
+def _box_tool(script: str, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([str(REPO / "tools" / "box" / script), *args], capture_output=True, text=True, timeout=180)
+
+
+def box_pull(*names: str) -> None:
+    """Box mode: refresh out/box-skse/<name> with the text written on the box since the last launch (empty if none)."""
+    r = _box_tool("box_files.sh", "pull", *names)
+    if r.returncode != 0:
+        raise RuntimeError(f"box_files.sh pull {' '.join(names)} failed: {r.stderr.strip()}")
+
+
+def _skse_dir() -> pathlib.Path | None:
+    d = os.environ.get("SKSE_LOG_DIR")
+    return pathlib.Path(d) if d else None
+
+
+def fresh(path: pathlib.Path) -> bool:
+    """True when the file was written after the last launch stamp (so it belongs to this run). In box mode the mirror
+    out/box-skse holds only text the box wrote since its launch stamp (box_files.sh pull), and is newer than any stamp."""
+    stamp = pathlib.Path(os.environ.get("SKYTHON_STATE", "")) / "launch.stamp"
+    return path.exists() and (not stamp.exists() or path.stat().st_mtime >= stamp.stat().st_mtime)
+
+
+def log_text(name: str = "Skython.log") -> str:
+    """A log in SKSE_LOG_DIR from this run, or '' (log assertions then fail with a clear message)."""
+    if BOX:
+        box_pull(name)
+    d = _skse_dir()
+    p = d / name if d else None
+    return p.read_text(errors="replace") if p and fresh(p) else ""
+
+
+def python_log_text() -> str:
+    if BOX:
+        box_pull("Skython/python.log")
+    p = pathlib.Path(os.environ.get("SKYTHON_LOG", ""))
+    return p.read_text(errors="replace") if p.name and fresh(p) else ""
+
+
+def refused(port: int = 45977) -> bool:
+    if BOX:  # through the ssh tunnel a port nobody listens on is accepted locally, then closed: ask the box
+        r = _box_tool("box_session.sh", "probe", str(port))
+        if "NO_LISTENER" in r.stdout:
+            return True
+        if r.stdout.startswith("LISTEN"):
+            return False
+        raise RuntimeError(f"box_session.sh probe {port} failed: {r.stdout}{r.stderr}")
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=3).close()
+    except (ConnectionRefusedError, socket.timeout, OSError):
+        return True
+    return False
