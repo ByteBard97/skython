@@ -42,6 +42,13 @@ All calls in Task 9's S7 code match the pinned headers; no call had to change.
 - `TESForm::GetAllForms()` (static, returns the map pointer and its lock, TESForm.h:192).
 - `RE::Main` (Main.h): `REX::W32::HWND wnd` (+0x18), `std::uint32_t threadID` (+0x28); REX has `GetCurrentThreadId` (REX/W32/KERNEL32.h:455) but no `GetWindowThreadProcessId` wrapper, so the tid probe uses `<windows.h>`.
 
+Runtime findings from S7 on the box (2026-10-01; details in the S7 row of `spikes/RESULTS.md`):
+- `TypeInfo::GetTypeInfo()` on an OBJECT-ARRAY type is wrong in this commit: it masks the raw value with `~kObjectArray` (~0xB), which also clears bit 3 of the class pointer. ObjectTypeInfo pointers were observed only 8-byte aligned (Form 0x...ea8, Form[] 0x...ea9 -> GetTypeInfo 0x...ea0). It read a garbage name in one launch and crashed the game in the next (AV in ucrtbase strlen); DevBench's papyrus `describe` crashed the same way. For an object array the class pointer is `raw & ~1`; call `GetTypeInfo()` only when `IsObject()`.
+- `Array::type_info()` (the element type) reads 0 (None) on arrays returned by SKSE's Utility natives (CreateFormArray, ResizeFormArray); use the Variable's own type (`array_raw & ~1`) for the element class. An array built with `CreateArray(TypeInfo(array_raw & ~1), n)` is accepted as a Form[] argument; one built from a copied `type_info()` (0) is not.
+- `ObjectTypeInfo::GetName()` returns `utility` (lowercase) for Utility; Actor/ObjectReference/Form/Quest keep their case. `GetScriptObjectType("actor")` finds Actor. Engine natives report parameter names `param1..N` from `IFunction::GetParam` (script-defined functions were not sampled).
+- `GetScriptObjectType` on an unknown name: the first call returns false; the second returns true with an empty stub (0 member/global functions, 0 properties, no parent, linkedValid 2); `GetScriptObjectTypeNoLoad` stays false.
+- `DispatchMethodCall(handle, className, ...)` returns false (no crash) when the form has no bound object (e.g. a quest with no attached script); `PackHandle` binds it (FindBoundObject true afterwards) and the `BSTSmartPointer<Object>&` overload dispatches. `FindBoundObject` accepts a parent class of the bound object (player: Actor, ObjectReference, Form true; Quest false).
+
 ## CPython
 
 - Version 3.14.8, standard (GIL) build, x64.
