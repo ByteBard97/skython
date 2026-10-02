@@ -982,7 +982,7 @@ Expected, in order: `PY_STATUS not_loaded`; `PY_LOAD OK same_module=true ours=..
    tail -n 20 "$SKYRIM_PYTHON_STATE/launch.log"
    find "$SKSE_LOG_DIR" -newer "$SKYRIM_PYTHON_STATE/launch.stamp" -iname 'crash*' -print
    ```
-   Expected `game exited`, no `Unhandled exception` / `page fault` lines in the tail, and the `find` prints **nothing** (a crash logger such as Crash Logger writes `crash-*.log` under the SKSE log folder, and a crash at exit may leave its only record there). A hang on exit (still running after 120 s), a crash dialog or a new `crash*` file is an **S8 FAIL** (record it; STOP).
+   Expected `game exited`, no `Unhandled exception` / `page fault` lines in the tail, and the `find` prints **nothing** (a crash logger such as Crash Logger writes `crash-*.log` under the SKSE log folder, and a crash at exit may leave its only record there). A hang on exit (still running after 120 s), a crash dialog or a new `crash*` file is an **S8 FAIL** (record it; STOP). On the Windows box the hang part is judged against the exit baseline (Task 1b Known issue, R46): the box's game hangs at exit the same way with the spike inert, so `NOT_CLEAN` with `NO_NEW_CRASH_LOG` and the baseline's signature is not attributable to the spike; end the game with `tools/box/box_stop.sh`.
 3. Run B, the real plugin's timing: `python314.dll` and the core are loaded in `SKSEPluginLoad` (plugin-load time, spec 4.1), and the interpreter is started at the main thread's `kDataLoaded` message:
    ```bash
    touch "$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython/spike-autostart"
