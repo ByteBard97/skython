@@ -3,7 +3,9 @@
 #   <log name> is relative to the box's SKSE log folder (C:\Users\geoff\Documents\My Games\Skyrim Special
 #   Edition\SKSE), e.g. SkyrimPythonSpike.log or SkyrimPython/python.log. The regex is .NET (-match); ERE
 #   patterns used in this plan mean the same. Only text written after the last box_launch.sh stamp counts.
-# Exit 0 and "MATCH <line>" on a match; exit 1 with the tail of this launch's text on timeout.
+# Exit 0 and "MATCH <line>" on a match; exit 1 with the tail of this launch's text on timeout; exit 2 and
+# "DIALOG <title>" when SKSE's modal dialog ("SKSE Plugin Loader ...") blocks the game (see it with box_shot.sh,
+# then box_stop.sh); exit 3 "NO_STAMP" without a box_launch.sh stamp. The exit code is wait_log.ps1's, passed on.
 set -euo pipefail
 source "$(dirname "$0")/box_env.sh"
 name="${1:?log name}"; pat="${2:?regex}"; secs="${3:-600}"

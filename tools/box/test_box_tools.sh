@@ -33,8 +33,8 @@ done
   || { bad "ssh/scp traps not first on PATH"; exit 1; }
 
 SH=(box_env.sh box_deploy.sh box_launch.sh box_stop.sh box_wait_log.sh box_tunnel.sh box_console.sh
-    box_quit.sh box_setup.sh box_teardown_list.sh box_session.sh box_files.sh box_saves.sh)
-PS=(launch.ps1 setup_task.ps1 stamp.ps1 wait_log.ps1 console.ps1 stop.ps1 quit_check.ps1 place.ps1 list.ps1 files.ps1)
+    box_quit.sh box_setup.sh box_teardown_list.sh box_session.sh box_files.sh box_saves.sh box_shot.sh)
+PS=(launch.ps1 setup_task.ps1 stamp.ps1 wait_log.ps1 console.ps1 stop.ps1 quit_check.ps1 place.ps1 list.ps1 files.ps1 shot.ps1)
 
 for f in "${SH[@]}"; do
   if [ ! -f "$B/$f" ]; then bad "missing tools/box/$f"; continue; fi
@@ -167,6 +167,24 @@ if "$B/box_saves.sh" count 'bad name*' >/dev/null 2>&1; then bad "box_saves.sh a
 
 # 6g. the teardown list shows Task 31's save
 grep -qF 'spikebase|spytest|s4test|skypy_r38_savecall' "$B/win/list.ps1" 2>/dev/null && ok "list.ps1 lists skypy_r38_savecall" || bad "list.ps1 does not list skypy_r38_savecall"
+
+# 6h. the SKSE modal dialog (R50): wait_log.ps1 exits 2 with DIALOG; box_shot.sh and its task
+grep -qF "MainWindowTitle -match '^SKSE Plugin Loader'" "$B/win/wait_log.ps1" 2>/dev/null && grep -qE '"DIALOG .*exit 2 \}' "$B/win/wait_log.ps1" \
+  && ok "wait_log.ps1: SKSE Plugin Loader window -> DIALOG, exit 2" || bad "wait_log.ps1 has no DIALOG branch"
+grep -qF "Register-Ours 'SkyrimPythonShot' 'shot.ps1'" "$B/win/setup_task.ps1" 2>/dev/null && grep -qF "Register-Ours 'SkyrimPythonGame' 'launch.ps1'" "$B/win/setup_task.ps1" \
+  && ok "setup_task.ps1 registers SkyrimPythonGame and SkyrimPythonShot" || bad "setup_task.ps1 task list"
+grep -qF "'SkyrimPythonGame','SkyrimPythonShot'" "$B/win/list.ps1" 2>/dev/null && ok "list.ps1 lists both tasks" || bad "list.ps1 does not list SkyrimPythonShot"
+w="$(grep -E '\.Save\(|Set-Content' "$B/win/shot.ps1" 2>/dev/null | grep -vE '^\s*#')"
+[ "$(echo "$w" | grep -c .)" = 2 ] && ! echo "$w" | grep -qvE "C:\\\\dev\\\\skyrim-python-box\\\\(shot\.png|windows\.txt)" \
+  && ok "shot.ps1 writes only shot.png and windows.txt in C:\\dev\\skyrim-python-box" || { bad "shot.ps1 write targets:"; echo "$w"; }
+sst="$(mktemp -d)"
+t="$(SKYRIM_PYTHON_STATE="$sst" BOX_SHOT_PRINT=1 "$B/box_shot.sh" 2>&1)"
+[ "$t" = "$sst/box-shot.png" ] && ok "box_shot.sh default target \$SKYRIM_PYTHON_STATE/box-shot.png" || bad "box_shot.sh default target: '$t'"
+t="$(SKYRIM_PYTHON_STATE="$sst" BOX_SHOT_PRINT=1 "$B/box_shot.sh" "$sst/x/y.png" 2>&1)"
+[ "$t" = "$sst/x/y.png" ] && ok "box_shot.sh takes a target as \$1" || bad "box_shot.sh \$1 target: '$t'"
+t="$(SKYRIM_PYTHON_STATE="$sst" "$B/box_shot.sh" 2>&1)"; rc=$?
+[ "$rc" != 0 ] && case "$t" in *"BOX_OFFLINE: refusing"*) true ;; *) false ;; esac && [ -z "$(ls -A "$sst")" ] \
+  && ok "box_shot.sh refuses under BOX_OFFLINE (rc=$rc), writes nothing" || bad "box_shot.sh offline: rc=$rc '$t'"
 
 # 7. nothing reached ssh or scp during the whole run
 if [ -e "$TRAPLOG" ]; then bad "ssh/scp was called during the offline test:"; cat "$TRAPLOG"; else ok "no ssh/scp call reached PATH"; fi
