@@ -88,7 +88,8 @@ The bridge listens on `127.0.0.1` only, checks a token on every connection, and 
 - `game.batch().run()` without a timeout gives the batch 5 s per step in total (capped at one hour); pass `timeout=` for a tighter bound.
 - Arrays of objects can be returned but not sent. An array argument holds at most 128 elements (`TypeMismatch`); results are passed through whatever their length.
 - Scripted alias references (those carrying a `ReferenceAlias` script) work as call targets and results; a plain alias is `TypeMismatch`. Alias *arguments* have no live test until M1.5 (no vanilla function takes one).
-- [Only if Task 29 recorded the alias-id collision in `spikes/RESULTS.md`; otherwise delete this bullet:] An alias whose id equals Quest's VM type id (0x4D) is returned as its quest.
+- An alias whose id is 0xFFFF would decode as its quest (form handles carry 0xFFFF in the high 32 bits; one sample).
+- Strings returned by the game come back in the casing the engine's string pool already holds (e.g. `CreateStringArray(2, "x")` gave `['X', 'X']`); compare game strings case-insensitively.
 - Arguments are positional only; errors name a native's parameters `param1..N` (the engine reports no `.psc` names), so read the position in the message.
 - A call whose VM callback never fires leaks about 100 bytes.
 - A call in flight when the player saves is not written into the save: after loading that save the call ends `NotReady` or `Timeout`, never completes (the plugin's VM callback returns false from `CanSave()`).

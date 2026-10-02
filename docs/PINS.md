@@ -15,7 +15,7 @@ Recorded 2026-10-01 (Task 0). Later tasks cite this file instead of re-deriving.
 
 - `IVirtualMachine::FindBoundObject(VMHandle a_handle, const char* a_className, BSTSmartPointer<Object>& a_result) const` (IVirtualMachine.h:99, 3 parameters).
 - `DispatchStaticCall(const BSFixedString&, const BSFixedString&, IFunctionArguments*, BSTSmartPointer<IStackCallbackFunctor>&)` (IVirtualMachine.h:109, VirtualMachine.h:121); `DispatchMethodCall1(BSTSmartPointer<Object>&, fn, args, result&)` and `DispatchMethodCall2(VMHandle, className, fn, args, result&)` (virtual slots 27/28), plus non-virtual `DispatchMethodCall(...)` wrappers with both argument shapes (IVirtualMachine.h:130, 132).
-- `void PackHandle(Variable* a_dst, const void* a_src, VMTypeID a_typeID)` (PackUnpack.h:16; the literal `void PackHandle` grep misses it because the header column-aligns with spaces, `PackHandle` alone matches).
+- `void PackHandle(Variable* a_dst, const void* a_src, VMTypeID a_typeID)` (PackUnpack.h:16; the literal `void PackHandle` grep misses it because the header column-aligns with spaces, `PackHandle` alone matches). A PackHandle value is typed as the form's own class; a native parameter declared as an ancestor class needs `SetObject(obj, declared.GetRawType())` (Task 28).
 - `BGSSaveLoadManager::Load(const char* a_fileName)` and `Load(const char* a_fileName, bool a_checkForMods)` (BGSSaveLoadManager.h:123-124).
 - `VMTYPEID`: `BGSBaseAlias` 139, `BGSRefAlias` 140, `BGSLocAlias` 141; `BGSBaseAlias::GetVMTypeID() const` exists (BGSBaseAlias.h:68).
 - `TESObjectREFR* BGSRefAlias::GetReference() const` (BGSRefAlias.h:150).
@@ -30,7 +30,7 @@ Recorded 2026-10-01 (Task 0). Later tasks cite this file instead of re-deriving.
 
 All calls in Task 9's S7 code match the pinned headers; no call had to change.
 - `FindBoundObject(VMHandle, const char* a_className, BSTSmartPointer<Object>& a_result) const` (IVirtualMachine.h:99, VirtualMachine.h:111): 3 parameters, as above.
-- `PackHandle(Variable*, const void*, VMTypeID)` (PackUnpack.h:16).
+- `PackHandle(Variable*, const void*, VMTypeID)` (PackUnpack.h:16). A PackHandle value is typed as the form's own class; a native parameter declared as an ancestor class needs `SetObject(obj, declared.GetRawType())` (Task 28).
 - `DispatchMethodCall(BSTSmartPointer<Object>&, const BSFixedString& fn, IFunctionArguments*, BSTSmartPointer<IStackCallbackFunctor>&)` and `DispatchMethodCall(VMHandle, const BSFixedString& className, const BSFixedString& fn, IFunctionArguments*, BSTSmartPointer<IStackCallbackFunctor>&)` (IVirtualMachine.h:130, 132; virtual slots `DispatchMethodCall1/2` 27/28).
 - `BGSBaseAlias::GetVMTypeID() const` (BGSBaseAlias.h:68); `VMTYPEID` BGSBaseAlias 139, BGSRefAlias 140, BGSLocAlias 141.
 - `IFunction`: `GetReturnType() const -> TypeInfo` (04), `GetParamCount()` (05), `GetParam(std::uint32_t, BSFixedString&, TypeInfo&) const` (06), `GetIsNative()` (08), `GetIsStatic()` (09) (IFunction.h:51-56).
