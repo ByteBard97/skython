@@ -53,7 +53,8 @@ namespace SkythonTestEsp
         // Ours (SkythonTest.esp|0x0008xx)
         public const uint LocationId = 0x000801, CellId = 0x000802, NpcBaseId = 0x000803, NpcRefId = 0x000804,
                           MarkerId = 0x000805, CocMarkerId = 0x000806, FloorId = 0x000807, LightRefId = 0x000808,
-                          NextId = 0x000809;
+                          FirstCopiedRefId = 0x000809;   // Breezehome's copied references take ids from here on (R69)
+        public static uint NextId = FirstCopiedRefId;          // set past the last copied reference by TestCell
 
         public static void Write(string path, string esmPath)
         {
@@ -131,7 +132,39 @@ namespace SkythonTestEsp
             var light = new PlacedObject(O(LightRefId), R) { Placement = At(0, 0, 256) };
             light.Base = WRFireLightShadow01;
             cell.Temporary.Add(light);
+            CopyBreezehomeReferences(esm, src, cell);
             return cell;
+        }
+
+        // R69 build 2: copy Breezehome's own placed statics, moveable statics, furniture and lights into our cell, each as
+        // a new reference of ours (ids from FirstCopiedRefId, in Breezehome's order: persistent first, then temporary).
+        // Everything else is left out: actors, doors, map markers, items, containers, activators, flora. Each copy keeps
+        // its source's fields (base, placement, scale, flags, enable parent, linked refs, ownership); only the editor id
+        // is dropped so no Skyrim.esm editor id appears twice.
+        static void CopyBreezehomeReferences(ISkyrimModDisposableGetter esm, ICellGetter src, Cell cell)
+        {
+            var wanted = new System.Collections.Generic.HashSet<FormKey>();
+            foreach (var r in esm.Statics) wanted.Add(r.FormKey);
+            foreach (var r in esm.MoveableStatics) wanted.Add(r.FormKey);
+            foreach (var r in esm.Furniture) wanted.Add(r.FormKey);
+            foreach (var r in esm.Lights) wanted.Add(r.FormKey);
+            var id = FirstCopiedRefId;
+            void Copy(System.Collections.Generic.IEnumerable<IPlacedGetter> from, Noggog.ExtendedList<IPlaced> to)
+            {
+                foreach (var r in from)
+                {
+                    if (r is not IPlacedObjectGetter po) continue;          // actors and hazards are not copied
+                    if (!wanted.Contains(po.Base.FormKey)) continue;
+                    if (po.MapMarker != null || po.TeleportDestination != null) continue;
+                    var copy = new PlacedObject(O(id++), R);
+                    copy.DeepCopyIn(po);
+                    copy.EditorID = null;
+                    to.Add(copy);
+                }
+            }
+            Copy(src.Persistent, cell.Persistent);
+            Copy(src.Temporary, cell.Temporary);
+            NextId = id;
         }
 
         static CellBlock CellBlockWith(Cell cell)
