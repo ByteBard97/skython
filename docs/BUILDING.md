@@ -54,7 +54,7 @@ What it does:
 
 Options: `-Config Debug`, `-VcpkgRoot <dir>` (instead of `VCPKG_ROOT`), `-Stage <dir>`, `-NoStage`.
 
-The DLLs land in `plugin\build\Release\`, the build log in `plugin\build\build-Release.log`. Once `build.ps1` has fetched CPython you can also rebuild from `plugin` with `cmake --preset vs2022` and `cmake --build --preset release` (no staging), or open `plugin` as a CMake folder in Visual Studio.
+The DLLs land in `plugin\build\Release\`, the build log in `plugin\build\build-Release.log`. Once `build.ps1` has fetched CPython you can also rebuild from `plugin` with `cmake --preset vs2022` and `cmake --build --preset release` (no staging).
 
 The staged folder:
 
