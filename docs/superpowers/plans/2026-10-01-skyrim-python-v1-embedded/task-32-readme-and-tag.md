@@ -123,10 +123,6 @@ tools/box/box_quit.sh   # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh
 ```
 (`test_m1_throughput.py` is deselected: Task 31 recorded the baseline that Step 1 copied into the README, and running it again would rewrite `livetest/results/throughput.json` with numbers that disagree with the README. The save loaded must be the one S7 ran on, for the property and alias tests.) Also run the `_skyrim` Linux suite the way Task 19 set it up. Expected: all pass. The skip report (`-rs`) lists only tests that need another setup: the startup-variant tests (Task 26), the low-cap test (run in Task 30 with its own ini) and the two `SPY_MANUAL` tests (run in Task 31). The main-menu tests ran in Tasks 27-29 before a save was loaded. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. Any skip about missing `SPY_S4_*` or `SPY_S7C_*` values means the alias or property tests did not run: set them and rerun.
 
-- [ ] **Step 2b: Proton acceptance launch (ruling R51; at a time the owner picks)**
-
-The owner's own game is the Linux/Proton install (`~/Games/SimpleSkyrim`) and skyrim-dm runs on Linux, so before the tag, run one Proton launch at a time the owner names as free (the game takes the desktop's focus). Deploy with `tools/deploy.sh` as in Task 31 Step 4 (Linux paths). Run the S8 soak (Task 3) and Task 31's in-process smoke script, then quit. Record the result as a "Proton acceptance" line in `spikes/RESULTS.md` (the S8 row) and in the README's verified-runtimes line. If the owner has not named a time yet, stop at this step and tell the owner: the tag waits for this step; nothing before it does.
-
 - [ ] **Step 3: Commit and tag (local only; never push)**
 
 ```bash
