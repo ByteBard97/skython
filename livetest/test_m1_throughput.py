@@ -10,7 +10,7 @@ import pytest
 
 from skython import errors
 from smoke import command, wait_smoke
-from support import diagnostics, raw_connect, read_frame, send_request
+from support import diagnostics, raw_connect, read_frame, send_request, steady_late_count
 
 RESULTS = pathlib.Path(__file__).parent / "results" / "throughput.json"
 BURST_RESULTS = pathlib.Path(__file__).parent / "results" / "burst.json"
@@ -121,6 +121,7 @@ def test_throughput_baseline(game):
 def test_burst_worst_frame(session, game):
     """R38 (comparison Top 6): max_inflight_total requests at once. Records the longest time our queued task bodies
     held the main thread in one frame (Step 3b's drain meter), and the worst frame estimated from it."""
+    steady_late_count(session)  # nothing from earlier tests still on its way
     before = diagnostics(session)
     n_conn = -(-BURST_TOTAL // BURST_PER_CONNECTION)  # the bridge caps each connection: spread over several
     counts = [min(BURST_PER_CONNECTION, BURST_TOTAL - i * BURST_PER_CONNECTION) for i in range(n_conn)]
@@ -147,22 +148,30 @@ def test_burst_worst_frame(session, game):
     # One more task in a later frame closes the burst's last drain (the meter folds a run when the next one starts).
     assert 1 <= game.call("Utility", "RandomInt", 1, 6) <= 6
     after = diagnostics(session)
+    # Every burst entry has left the Dispatcher once the late counter is steady: in_flight is back at its baseline.
+    steady_late_count(session)
+    assert diagnostics(session)["in_flight"] == before["in_flight"], "burst entries are still in flight"
     out = {
         "date": datetime.datetime.now().isoformat(timespec="seconds"),
         "requested": BURST_TOTAL, "per_connection": BURST_PER_CONNECTION, "connections": n_conn,
         "ok": ok, "busy": busy, "seconds": round(secs, 3),
-        "max_task_drain_ms": after["max_task_drain_ms"], "max_task_drain_count": after["max_task_drain_count"],
+        # max_task_drain_ms_count: the tasks in the run that set max_task_drain_ms (so per_task_drain_ms is that
+        # run's own cost); max_task_drain_count: the most tasks in any one run since launch.
+        "max_task_drain_ms": after["max_task_drain_ms"], "max_task_drain_ms_count": after["max_task_drain_ms_count"],
+        "max_task_drain_count": after["max_task_drain_count"],
         "max_task_drain_ms_before": before["max_task_drain_ms"],
+        # The maximum is since launch: only a burst that raised it is what max_task_drain_ms describes.
+        "attributable": after["max_task_drain_ms"] > before["max_task_drain_ms"],
         "s9_frame_ms": S9_FRAME_MS,
         "worst_frame_ms_estimate": round(S9_FRAME_MS + after["max_task_drain_ms"], 2),
-        "unmeasured": "the object-conversion AddTask, when the callback runs outside our task (Task 27), is not metered",
     }
-    count = after["max_task_drain_count"]
+    count = after["max_task_drain_ms_count"]
     per_task = after["max_task_drain_ms"] / count if count else None
     out["per_task_drain_ms"] = round(per_task, 4) if per_task is not None else None
     if per_task is not None and count < BURST_TOTAL:  # the worst run drained fewer than the cap: scale it up
         out["drain_ms_at_cap_extrapolated"] = round(per_task * BURST_TOTAL, 2)
         out["worst_frame_ms_estimate_at_cap"] = round(S9_FRAME_MS + per_task * BURST_TOTAL, 2)
+        out["at_cap_note"] = "approximate: a linear extrapolation from one run's per-task cost, not a measurement"
     BURST_RESULTS.parent.mkdir(exist_ok=True)
     BURST_RESULTS.write_text(json.dumps(out, indent=2) + "\n")
     print(json.dumps(out, indent=2))

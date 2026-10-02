@@ -77,7 +77,7 @@ public:
         // test the thread id instead: tasks run on varying job threads (R49). R52.
         if (!pv::NeedsMainThread(result) || t_inTask) return Convert(done_, result);
         auto done = done_;
-        SKSE::GetTaskInterface()->AddTask([done, result] { ops::InTask in; Convert(done, result); });
+        SKSE::GetTaskInterface()->AddTask([done, result] { ops::InTask in; ops::Measured measured; Convert(done, result); });
     }
     void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
     // Never written into a save (as SkyrimPlatform does): a save during a latent call does not record this functor,

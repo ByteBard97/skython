@@ -45,7 +45,8 @@ private:
     {
         auto& d = GetDispatcher();
         s["diagnostics"] = {{"late_results_dropped", d.LateResults()}, {"in_flight", d.InFlight()},
-                            {"max_task_drain_ms", ops::Meter().MaxMs()}, {"max_task_drain_count", ops::Meter().MaxCount()}};
+                            {"max_task_drain_ms", ops::Meter().MaxMs()}, {"max_task_drain_count", ops::Meter().MaxCount()},
+                            {"max_task_drain_ms_count", ops::Meter().MaxMsCount()}};
         return s;
     }
 

@@ -13,7 +13,7 @@ struct InTask { InTask() : prev_(std::exchange(t_inTask, true)) {} ~InTask() { t
                 InTask(const InTask&) = delete; InTask& operator=(const InTask&) = delete; private: bool prev_; };
 
 // Task 31 (ruling R38): how long our queued task bodies hold the main thread in one frame. Bodies that start less than
-// kGap after the previous one ended belong to the same run (one frame's drain). A run is folded into the two maxima
+// kGap after the previous one ended belong to the same run (one frame's drain). A run is folded into the maxima
 // when the next run starts, so the latest run shows up after one more task. Written only from inside our SKSE tasks,
 // which are serialized (observed, R49), on varying threads; the maxima are atomics because BaseState() reads them
 // from any thread. No I/O, no allocation.
@@ -32,7 +32,8 @@ public:
     }
     void End() { lastEnd_ = Clock::now(); }
     double MaxMs() const { return maxMs_.load(); }
-    std::uint32_t MaxCount() const { return maxCount_.load(); }
+    std::uint32_t MaxCount() const { return maxCount_.load(); }      // the most bodies in any one run
+    std::uint32_t MaxMsCount() const { return maxMsCount_.load(); }  // the bodies in the run that set MaxMs()
 
 private:
     using Clock = std::chrono::steady_clock;
@@ -41,13 +42,20 @@ private:
     {
         if (count_ == 0) return;
         const double ms = std::chrono::duration<double, std::milli>(lastEnd_ - start_).count();
-        if (ms > maxMs_.load()) maxMs_.store(ms);
+        if (ms > maxMs_.load()) {
+            // The count of the run that set the max ms, stored with it, so max_ms / count is that run's per-task
+            // cost. BaseState() reads the two atomics separately; a read racing a Fold may pair a new ms with the
+            // old count (rare, diagnostics only).
+            maxMsCount_.store(count_);
+            maxMs_.store(ms);
+        }
         if (count_ > maxCount_.load()) maxCount_.store(count_);
     }
     Clock::time_point start_{}, lastEnd_{};
     std::uint32_t count_ = 0;
     std::atomic<double> maxMs_{0.0};
     std::atomic<std::uint32_t> maxCount_{0};
+    std::atomic<std::uint32_t> maxMsCount_{0};
 };
 
 inline DrainMeter& Meter()

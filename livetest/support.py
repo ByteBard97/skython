@@ -187,3 +187,15 @@ def diagnostics(session) -> dict:
         return rpc(s, "game.state")["result"]["diagnostics"]
     finally:
         s.close()
+
+
+def steady_late_count(session, settle: float = 1.0, tries: int = 10) -> int:
+    """late_results_dropped once two readings `settle` seconds apart agree: nothing late is still on its way."""
+    prev = diagnostics(session)["late_results_dropped"]
+    for _ in range(tries):
+        time.sleep(settle)
+        now = diagnostics(session)["late_results_dropped"]
+        if now == prev:
+            return now
+        prev = now
+    raise AssertionError("late_results_dropped kept changing")
