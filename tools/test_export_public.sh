@@ -36,7 +36,9 @@ files="$(git -C "$OUT" ls-files)"
 X='super''powers'
 for p in "docs/$X/" docs/research/ docs/specs/ spikes/ ".$X/" out/ .claude/ .playwright-mcp/ \
          tools/local.env tools/box/box.local.env tools/export_public.sh tools/test_export_public.sh; do
-  if echo "$files" | grep -q -F -x -e "$p" || echo "$files" | grep -q "^${p//./\\.}"; then bad "left out: $p"
+  case "$p" in */) hit="$(echo "$files" | grep -F -- "$p" | grep -c "^${p//./\\.}")" ;;   # a folder: any file under it
+               *) hit="$(echo "$files" | grep -c -F -x -- "$p")" ;; esac                # a file: that path only
+  if [ "$hit" != 0 ]; then bad "left out: $p"
   else ok "left out: $p"; fi
 done
 echo "$files" | grep -q -E '(^|/)(HANDOFF|OWNER-DECISIONS|QUESTIONS|KIMI)-' && bad "local notes exported" \
