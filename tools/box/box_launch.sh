@@ -2,7 +2,8 @@
 # Launch the game on the box through OUR scheduled task SkyrimPythonGame (launch.ps1). Refuses when the game or
 # loader already runs. Writes the launch stamp on the box (box clock; stamp.ps1 also snapshots the SKSE log
 # folder so box_wait_log.sh and box_quit.sh see only this launch), copies it to
-# $SKYRIM_PYTHON_STATE/box-launch.stamp, then waits (bounded, LAUNCH_WAIT=240 s) for launch.ps1's result.
+# $SKYRIM_PYTHON_STATE/box-launch.stamp, then waits (bounded, LAUNCH_WAIT=300 s) for launch.ps1's result
+# (launch.ps1's worst case: Steam logon waits of 120 + 90 s and two 20 s loader checks).
 # Usage: tools/box/box_launch.sh [--env SKYRIM_PYTHON_TEST_<NAME>=VALUE]...
 #   --env: launch.ps1 sets these in its own environment before it starts skse64_loader.exe, so the game inherits
 #   them (Task 25's SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME, Task 26's SKYRIM_PYTHON_TEST_PRELOAD). Only
@@ -32,12 +33,12 @@ bssh "[IO.File]::WriteAllText('$BOX_DIR\\launch.env', [Text.Encoding]::UTF8.GetS
   || box_die "could not write launch.env"
 [ -n "$envtext" ] && printf 'launch env: %s' "$envtext"
 bssh "Start-ScheduledTask -TaskName $BOX_TASK" || box_die "could not start the scheduled task $BOX_TASK (run tools/box/box_setup.sh once)"
-end=$(( $(date +%s) + ${LAUNCH_WAIT:-240} ))
+end=$(( $(date +%s) + ${LAUNCH_WAIT:-300} ))
 while :; do
   res="$(bssh "Get-Content '$BOX_DIR\\launch.result' -Raw -ErrorAction SilentlyContinue" | tr -d '\r' || true)"
   case "$res" in "$stamp "*) break ;; esac
   if [ "$(date +%s)" -ge "$end" ]; then
-    echo "box_launch: no result from launch.ps1 after ${LAUNCH_WAIT:-240}s; its log:" >&2
+    echo "box_launch: no result from launch.ps1 after ${LAUNCH_WAIT:-300}s; its log:" >&2
     bssh "Get-Content '$BOX_DIR\\launch.log' -Tail 20" >&2 || true; exit 1
   fi
   sleep 3
