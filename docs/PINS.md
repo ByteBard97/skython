@@ -26,6 +26,22 @@ Recorded 2026-10-01 (Task 0). Later tasks cite this file instead of re-deriving.
 - `bool UI::GameIsPaused()` (UI.h:84).
 - `TaskInterface::AddTask(TaskDelegate*)`, `AddTask(std::function<void()>)`, `AddUITask(UIDelegate_v1*)`, `AddUITask(std::function<void()>)` (Interfaces.h:393-396).
 
+### S7 signatures checked in the pinned checkout (Task 9 Step 0, 2026-10-01)
+
+All calls in Task 9's S7 code match the pinned headers; no call had to change.
+- `FindBoundObject(VMHandle, const char* a_className, BSTSmartPointer<Object>& a_result) const` (IVirtualMachine.h:99, VirtualMachine.h:111): 3 parameters, as above.
+- `PackHandle(Variable*, const void*, VMTypeID)` (PackUnpack.h:16).
+- `DispatchMethodCall(BSTSmartPointer<Object>&, const BSFixedString& fn, IFunctionArguments*, BSTSmartPointer<IStackCallbackFunctor>&)` and `DispatchMethodCall(VMHandle, const BSFixedString& className, const BSFixedString& fn, IFunctionArguments*, BSTSmartPointer<IStackCallbackFunctor>&)` (IVirtualMachine.h:130, 132; virtual slots `DispatchMethodCall1/2` 27/28).
+- `BGSBaseAlias::GetVMTypeID() const` (BGSBaseAlias.h:68); `VMTYPEID` BGSBaseAlias 139, BGSRefAlias 140, BGSLocAlias 141.
+- `IFunction`: `GetReturnType() const -> TypeInfo` (04), `GetParamCount()` (05), `GetParam(std::uint32_t, BSFixedString&, TypeInfo&) const` (06), `GetIsNative()` (08), `GetIsStatic()` (09) (IFunction.h:51-56).
+- `ObjectTypeInfo`: `GetParent()` (const and non-const, :127-128), `GetNumProperties()`, `GetPropertyIter()`, `GetGlobalFuncIter()`, `GetMemberFuncIter()` (:172-182).
+- `BSScript::Array`: `operator[](size_type)` (:29-30), `size()` (:59), `type_info()` (:63-64, the element type).
+- `VirtualMachine::attachedScriptsLock` (`mutable BSSpinLock`, :219) and `attachedScripts` (`BSTHashMap<VMHandle, BSTSmallSharedArray<AttachedScript>>`, :220); `AttachedScript : BSTPointerAndFlags<BSTSmartPointer<Object>, 1>` (AttachedScript.h:13, size 8).
+- `CreateArray(const TypeInfo&, std::uint32_t, BSTSmartPointer<Array>&)` and `CreateArray(TypeInfo::RawType, const BSFixedString&, std::uint32_t, BSTSmartPointer<Array>&)` (IVirtualMachine.h:126-127); `GetScriptObjectType(const BSFixedString&, BSTSmartPointer<ObjectTypeInfo>&)` and the `VMTypeID` overload (:139-140).
+- `Object::GetHandle() const` (:19), `Object::Resolve(VMTypeID) const -> void*` (:26), `Object::GetProperty(const BSFixedString&)` (const and non-const, :31-32).
+- `TESForm::GetAllForms()` (static, returns the map pointer and its lock, TESForm.h:192).
+- `RE::Main` (Main.h): `REX::W32::HWND wnd` (+0x18), `std::uint32_t threadID` (+0x28); REX has `GetCurrentThreadId` (REX/W32/KERNEL32.h:455) but no `GetWindowThreadProcessId` wrapper, so the tid probe uses `<windows.h>`.
+
 ## CPython
 
 - Version 3.14.8, standard (GIL) build, x64.
