@@ -4,17 +4,18 @@
 
 > **Depends on:** Task 36 (`skython.events`: `EventDispatcher`, the `EventStream` protocol with `track`/`untrack`, `Game.on` and helpers) and Task 36a (`fake_skython.py` with consumers, `next_events`, `_fake_push_event`, `consumers()`, `subscriptions()`). Linux only: the tests run a real `BridgeServer` over the fake `_skython` and drive it with the real remote transport and raw sockets, the whole dev path without the game.
 
-**What this task builds.** Events through the dev bridge. On the server side each connection opens one `_skython` consumer once its hello is accepted, submits every request **with that consumer beside the text** (`backend.submit(text, conn.consumer)`; the text itself is forwarded unchanged, so a client can never name another consumer), runs a fourth thread `pump` that loops `backend.next_events(conn.consumer, 0.25)` and enqueues each event object as one frame through the existing writer (so `max_queued_bytes_per_connection` bounds events as well as responses), and closes the consumer when the connection closes (which drops its subscriptions and wakes the pump). On the client side `RemoteTransport`'s reader routes `"type": "event"` frames to a `RemoteEventStream` (behind Task 36's `EventStream` protocol, `consumer = None`) instead of the response futures. Because the pump drains the hub continuously, the hub never drops for a slow **remote** callback; so the stream keeps a **client-side bounded queue per subscription** with the hub's semantics: each subscription's `max_queue` (given by the dispatcher's `track(sub, max_queue)`), drop-oldest, and the client's drops (plus any server `dropped`/`suppressed` carried by a dropped frame) added to the next delivered frame of that subscription, so `seq` gaps still equal `dropped` sums. A frame for a sub not yet tracked (an event frame can overtake its subscribe response: the pump and the completion thread write independently) is held under the provisional bound `MAX_EVENT_QUEUE` and trimmed when `track` arrives; `untrack(sub)` discards the sub's queue and every later frame for it. Memory is bounded by the sum of the subscriptions' `max_queue` (plus at most one `MAX_EVENTS_PER_NEXT` batch held by the dispatch thread) on the client, and by `max_queued_bytes_per_connection` on the server; any other message type after the handshake is a protocol violation that closes the connection. The same `EventDispatcher` serves a remote `Game`, so remote callbacks behave exactly like in-process ones.
+**What this task builds.** Events through the dev bridge. On the server side each connection opens one `_skython` consumer once its hello is accepted, submits every request **with that consumer beside the text** (`backend.submit(text, conn.consumer)`; the text itself is forwarded unchanged, so a client can never name another consumer), runs a fourth thread `pump` that loops `backend.next_events(conn.consumer, 0.25)` and enqueues each event object as one frame through the existing writer (so `max_queued_bytes_per_connection` bounds events as well as responses), and closes the consumer when the connection closes (which drops its subscriptions and wakes the pump). On the client side `RemoteTransport`'s reader routes `"type": "event"` frames to a `RemoteEventStream` (behind Task 36's `EventStream` protocol, `consumer = None`) instead of the response futures. A server that opens no consumer (no event hub) still serves every other request: the bridge falls back to consumer 0 (Review A#1). Because the pump drains the hub continuously, the hub never drops for a slow **remote** callback; so the stream keeps a **client-side bounded queue per subscription** with the hub's semantics: each subscription's `max_queue` (given by the dispatcher's `track(sub, max_queue)`), drop-oldest, and the client's drops (plus any server `dropped`/`suppressed` carried by a dropped frame) added to the next delivered frame of that subscription, so `seq` gaps still equal `dropped` sums. A frame for a sub not yet tracked (an event frame can overtake its subscribe response: the pump and the completion thread write independently) is held under the provisional bound `MAX_EVENT_QUEUE` and trimmed when `track` arrives; `untrack(sub)` discards the sub's queue and every later frame for it. Memory is bounded by the sum of the subscriptions' `max_queue` (plus at most one `MAX_EVENTS_PER_NEXT` batch held by the dispatch thread) on the client, and by `max_queued_bytes_per_connection` on the server; any other message type after the handshake is a protocol violation that closes the connection. The same `EventDispatcher` serves a remote `Game`, so remote callbacks behave exactly like in-process ones.
 
 **Files:**
 - Modify: `python/src/skython/bridge.py` (consumer per connection, `pump` thread, `submit(text, consumer)`, `close_consumer` on close, docstrings), `python/src/skython/remote.py` (`RemoteEventStream` with per-subscription bounds, event routing, `events()`, unknown message types close the connection)
 - Create: `python/tests/test_bridge_events.py`
+- Modify: `python/tests/test_real_module.py` (one test: two bridge connections over the real hub are isolated, Review A#12)
 
 **Interfaces:**
 - Consumes: Task 36 (`skython.events.Event`, `EventDispatcher` (its `subscribe` calls `stream.track(sub, max_queue)` under its lock before registering; `Subscription.close` calls `stream.untrack(sub)`), the `EventStream` protocol `consumer` / `next(timeout)` / `close()` / `track(sub, max_queue)` / `untrack(sub)`; `Game.on`, `on_channel`, `on_death`; `Game.close()` closes subscriptions, the dispatch thread and the stream), `fake_skython.FakeSkython` (`submit(text, consumer=0)`, `open_consumer()`, `close_consumer(consumer)`, `next_events(consumer, timeout) -> str`, `_fake_push_event(event, data_json)`, test-only `consumers()`, `subscriptions(consumer=None)`), Task 35 (the real module has the same four methods, so `test_real_module.py`'s bridge test keeps passing), Task 33 generated `MAX_EVENTS_PER_NEXT`, `MAX_EVENT_QUEUE`, `DEFAULT_EVENT_QUEUE`, `OP_EVENTS_SUBSCRIBE`, `OP_EVENTS_UNSUBSCRIBE`; v1 `bridge.py` (`_Conn`, `_enqueue`, `_frame`, `_dumps`), `remote.py` (`RemoteTransport`), `tests/support.py` (`FakeServer`, `wait_until`, `TOKEN`, `ok`).
 - Produces (index Contracts, `remote.py` / `bridge.py`):
-  - `skython.remote.RemoteEventStream` (`consumer = None`; `put(msg)` from the reader: appends to the frame's sub queue, drop-oldest at that sub's `max_queue` (provisional bound `MAX_EVENT_QUEUE` until tracked), counting client drops; `track(sub, max_queue)`: sets the bound and trims to the newest `max_queue` frames, counting the trimmed as drops; `untrack(sub)`: discards the sub's queue and every later frame for it (sub ids are never reused); `next(timeout) -> list[dict]`: blocks for the first frame up to `timeout`, then takes what else is queued, at most `MAX_EVENTS_PER_NEXT`, in arrival order across subs, each frame's `dropped` = the server's `dropped` + the sub's pending client drops (then reset); `[]` once closed; `close()` wakes a waiting `next`). `RemoteTransport.events() -> RemoteEventStream` (made in `__init__`, so a frame that arrives before anyone asked is kept). A connection failure or `close()` closes the stream. A message of any unknown `type` after the handshake is a `ProtocolViolation` that closes the connection.
-  - `skython.bridge`: the `backend` duck type is now `submit(text, consumer) -> int`, `wait_any`, `cancel`, `open_consumer() -> int`, `close_consumer(consumer)`, `next_events(consumer, timeout) -> str`. Each accepted connection opens its consumer before the welcome is sent (a failure closes that connection only), has four threads (`bridge-read-*`, `bridge-write-*`, `bridge-done-*`, `bridge-pump-*`), and closes its consumer exactly once when it closes. Task 38 adds `trace_timing` to this file.
+  - `skython.remote.RemoteEventStream` (`consumer = None`; `put(msg)` from the reader: appends to the frame's sub queue, drop-oldest at that sub's `max_queue` (provisional bound `MAX_EVENT_QUEUE` until tracked), counting client drops; `track(sub, max_queue)`: sets the bound and trims to the newest `max_queue` frames, counting the trimmed as drops; `untrack(sub)`: discards the sub's queue and every later frame for it (sub ids are never reused; the set of ended subs keeps the newest `RemoteEventStream._GONE_MAX` = 4096, so it cannot grow without bound over a long session, Review A#12); `next(timeout) -> list[dict]`: blocks for the first frame up to `timeout`, then takes what else is queued, at most `MAX_EVENTS_PER_NEXT`, in arrival order across subs, each frame's `dropped` = the server's `dropped` + the sub's pending client drops (then reset); `[]` once closed; `close()` wakes a waiting `next`). `RemoteTransport.events() -> RemoteEventStream` (made in `__init__`, so a frame that arrives before anyone asked is kept). A connection failure or `close()` closes the stream. A message of any unknown `type` after the handshake is a `ProtocolViolation` that closes the connection.
+  - `skython.bridge`: the `backend` duck type is now `submit(text, consumer) -> int`, `wait_any`, `cancel`, `open_consumer() -> int`, `close_consumer(consumer)`, `next_events(consumer, timeout) -> str`. Each accepted connection opens its consumer before the welcome is sent; if `open_consumer` raises (a module with no event hub: the game build before Task 39), the connection is served with consumer 0 and no pump, its `events.*` requests answer `unsupported`, and `bridge: no event hub (<error>); events are unsupported on this connection` is logged once per process (logger `skython.bridge`, WARNING; Review A#1). A connection with a consumer has four threads (`bridge-read-*`, `bridge-write-*`, `bridge-done-*`, `bridge-pump-*`), and closes its consumer exactly once when it closes. Task 38 adds `trace_timing` to this file.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -153,23 +154,79 @@ def test_a_client_cannot_unsubscribe_another_connections_subscription(bridge, fa
     b.close()
 
 
-def test_1000_subscribe_then_immediate_push_over_the_bridge_lose_no_first_event(bridge, fake):
+def test_subscribe_then_immediate_push_over_the_bridge_loses_no_first_event(bridge, fake):
+    # As in Task 36: request() returns only once the dispatch thread has FETCHED the pushed event, i.e. while Game.on()
+    # still holds the dispatcher's lock; without the lock the event would be dropped as unknown. Review A#4.
     with remote(bridge) as game:
+        stream = game.transport.events()
+        fetched = threading.Event()
+        real_next = stream.next
+
+        def next_(timeout):
+            batch = real_next(timeout)
+            if batch:
+                fetched.set()
+            return batch
+
+        stream.next = next_  # before the dispatch thread exists, so every fetch goes through it
+        warm = game.on_channel("warm-up", lambda e: None)  # starts the dispatch thread
         real_request = game.transport.request
 
         def request(op, args, wait_s):
             resp = real_request(op, args, wait_s)
             if op == g.OP_EVENTS_SUBSCRIBE and resp.get("ok"):  # the hub has it; Game.on() has not registered it yet
+                fetched.clear()
                 push(fake, "channel", chan(args["filter"]["channel"][0], "first"))
+                assert fetched.wait(5), "the dispatch thread never fetched the first event"
             return resp
 
         game.transport.request = request
-        for i in range(1000):
+        for i in range(50):
             seen = []
             sub = game.on_channel(f"race{i}", seen.append)
             wait_until(lambda: seen, what=f"the first event of subscription {i}")
             assert seen[0].seq == 1 and seen[0].sub == sub.sub
             sub.close()
+        warm.close()
+
+
+def test_a_blocked_callback_on_one_connection_does_not_hold_up_another(bridge, fake):
+    # Review Focus 2 remotely (Review A#13): each connection has its own consumer, pump and client queues.
+    release, started = threading.Event(), threading.Event()
+    other_seen = []
+
+    def stuck(e):
+        started.set()
+        release.wait(10)
+
+    with remote(bridge) as first, remote(bridge) as second:
+        first.on_channel("both", stuck)
+        second.on_channel("both", other_seen.append)
+        push(fake, "channel", chan("both", "0"))
+        assert started.wait(5), "the first connection's callback never started"
+        for i in range(1, 51):
+            push(fake, "channel", chan("both", str(i)))
+        wait_until(lambda: len(other_seen) == 51, timeout=5, what="the second connection's events while the first is blocked")
+        assert [e.seq for e in other_seen] == list(range(1, 52))
+        release.set()
+
+
+def test_a_backend_without_an_event_hub_still_serves_requests(start, fake, caplog, monkeypatch):
+    # The game build deploys this bridge (Task 38) before Task 39 fills ModuleHost.events, so open_consumer raises
+    # RuntimeError. Each connection is served with consumer 0 and no pump, events.* answer unsupported, and the
+    # warning is logged once per process. Review A#1.
+    caplog.set_level(logging.WARNING, logger="skython.bridge")
+    monkeypatch.setattr("skython.bridge._no_hub_logged", False)
+    fake.hub = None
+    b = start()
+    with remote(b) as g1, remote(b) as g2:
+        assert g1.call("Fake", "Echo", 1) == 1 and g2.call("Fake", "Echo", 2) == 2
+        with pytest.raises(errors.Unsupported):
+            g1.on_channel("x", lambda e: None)
+        pumps = {f"bridge-pump-{gm.transport._sock.getsockname()[1]}" for gm in (g1, g2)}
+        assert not [t for t in threading.enumerate() if t.name in pumps]
+    assert caplog.text.count("bridge: no event hub (") == 1
+    assert "events are unsupported on this connection" in caplog.text
 
 
 def test_an_event_frame_before_its_subscribe_response_is_delivered():
@@ -188,7 +245,8 @@ def test_an_event_frame_before_its_subscribe_response_is_delivered():
         else:
             reply(ok(req["id"], None))
 
-    with FakeServer(handler) as srv:
+    # A protocol 1.1 welcome: Game.on() refuses a server whose capabilities lack events.subscribe (Task 36).
+    with FakeServer(handler, welcome={"protocol": [1, 1], "capabilities": list(g.OPS)}) as srv:
         with connect_remote(port=srv.port, token=srv.token) as game:
             game.on_channel("warm", lambda e: None)  # starts the dispatch thread
             seen = []
@@ -303,6 +361,9 @@ def test_untrack_discards_a_subscriptions_frames_and_close_wakes_next():
     s.untrack(5)
     s.put(frame(5, 3))  # a late frame of a closed subscription
     assert s.next(0.05) == []
+    for sub in range(1000, 1000 + RemoteEventStream._GONE_MAX + 1000):  # a long session ends many subscriptions
+        s.untrack(sub)
+    assert len(s._gone) == RemoteEventStream._GONE_MAX  # test-only peek: the set of ended subs is capped
     got = []
     t = threading.Thread(target=lambda: got.append(s.next(5.0)))
     t.start()
@@ -390,6 +451,7 @@ class RemoteEventStream:
     arrival order across subscriptions, at most MAX_EVENTS_PER_NEXT."""
 
     consumer = None
+    _GONE_MAX = 4096  # ended subs remembered (their late frames are discarded); older ones are forgotten
 
     def __init__(self):
         self._cond = threading.Condition()
@@ -397,6 +459,7 @@ class RemoteEventStream:
         self._bounds: dict[int, int] = {}  # tracked subs -> max_queue
         self._pending: dict = {}  # sub -> [dropped, suppressed] not yet reported
         self._gone: set[int] = set()  # untracked subs: their later frames are discarded
+        self._gone_order: collections.deque = collections.deque()  # the same subs, oldest first (caps _gone)
         self._arrivals = itertools.count(1)
         self._queued = 0
         self.closed = False
@@ -432,7 +495,11 @@ class RemoteEventStream:
 
     def untrack(self, sub: int) -> None:
         with self._cond:
-            self._gone.add(sub)
+            if sub not in self._gone:
+                self._gone.add(sub)
+                self._gone_order.append(sub)
+                while len(self._gone_order) > self._GONE_MAX:  # a late frame comes within moments, never this late
+                    self._gone.discard(self._gone_order.popleft())
             self._bounds.pop(sub, None)
             self._pending.pop(sub, None)
             self._queued -= len(self._queues.pop(sub, ()))
@@ -512,16 +579,29 @@ each request's timeout_ms: the bridge never times a call out itself.
 After `_IDLE_S = 0.05 ...` add:
 ```python
 _EVENT_POLL_S = 0.25  # how long the pump waits in next_events per round (it releases the GIL meanwhile)
+_no_hub_logged = False  # "no event hub" is logged once per process, not once per connection
+
+
+def _log_no_hub_once(e: Exception) -> None:
+    global _no_hub_logged
+    if not _no_hub_logged:
+        _no_hub_logged = True
+        log.warning("bridge: no event hub (%s); events are unsupported on this connection", e)
 ```
 In `_Conn.__init__`, add `self.consumer = 0  # the _skython event consumer; 0 until the hello is accepted`.
 
 In `_read_loop`, after the `bridge-done` thread start line:
 ```python
-            threading.Thread(target=self._pump_loop, name=f"bridge-pump-{self.peer[1]}", daemon=True).start()
+            if self.consumer:  # no consumer (no event hub): no events to pump, and next_events(0) would spin
+                threading.Thread(target=self._pump_loop, name=f"bridge-pump-{self.peer[1]}", daemon=True).start()
 ```
 In `_handshake`, right after the `if code is not None: ... return False` block (before the client name is read):
 ```python
-        self.consumer = self.server.backend.open_consumer()  # before the welcome: every request has a consumer
+        try:
+            self.consumer = self.server.backend.open_consumer()  # before the welcome: every request has a consumer
+        except Exception as e:  # noqa: BLE001 - no event hub (the game build before Task 39): serve without events
+            _log_no_hub_once(e)
+            self.consumer = 0  # requests still go with consumer 0; events.* answer unsupported (the hub is null)
 ```
 In `_on_request`, replace `ticket = self.server.backend.submit(text)` with:
 ```python
@@ -558,19 +638,42 @@ In `serve()`'s docstring replace `(anything with submit, wait_any and cancel: th
 - [ ] **Step 5: Run the new tests, then the whole suite on both Pythons**
 
 Run: `cd python && uv run --managed-python --python 3.12 pytest -q tests/test_bridge_events.py 2>&1 | tail -1`
-Expected: `13 passed` in about 8 s (the 1000-iteration test about 3 s, the 10^4-push slow-callback test about 2 s).
+Expected: `15 passed` in about 6 s (the 50-iteration race test under 1 s, the 10^4-push slow-callback test about 2 s).
 
 Run: `cd python && uv run --managed-python --python 3.12 pytest -q 2>&1 | tail -1 && uv run --managed-python --python 3.14 pytest -q 2>&1 | tail -1`
-Expected twice: Task 36's total plus 13 passed, with Task 36's skips; `test_bridge.py`, `test_remote.py`, `test_host.py` unchanged and passing (the v1 tests use the fake, which has the consumer API since Task 36a).
+Expected twice: Task 36's total plus 15 passed, with Task 36's skips plus the one new `test_real_module.py` case; `test_bridge.py`, `test_remote.py`, `test_host.py` unchanged and passing (the v1 tests use the fake, which has the consumer API since Task 36a).
 
-Against the real module (its bridge test now also opens a consumer per connection):
+Append to `python/tests/test_real_module.py` (it already imports `bridge`, `connect_remote`, `errors`, `json`, `wait_until`, and defines `TOKEN` and the `real` fixture):
+```python
+def test_bridge_connections_are_isolated_over_the_real_module(real):
+    # Task 37 (Review A#12): two connections over the real C++ hub. One cannot unsubscribe the other's subscription,
+    # and each sees only its own events.
+    srv = bridge.serve(real, port=0, token=TOKEN,
+                       welcome_info={"plugin_version": "0.0.0-fake", "game_version": "0.0.0", "runtime": "fake", "epoch": 0})
+    try:
+        with connect_remote(port=srv.port, token=TOKEN) as a, connect_remote(port=srv.port, token=TOKEN) as b:
+            a_seen, b_seen = [], []
+            sa = a.on_channel("real_a", a_seen.append)
+            b.on_channel("real_b", b_seen.append)
+            with pytest.raises(errors.NotFound):
+                b._request("events.unsubscribe", {"sub": sa.sub})
+            for name in ("real_a", "real_b"):
+                real._fake_push_event("channel", json.dumps({"channel": name, "payload": name, "truncated": False}))
+            wait_until(lambda: a_seen and b_seen, what="each connection's own event")
+            assert [e.data["channel"] for e in a_seen] == ["real_a"]
+            assert [e.data["channel"] for e in b_seen] == ["real_b"]
+    finally:
+        srv.close()
+```
+
+Against the real module (its bridge tests now also open a consumer per connection):
 Run: `cd python && SKYTHON_REAL_MODULE_DIR="$(cd ../pyglue/build && pwd)" uv run --managed-python --python 3.14 pytest -q tests/test_real_module.py tests/test_events.py 2>&1 | tail -1`
 Expected: all passed, no skips.
 
 - [ ] **Step 6: Races, repeatedly and on one CPU**
 
 Run: `cd python && for i in 1 2 3 4 5; do uv run --managed-python --python 3.14 pytest -q tests/test_bridge_events.py tests/test_bridge.py 2>&1 | tail -1; done; taskset -c 0 uv run --managed-python --python 3.12 pytest -q tests/test_bridge_events.py tests/test_bridge.py 2>&1 | tail -1`
-Expected: the same `N passed` six times (Task 23's bridge tests plus these 13). Every wait has a deadline; no test sleeps for luck (the 50 ms in the overtaking test only orders two server writes).
+Expected: the same `N passed` six times (Task 23's bridge tests plus these 15). Every wait has a deadline; no test sleeps for luck (the 50 ms in the overtaking test only orders two server writes).
 
 Run: `python3 tools/gen_protocol.py --check`
 Expected: the generated files are up to date (`bridge.py` and `remote.py` spell out no limit or code; they come from `_protocol_generated`).
@@ -578,6 +681,6 @@ Expected: the generated files are up to date (`bridge.py` and `remote.py` spell 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add python/src/skython/bridge.py python/src/skython/remote.py python/tests/test_bridge_events.py
+git add python/src/skython/bridge.py python/src/skython/remote.py python/tests/test_bridge_events.py python/tests/test_real_module.py
 git commit -m "feat(python): bridge event pump with a consumer per connection, remote event delivery"
 ```

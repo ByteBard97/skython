@@ -409,16 +409,20 @@ std::atomic_bool g_badChannelLogged{false};
 void Send(RE::StaticFunctionTag*, RE::BSFixedString channel, RE::BSFixedString payload)
 {
     try {
-        if (!spy::events::Hub().Wants("channel")) return;  // nobody subscribed: no copy, no JSON
         const char* c = channel.c_str();
-        const char* p = payload.c_str();
-        auto data = spy::make_channel_event(c ? std::string_view(c) : ""sv, p ? std::string_view(p) : ""sv);
-        if (!data) {
+        const std::string_view ch = c ? std::string_view(c) : ""sv;
+        // A bad channel is a script bug: warn once whether or not anyone is subscribed, so it is seen during
+        // development even before a subscriber exists. The check is a length test: no copy, no JSON.
+        if (ch.empty() || ch.size() > spy::kMaxChannelBytes) {
             if (!g_badChannelLogged.exchange(true))
                 spy::log::Warn("native: Skython.Send dropped a call whose channel is empty or longer than " +
                           std::to_string(spy::kMaxChannelBytes) + " bytes (logged once)");
             return;
         }
+        if (!spy::events::Hub().Wants("channel")) return;  // nobody subscribed: no copy, no JSON
+        const char* p = payload.c_str();
+        auto data = spy::make_channel_event(ch, p ? std::string_view(p) : ""sv);
+        if (!data) return;  // unreachable after the check above (make_channel_event applies the same rule)
         spy::events::Push("channel", std::move(*data));
     } catch (...) {
         // nothing may escape into the VM (Global Constraints); Push itself never throws
@@ -581,7 +585,7 @@ Expected: `5 skipped`; the commit lists `plugin/papyrus/compiled/Skython.pex`.
 
 - [ ] **Step 10: Gate 0 check**
 
-Task 45's RESULTS entry must record owner decision 7 as accepted (README **Owner decisions** table: a STOP gate, never assumed). If not: report "Task 46 offline part committed; the live step waits for Gate 0" and STOP.
+Task 45's RESULTS entry must record owner decision 7 as accepted (README **Owner decisions** table: a STOP gate, never assumed). If not: report "Task 46 offline part committed; the live step waits for Gate 0" and STOP. Task 45 Step 10 also wrote `out/gate0-accepted` (`test -s out/gate0-accepted && cat out/gate0-accepted`); without it `box_deploy.sh --test-pex` refuses (`Gate 0 is not recorded`): STOP, never write the file here.
 
 - [ ] **Step 11: Live run on `s4test` (no ESP needed)**
 

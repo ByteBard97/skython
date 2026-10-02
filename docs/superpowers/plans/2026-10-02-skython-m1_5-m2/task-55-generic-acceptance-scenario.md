@@ -1,6 +1,6 @@
 # Task 55: Generic acceptance scenario, bridge and in-process
 
-The v1 acceptance test, generic (owner decision 8): one `call_method` of the test quest's `SetupScenario(npc, item, place, label)` starts the quest, fills its aliases, sets and displays its objective; a persistent item is placed; killing the ESP's NPC (the target, in alias 0) raises `death` with the player as `killer`, the ESP's death rule (`SkythonTestAlias.OnDeath`) sets stage 100 and its fragment's `Skython.Send("skython_test", "stage_100")` arrives as `channel`; the test reads back the stage, the objective state and the alias fills, then completes the objective and stage 200. The same scenario code runs once through the bridge and once in-process as a player script.
+The v1 acceptance test, generic (owner decision 8): one `call_method` of the test quest's `SetupScenario(npc, item, place, label)` starts the quest, fills three aliases and displays its objective (the objective's text, with its three alias tags, is the ESP's objective record: probe 1, Task 52; the scenario does not call `SetObjectiveText`, which probe 2 checks separately); a persistent item is placed; killing the ESP's NPC (the target, in alias 0) raises `death` with the player as `killer`, the ESP's death rule (`SkythonTestAlias.OnDeath`) sets stage 100 and its fragment's `Skython.Send("skython_test", "stage_100")` arrives as `channel`; the test reads back the stage, the objective state and the alias fills, then completes the objective and stage 200. The same scenario code runs once through the bridge and once in-process as a player script.
 
 > Part of the [Skython M1.5/M2 plan](README.md). Read the index's **Global Constraints**, **Owner decisions** (decision 8 is a STOP gate: never assumed), **Contracts** (Python `skython.events`, the **Test ESP** section, Live tests `_testesp`) and **Gates** first. Steps use checkbox (`- [ ]`) syntax.
 
@@ -13,7 +13,7 @@ The v1 acceptance test, generic (owner decision 8): one `call_method` of the tes
 ## If owner decision 8 is not accepted as proposed
 
 - **Accepted as proposed** (generic scenario, `SetupScenario`, channel `skython_test`): this file as written.
-- **Accepted with other names:** Task 48 already used the owner's names in the `.psc` sources and fragments (its own gate). Here only the two constants change, in `livetest/scripts/_testesp.py` (Task 50): `SCENARIO_FUNCTION` and `CHANNEL`. Every check below reads those constants; nothing else changes. Task 57 then writes the owner's names into the spec.
+- **Accepted with other names:** Task 48 already used the owner's names in the `.psc` sources and fragments (its own gate) and recorded them in its RESULTS entry, and Task 50 already set `SCENARIO_FUNCTION` and `CHANNEL` in `livetest/scripts/_testesp.py` from that entry. Nothing changes here: Step 0 only checks that `_testesp` matches `SkythonTestQuest.psc` and the fragment script (a mismatch is a STOP, never an edit made here). Every check below reads those constants. Task 57 then writes the owner's names into the spec.
 - **Framing rejected** (the owner wants a consumer-specific acceptance test, or a different scenario): STOP before Step 1. This task is re-planned with the owner; nothing below is built, and Task 57 leaves spec sections 8 and 9 and open question 5 as they are.
 
 **Files:**
@@ -28,7 +28,7 @@ The v1 acceptance test, generic (owner decision 8): one `call_method` of the tes
   - Task 50: `_testesp` constants and helpers `quest(game)`, `npc(game)`, `location(game)`, `discover(game)` (cross-check only: it asserts the fixed values), `stage_payload`, `PLAYER`, `IRON_SWORD`, `QUEST_SCRIPT`, `SCENARIO_FUNCTION`, `CHANNEL`, `TARGET_ALIAS`, `ITEM_ALIAS`, `PLACE_ALIAS`, `OBJECTIVE`; v1 `Game.alias(quest, alias_id)`, `get_property`.
   - Task 36: `Game.on_death`, `on_channel`, `on_quest_stage` → `Subscription.close()`; `Event.data` with `Form` values. Task 39: a `death` event's `killer` is filled from `TESDeathEvent::actorKiller`, so `Actor.Kill(player)` gives `killer` = the player, form id `0x14` (`death_event` asserts it; a `null` killer is a Task 39 defect, never loosened here). Task 41: `support.load_save(game, name)`; Task 49: `fresh_save` (loads `skythonbase`).
   - v1: `smoke.py_dir`, `support.box_pull`, `support.fresh`, `support.BOX`, `support.python_log_text`.
-- Produces: `scenario.run_scenario(game, label: str = "acceptance") -> dict` (`{"status": "pass"|"fail", "checks": [{"name", "ok", "error"?}], "values": {...}}`, never raises), `scenario.STEPS` (the check names in order); `livetest_scenario.TRIGGER = "skython_scenario_run"`, `livetest_scenario.FILE = "livetest_scenario.json"` (`{"status": "listening"|"running"|"done", "run_id", "result"}`); Task 56 and Task 57 run `test_acceptance_scenario.py`.
+- Produces: `scenario.run_scenario(game, label: str = "acceptance") -> dict` (`{"status": "pass"|"fail", "checks": [{"name", "ok", "error"?}], "values": {...}}`, never raises), `scenario.STEPS` (the check names in order); `livetest_scenario.TRIGGER = "skython_scenario_run"`, `livetest_scenario.FILE = "livetest_scenario.json"` (`{"status": "listening"|"running"|"done", "run_id", "result"}`); Task 57 runs `test_acceptance_scenario.py` (Task 56 does not depend on this task).
 
 - [ ] **Step 0: Read owner decision 8**
 
@@ -36,9 +36,19 @@ The v1 acceptance test, generic (owner decision 8): one `call_method` of the tes
 cd /home/geoff/projects/games/skyrim/skyrim-python
 sed -n '/^\*\*8\. Acceptance test framing/,/^## /p' OWNER-DECISIONS-2026-10-02.md
 grep -n -i "decision 8\|^8\b\|8 accept\|8 reject" OWNER-DECISIONS-2026-10-02.md spikes/RESULTS.md .superpowers/sdd/README/progress.md 2>/dev/null
-grep -n "SetupScenario\|skython_test" testesp/papyrus/SkythonTestQuest.psc testesp/papyrus/QF_SkythonTestQuest_01000800.psc
+uv run --project python python - <<'PY'
+import pathlib, re, sys
+sys.path.insert(0, "livetest/scripts")
+import _testesp as t
+psc = pathlib.Path("testesp/papyrus/SkythonTestQuest.psc").read_text()
+frag = pathlib.Path("testesp/papyrus/QF_SkythonTestQuest_01000800.psc").read_text()
+fn_ok = re.search(rf"(?im)^\s*Function\s+{re.escape(t.SCENARIO_FUNCTION)}\s*\(", psc) is not None
+ch_ok = f'"{t.CHANNEL}"' in frag
+print("SCENARIO_FUNCTION", t.SCENARIO_FUNCTION, "in psc:", fn_ok, "| CHANNEL", t.CHANNEL, "in fragments:", ch_ok)
+print("TESTESP MATCHES PSC" if fn_ok and ch_ok else "MISMATCH: STOP")
+PY
 ```
-Expected: a recorded answer (no answer → STOP; the recommendation in the decisions file is not an answer). Apply the section above: as proposed, other names (edit the two constants, then go on), or STOP. Also read `SetupScenario`'s body and `SkythonTestAlias.OnDeath` and check they match the index Contracts (else STOP).
+Expected: a recorded answer (no answer → STOP; the recommendation in the decisions file is not an answer), whose names equal the ones in Task 48's RESULTS entry; then `TESTESP MATCHES PSC` (a `MISMATCH` is a STOP: `_testesp`, the `.psc` and the fragments must all carry the owner's names, set by Tasks 48 and 50, never edited here). Apply the section above: as proposed or other names (go on), or framing rejected (STOP). Also read the scenario function's body and `SkythonTestAlias.OnDeath` and check they match the index Contracts (else STOP).
 
 - [ ] **Step 1: The scenario**
 
@@ -52,7 +62,7 @@ import time
 
 import _testesp as t
 
-STEPS = ("discover", "place_item", "subscribe", "setup_scenario", "channel_stage_10", "state_after_setup",
+STEPS = ("discover", "place_item", "record_values", "subscribe", "setup_scenario", "channel_stage_10", "state_after_setup",
          "kill_target", "death_event", "death_rule_stage_100", "channel_stage_100", "quest_stage_event_100",
          "state_after_death", "complete", "channel_stage_200", "objective_completed")
 
@@ -105,14 +115,21 @@ def run_scenario(game, label: str = "acceptance") -> dict:
 
     try:
         def discover():
-            t.discover(game)  # cross-check only: raises if the game's aliases, NPC or objective differ from _testesp
+            t.ensure_running(game, t.quest(game))  # alias scripts may bind only once the quest runs (SetupScenario
+            t.discover(game)  # finds it running and skips Start); cross-check only: raises if the game differs
             return t.quest(game), t.npc(game), t.location(game)
         quest, npc, place = step("discover", discover)
         item = step("place_item", lambda: game.call_method(t.PLAYER, "ObjectReference", "PlaceAtMe",
                                                            game.form(t.IRON_SWORD), 1, True, False))
-        values.update(npc=npc.form_key, item=item.form_id, place=place.form_key, objective=t.OBJECTIVE)
-        step("subscribe", lambda: subs.extend([game.on_death(npc, deaths), game.on_channel(t.CHANNEL, channel),
-                                               game.on_quest_stage(quest, stages)]))
+        step("record_values", lambda: values.update(npc=npc.form_key, item=item.form_id, place=place.form_key,
+                                                    objective=t.OBJECTIVE))
+
+        def subscribe():
+            # One at a time, so a failure on the second or third still leaves the earlier ones in subs (closed below).
+            subs.append(game.on_death(npc, deaths))
+            subs.append(game.on_channel(t.CHANNEL, channel))
+            subs.append(game.on_quest_stage(quest, stages))
+        step("subscribe", subscribe)
         step("setup_scenario", lambda: game.call_method(quest, t.QUEST_SCRIPT, t.SCENARIO_FUNCTION,
                                                         npc, item, place, label, timeout=30))
         step("channel_stage_10", lambda: channel.wait(lambda evs: _payload(evs, t.stage_payload(10)), 20,
@@ -124,7 +141,7 @@ def run_scenario(game, label: str = "acceptance") -> dict:
             _check(ref_fill(quest, t.TARGET_ALIAS) == npc.form_id, "alias 0 does not hold the target")
             _check(ref_fill(quest, t.ITEM_ALIAS) == item.form_id, "alias 1 does not hold the item")
             _check(ref_fill(quest, t.EXTRA_ALIAS) is None, "SetupScenario filled alias 2")
-            loc = game.call_method(game.alias(quest, t.PLACE_ALIAS), "LocationAlias", "GetLocation")
+            loc = game.call_method(game.alias(quest, t.PLACE_ALIAS, "LocationAlias"), "LocationAlias", "GetLocation")
             _check(loc is not None and loc.form_id == place.form_id, f"location alias 3 holds {loc!r}")
             _check(game.call_method(quest, "Quest", "IsObjectiveDisplayed", t.OBJECTIVE) is True,
                    "objective 10 is not displayed")
@@ -167,13 +184,18 @@ def run_scenario(game, label: str = "acceptance") -> dict:
         step("objective_completed", lambda: _check(
             game.call_method(quest, "Quest", "IsObjectiveCompleted", t.OBJECTIVE) is True,
             "the objective is not completed"))
-    except Exception:  # the failing step is already in checks
-        pass
+    except Exception as e:  # a failing step is already in checks; anything else is recorded as "unexpected"
+        if not checks or checks[-1]["ok"]:
+            checks.append({"name": "unexpected", "ok": False, "error": f"{type(e).__name__}: {e}"})
     finally:
         for s in subs:
-            s.close()
+            try:
+                s.close()
+            except Exception as e:  # run_scenario never raises
+                checks.append({"name": "unexpected", "ok": False, "error": f"close: {type(e).__name__}: {e}"})
     ok = [c["name"] for c in checks if c["ok"]]
-    return {"status": "pass" if tuple(ok) == STEPS else "fail", "checks": checks, "values": values}
+    passed = tuple(ok) == STEPS and all(c["ok"] for c in checks)
+    return {"status": "pass" if passed else "fail", "checks": checks, "values": values}
 ```
 
 Create `livetest/scripts/livetest_scenario/__init__.py`:
@@ -232,7 +254,7 @@ Check both import on Linux:
 cd /home/geoff/projects/games/skyrim/skyrim-python
 uv run --project python python -c "import sys; sys.path.insert(0, 'livetest/scripts'); import livetest_scenario as s; from livetest_scenario.scenario import STEPS; print(s.TRIGGER, len(STEPS))"
 ```
-Expected: `skython_scenario_run 15`.
+Expected: `skython_scenario_run 16`.
 
 - [ ] **Step 2: The live test**
 
@@ -304,6 +326,7 @@ tools/box/box_deploy.sh --scripts livetest/scripts          # adds livetest_scen
 tools/box/box_plugins.sh add
 tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log 'python host: running' 600
+tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600   # fresh_save's game.load is refused while "starting"
 tools/box/box_session.sh up && source out/box-live.env && source livetest/s4test.env
 export SKYTHON_LIVE=1 SKYTHON_BOX=1
 uv run --project python pytest livetest/test_acceptance_scenario.py -q -rs -s
@@ -311,15 +334,16 @@ tools/box/box_files.sh pull skse64.log Skython/python.log
 grep -E "loaded correctly|no version data|disabled" out/box-skse/skse64.log
 grep -E "livetest_scenario" out/box-skse/Skython/python.log | tail -5
 tools/box/box_stop.sh
+tools/box/box_session.sh down
 tools/box/box_plugins.sh show
 ```
-Expected: `2 passed`; each run prints 15 checks, all `"ok": true`, and `values` with the NPC's form key (`SkythonTest.esp|0x000804`), the item id, the place key (`SkythonTest.esp|0x000801`), the objective (10) and `death_epoch`; `python.log` shows `livetest_scenario: ok` at load and no traceback; `show` prints the backup. No save was written.
+Expected: `2 passed`; each run prints 16 checks, all `"ok": true`, and `values` with the NPC's form key (`SkythonTest.esp|0x000804`), the item id, the place key (`SkythonTest.esp|0x000801`), the objective (10) and `death_epoch`; `python.log` shows `livetest_scenario: ok` at load and no traceback; `show` prints the backup. No save was written.
 
 - [ ] **Step 4: Record in RESULTS and commit**
 
 Append to "Plugin findings" in `spikes/RESULTS.md` (filled, no bracket left):
 ```markdown
-- **Task 55, generic acceptance scenario (box, Windows-native, <date and time>, Skyrim 1.6.1170.0, skythonbase twice, never saved; 1 launch, SKSE plugins: <list>; owner decision 8: <answer>):** `test_acceptance_scenario.py` 2 passed: through the bridge and in-process (player script triggered by a mod event), all 15 checks each. One `call_method` of `SkythonTestQuest.<SCENARIO_FUNCTION>` started the quest (stage 10, `stage_10` delivered), filled aliases 0 (target), 1 (item) and 3 (location) and displayed objective 10; killing the target gave `death` (killer the player, epoch <e>); the ESP's death rule set stage 100; `<CHANNEL>` delivered `stage_100` and `stage_200`; stage, objective state (displayed, then completed) and alias fills read back.
+- **Task 55, generic acceptance scenario (box, Windows-native, <date and time>, Skyrim 1.6.1170.0, skythonbase twice, never saved; 1 launch, SKSE plugins: <list>; owner decision 8: <answer>):** `test_acceptance_scenario.py` 2 passed: through the bridge and in-process (player script triggered by a mod event), all 16 checks each. One `call_method` of `SkythonTestQuest.<SCENARIO_FUNCTION>` started the quest (stage 10, `stage_10` delivered), filled aliases 0 (target), 1 (item) and 3 (location) and displayed objective 10 (text from the ESP's objective record; no `SetObjectiveText`); killing the target gave `death` (killer the player, epoch <e>); the ESP's death rule set stage 100; `<CHANNEL>` delivered `stage_100` and `stage_200`; stage, objective state (displayed, then completed) and alias fills read back.
 ```
 ```bash
 grep -n "Task 55, generic acceptance scenario" spikes/RESULTS.md && ! grep -n "Task 55, generic acceptance scenario.*<" spikes/RESULTS.md && echo "entry filled"

@@ -10,21 +10,23 @@
 
 **Files:**
 - Replace: `plugin/src/EventSinksWorld.cpp` (Task 39 left a stub)
-- Modify: `plugin/src/Lifecycle.cpp` (`game_loaded`, `game_saved`, `new_game`)
+- Modify: `plugin/src/Lifecycle.cpp` (`game_loaded`, `game_saved`, `new_game`; Task 39's `SaveLoadInProgress` flag is cleared right before the `game_loaded` push)
 - Modify: `livetest/support.py` (append `PLAYER`, `spawn`, `cleanup`, `neutral_fight`, `box_menu`, `translate_player`)
 - Modify: `livetest/scripts/livetest_smoke/__init__.py` (`hold_sub` / `release_sub` commands)
 - Create: `livetest/test_m2_events_batch2.py`
 - Modify: `docs/superpowers/plans/2026-10-02-skython-m1_5-m2/API-VERIFICATION.md`, `spikes/RESULTS.md` (append)
 
 **Interfaces:**
-- Consumes: Task 39 `spy::events::Hub()`, `Push`, `FormRefJson`, `NoteSinkError`, `NoteFirstEvent`, `RegisterWorldSinks` (declared in `Events.h`), `pv::FloatToJson`, `livetest/support.py` `subscribe`, `read_event`, `read_events`, the smoke script's command loop; Task 34 hub rules (the table's `filter_required_any_of` makes `hit` and `container_changed` without a filter `bad_request`; `deliver_while_loading`); Task 36 `Game.on`, `Event`; v1 `life` state (`Lifecycle.cpp`: `State()`, `NoteInteractive`), `ops::Meter()` via `game.state` `diagnostics.max_task_drain_ms`; Task 39's `game.state` diagnostics keys `events_dropped_total` and `events_suppressed_total` (Task 39 owns them; this task only reads them), the smoke `bench` command (Task 31), `_skython.open_consumer/call(text, timeout, consumer)/next_events/close_consumer` (Task 35).
-- Produces: `spy::events::RegisterWorldSinks()`; events `hit`, `equip`, `unequip`, `container_changed`, `cell_attach`, `cell_detach`, `activate`, `player_location`, `menu_open`, `menu_close`, `game_loaded`, `game_saved`, `new_game`; log lines `events: sinks registered (batch 2)` and `events: game_loaded epoch <n>` (Tasks 41, 42, 53 wait on it); `lifecycle: kSaveGame data '<name>' (<n> bytes)` (once per launch; Task 41 reads it); `livetest/support.py` `PLAYER`, `spawn(game, base_key, dx=600.0) -> Form`, `cleanup(game, *refs)`, `neutral_fight(game, a, b)`, `box_menu(action, name)`, `translate_player(game, dx, dy, dz, speed=3000.0, settle=6.0)`; smoke commands `hold_sub` and `release_sub`.
+- Consumes: Task 39 `spy::events::Hub()`, `Push`, `FormRefJson`, `NoteSinkError`, `NoteFirstEvent`, `RegisterWorldSinks` (declared in `Events.h`), `pv::FloatToJson`, `livetest/support.py` `subscribe`, `read_event`, `read_events`, the smoke script's command loop; Task 34 hub rules (the table's `filter_required_any_of` makes `hit` and `container_changed` without a filter `bad_request`; `deliver_while_loading`); Task 36 `Game.on`, `Event`; v1 `life` state (`Lifecycle.cpp`: `State()`, `NoteInteractive`), Task 39's `g_saveLoadInProgress` flag behind `life::SaveLoadInProgress()` (the hub's loading source, R60), `ops::Meter()` via `game.state` `diagnostics.max_task_drain_ms`; Task 39's `game.state` diagnostics keys `events_dropped_total` and `events_suppressed_total` (Task 39 owns them; this task only reads them), the smoke `bench` command (Task 31), `_skython.open_consumer/call(text, timeout, consumer)/next_events/close_consumer` (Task 35).
+- Produces: `spy::events::RegisterWorldSinks()`; `life::SaveLoadInProgress()` now false from the moment `game_loaded` is pushed (Task 39 cleared it at the interactive signal; same moment, now tied to the push); events `hit`, `equip`, `unequip`, `container_changed`, `cell_attach`, `cell_detach`, `activate`, `player_location`, `menu_open`, `menu_close`, `game_loaded`, `game_saved`, `new_game`; log lines `events: sinks registered (batch 2)` and `events: game_loaded epoch <n>` (Tasks 41, 42, 53 wait on it); `lifecycle: kSaveGame data '<name>' (<n> bytes)` (once per launch; Task 41 reads it); `livetest/support.py` `PLAYER`, `spawn(game, base_key, dx=600.0) -> Form`, `cleanup(game, *refs)`, `neutral_fight(game, a, b)`, `box_menu(action, name)`, `translate_player(game, dx, dy, dz, speed=3000.0, settle=6.0)`; smoke commands `hold_sub` and `release_sub`.
 
 Rules this task implements:
 - Sinks as in Task 39: `Wants` first, ids and values only, `Push`, never the VM, never block, catch everything. Form ids in the engine events (`FormID` fields) are turned into references with `RE::TESForm::LookupByID` (read-locked form map, any thread); a 0 id gives `null`.
 - `player_location` is raised only when the event's actor is the player (`RE::PlayerCharacter::GetSingleton()`, compared by pointer).
-- **`game_loaded` fires at the interactive transition, not at `kPostLoadGame`.** Spike S6: `kPostLoadGame` arrived before `Loading Menu closed` in every load seen. So `kPostLoadGame` (success) and `kNewGame` set a pending flag; `kPreLoadGame` and a failed `kPostLoadGame` clear it; `NoteInteractive()` consumes it when `interactive` flips to true and pushes `game_loaded {new_game}` (the hub stamps the new epoch). `game_saved {name}` is pushed on `kSaveGame`, `new_game {}` on `kNewGame`. All three are `deliver_while_loading: true`, so never suppressed.
+- **`game_loaded` fires at the interactive transition, not at `kPostLoadGame`.** Spike S6: `kPostLoadGame` arrived before `Loading Menu closed` in every load seen. So `kPostLoadGame` (success) and `kNewGame` set a pending flag; `kPreLoadGame` and a failed `kPostLoadGame` clear it; `NoteInteractive()` consumes it when `interactive` flips to true, clears Task 39's `g_saveLoadInProgress` **immediately before** pushing `game_loaded {new_game}` (the hub stamps the new epoch), so the first event after `game_loaded` is never suppressed. A failed `kPostLoadGame` clears `g_saveLoadInProgress` too (as in Task 39), so a failed load cannot leave the hub suppressing for the rest of the session. `game_saved {name}` is pushed on `kSaveGame`, `new_game {}` on `kNewGame`. All three are `deliver_while_loading: true`, so never suppressed.
 - `cell_attach` can repeat for the same reference (documented quirk, events table); tests never assert a single attach per reference.
+- **Loading screens do not suppress (ruling R60).** The hub suppresses `deliver_while_loading: false` events only while `life::SaveLoadInProgress()` is true (Task 39: `kPreLoadGame`/`kNewGame` until the `game_loaded` push). A door, fast travel or `coc` shows a Loading Menu but raises no `kPreLoadGame`: `player_location` and `cell_attach`/`cell_detach` across it are delivered. `test_coc_delivers_player_location_and_cell_events` pins that live (a delivered `player_location` whose `new_location` equals `Actor.GetCurrentLocation()` after the move, cell events not suppressed, `events_suppressed_total` unchanged).
+- **`Lifecycle.cpp` never calls `events::Push` while holding a lock of its own** (it has none today; keep it so). `Push` takes the hub's mutex; a lifecycle lock held around it would order lifecycle → hub, and a sink running on another thread could order them the other way. An event read just before a load can be queued after `game_loaded` with the old epoch: consumers compare `epoch`, not arrival order against `game_loaded` (PROTOCOL.md "Loading", Task 33).
 
 - [ ] **Step 1: Verify the engine names**
 
@@ -211,27 +213,32 @@ void NoteInteractive()
     log::Info(std::string("lifecycle: interactive = ") + (now ? "true" : "false") + ", epoch " + std::to_string(State().epoch()));
     if (!now) return;
     const int pending = g_pendingLoaded.exchange(0);
+    g_saveLoadInProgress.store(false);  // R60: the save load / new game ends here, right before game_loaded is pushed
     if (pending == 0) return;
+    // No lifecycle lock is held here (Lifecycle.cpp has none): Push takes only the hub's mutex.
     events::Push("game_loaded", json{ { "new_game", pending == 2 } });  // the hub stamps the new epoch
     log::Info("events: game_loaded epoch " + std::to_string(State().epoch()));
 }
 ```
-In `OnMessage`, change these cases (the flag is set **before** the state call, so a `kPostLoadGame` that arrives after the Loading Menu closed still fires at the `NoteInteractive()` at the end of `OnMessage`):
+In `OnMessage`, change these cases (they keep Task 39's `g_saveLoadInProgress` stores; the pending flag is set **before** the state call, so a `kPostLoadGame` that arrives after the Loading Menu closed still fires at the `NoteInteractive()` at the end of `OnMessage`):
 ```cpp
     case SKSE::MessagingInterface::kPreLoadGame:
         g_pendingLoaded.store(0);
+        g_saveLoadInProgress.store(true);  // Task 39 (R60)
         State().on_pre_load_game();
         log::Info("lifecycle: loading a save");
         break;
     case SKSE::MessagingInterface::kPostLoadGame: {
         const bool ok = reinterpret_cast<std::uintptr_t>(m->data) != 0;  // a packed bool, not a pointer
         g_pendingLoaded.store(ok ? 1 : 0);
+        if (!ok) g_saveLoadInProgress.store(false);  // Task 39 (R60): a failed load raises no game_loaded
         State().on_post_load_game(ok);
         log::Info(std::string("lifecycle: save load ") + (ok ? "succeeded" : "FAILED") + ", epoch " + std::to_string(State().epoch()));
         break;
     }
     case SKSE::MessagingInterface::kNewGame:
         g_pendingLoaded.store(2);
+        g_saveLoadInProgress.store(true);  // Task 39 (R60)
         State().on_new_game();
         events::Push("new_game", json::object());
         log::Info("lifecycle: new game, epoch " + std::to_string(State().epoch()));
@@ -247,7 +254,7 @@ In `OnMessage`, change these cases (the flag is set **before** the state call, s
         break;
     }
 ```
-Keep the existing `kDataLoaded` case and `default: return;`. The `kSaveGame` case falls through to `NoteInteractive()` like the others (harmless: nothing changes).
+Keep the existing `kDataLoaded` case, `default: return;` and Task 39's `SaveLoadInProgress()` accessor. The `kSaveGame` case falls through to `NoteInteractive()` like the others (harmless: nothing changes).
 
 - [ ] **Step 4: Live-test helpers (support.py) and two smoke commands**
 
@@ -391,6 +398,9 @@ def test_filters_required_for_hit_and_container_changed(session):
 
 def test_equip_and_unequip(game):
     sword = game.form(IRON_SWORD)
+    if game.call_method(PLAYER, "Actor", "IsEquipped", sword):
+        pytest.fail("STOP: the player already has an Iron Sword equipped on s4test; ask the owner (pick no other item yourself)")
+    print(f"equip: iron swords carried before the test = {game.call_method(PLAYER, 'ObjectReference', 'GetItemCount', sword)}")
     q, sub_e = collect(game, "equip", {"actor": [PLAYER], "item": [sword]})
     sub_u = game.on("unequip", {"actor": [PLAYER], "item": [sword]}, q.put)
     game.call_method(PLAYER, "ObjectReference", "AddItem", sword, 1, True)
@@ -476,7 +486,8 @@ def test_cell_attach_and_detach_without_a_loading_screen(game):
 
 def test_hit_between_two_spawned_actors(game):
     a, b = spawn(game, WOLF, 1200.0), spawn(game, WOLF, 1400.0)
-    q, sub = collect(game, "hit", {"target": [a]})
+    # target AND aggressor (filters AND across fields): a hit on `a` by a guard or another creature never matches.
+    q, sub = collect(game, "hit", {"target": [a], "aggressor": [b]})
     try:
         neutral_fight(game, a, b)
         got = take(q, 1, 20.0)
@@ -495,16 +506,27 @@ def test_hit_between_two_spawned_actors(game):
 def test_hit_flood_never_stalls_the_game(game, session):
     """Review Focus 1: a drained subscription (max_queue 16) and an undrained in-process one (max_queue 4) during
     30 s of combat; the held queue stays bounded and call latency (one frame per call) does not move. The held one
-    uses max_queue 4 rather than 16 so that two wolves (about one hit a second) certainly overflow it."""
+    uses max_queue 4 rather than 16 so that two wolves (about one hit a second) certainly overflow it.
+    The baseline (bench p50, drain meter) is taken while the wolves already fight and nothing is subscribed, so their
+    AI cost is in both numbers and only the subscriptions differ. max_task_drain_ms is the launch maximum (it already
+    holds the class-table build at the main menu), so the check is that it does not rise above max(baseline, 5 ms).
+    Sinks run outside SKSE tasks, so the drain meter never sees their cost; it would show in the bench latency."""
     a, b = spawn(game, WOLF, 1200.0), spawn(game, WOLF, 1400.0)
     s = raw_connect(session)
     frames: list = []
     stop = threading.Event()
+    flt = {"target": [to_wire(a)], "aggressor": [to_wire(b)]}  # AND: hits from guards or others never match
     try:
-        subscribe(s, "hit", {"target": [to_wire(a)]}, req_id=1, max_queue=16)
-        held = command("hold_sub", event="hit", filter={"target": [to_wire(a)]}, max_queue=4)
-        before = command("bench", calls=100)["p50_ms"]
+        neutral_fight(game, a, b)
+        time.sleep(5.0)
+        if not game.call_method(a, "Actor", "IsInCombat"):  # same fallback as the single-hit test
+            neutral_fight(game, a, b, aggression=3.0)
+            print("flood: needed aggression 3 for the baseline")
+            time.sleep(5.0)
+        before = command("bench", calls=100)["p50_ms"]          # wolves fighting, nothing subscribed
         drain_before = diagnostics(game)["max_task_drain_ms"]
+        subscribe(s, "hit", flt, req_id=1, max_queue=16)
+        held = command("hold_sub", event="hit", filter=flt, max_queue=4)
 
         def reader():
             while not stop.is_set():
@@ -512,9 +534,8 @@ def test_hit_flood_never_stalls_the_game(game, session):
                     frames.append(f)
         t = threading.Thread(target=reader, daemon=True)
         t.start()
-        neutral_fight(game, a, b)
         time.sleep(10.0)
-        if not frames:  # same fallback as the single-hit test
+        if not frames:  # they dropped out of the fight: once more, frenzied
             neutral_fight(game, a, b, aggression=3.0)
             print("flood: needed aggression 3")
         during = [command("bench", calls=100)["p50_ms"] for _ in range(5)]  # about 25 s of calls while they fight
@@ -531,7 +552,8 @@ def test_hit_flood_never_stalls_the_game(game, session):
             # Both subscriptions see the same hits; the held one also counts hits after the reader stopped.
             assert released["seqs"][-1] >= drained_total and released["first_dropped"] == released["seqs"][0] - 1
         assert max(during) <= before * 1.15 + 5.0, (before, during)
-        assert diag["max_task_drain_ms"] < 5.0  # Task 31 baseline: 2.25 ms at a 1024-request burst
+        # Task 31 baseline: 2.25 ms at a 1024-request burst; the launch maximum may already be higher (class table).
+        assert diag["max_task_drain_ms"] <= max(drain_before, 5.0), (drain_before, diag["max_task_drain_ms"])
     finally:
         stop.set()
         s.close()
@@ -539,10 +561,15 @@ def test_hit_flood_never_stalls_the_game(game, session):
         game.call_method(PLAYER, "Actor", "SetGhost", False)
 
 
-def test_player_location_after_coc(game):
-    """Runs last: it moves the player indoors. Events raised during the load are suppressed by design (Contracts:
-    loading rule), so the test accepts a delivered event or a rise of events_suppressed_total."""
-    q, sub = collect(game, "player_location", None)
+def test_coc_delivers_player_location_and_cell_events(game):
+    """Runs last: it moves the player indoors. A coc shows a Loading Menu but is not a save load, so nothing is
+    suppressed (ruling R60: the hub suppresses only from kPreLoadGame/kNewGame to the game_loaded push).
+    player_location must arrive with the location Actor.GetCurrentLocation reports after the move, and cell_attach /
+    cell_detach must arrive too, none of them with suppressed set."""
+    before = game.call_method(PLAYER, "Actor", "GetCurrentLocation")  # a Location Form, or None in the wilderness
+    loc_q, sub = collect(game, "player_location", None)
+    attach, sub_a = collect(game, "cell_attach", None, max_queue=4096)
+    detach, sub_d = collect(game, "cell_detach", None, max_queue=4096)
     loaded: queue.Queue = queue.Queue()
     sub_l = game.on("menu_close", {"menu": ["Loading Menu"]}, loaded.put)
     suppressed_before = diagnostics(game)["events_suppressed_total"]
@@ -551,16 +578,25 @@ def test_player_location_after_coc(game):
                        capture_output=True, text=True, timeout=90)
         assert take(loaded, 1, 120.0), "no Loading Menu close within 120 s after coc"
         game.wait_ready(60.0)
-        got = take(q, 1, 10.0)
+        after = game.call_method(PLAYER, "Actor", "GetCurrentLocation")
+        got = take(loc_q, 8, 10.0)   # one change, or several if the move passes through more than one location
+        a, d = take(attach, 1, 10.0), take(detach, 1, 10.0)
         rose = diagnostics(game)["events_suppressed_total"] - suppressed_before
-        print(f"player_location: delivered={[(e.data['new_location'].form_id if e.data['new_location'] else None) for e in got]} "
-              f"suppressed_rise={rose}")
-        assert got or rose > 0
-        if got:
-            assert got[0].data["new_location"].form_id == BANNERED_MARE_LOCATION
+        fid = lambda f: f.form_id if f is not None else None  # noqa: E731
+        print(f"player_location: before={fid(before)} after={fid(after)} "
+              f"delivered={[(fid(e.data['old_location']), fid(e.data['new_location'])) for e in got]} "
+              f"cell attach>={len(a) + attach.qsize()} detach>={len(d) + detach.qsize()} suppressed_rise={rose}")
+        assert fid(after) == BANNERED_MARE_LOCATION and fid(before) != fid(after), (before, after)
+        assert got, "no player_location across the coc: a loading screen must not suppress it (R60)"
+        assert fid(got[0].data["old_location"]) == fid(before)
+        assert fid(got[-1].data["new_location"]) == fid(after)
+        assert all(e.suppressed == 0 for e in got)
+        assert a and d, "no cell_attach or no cell_detach across the coc"
+        assert a[0].suppressed == 0 and d[0].suppressed == 0
+        assert rose == 0, f"events_suppressed_total rose by {rose} across a coc, which is not a save load (R60)"
     finally:
-        sub.close()
-        sub_l.close()
+        for x in (sub, sub_a, sub_d, sub_l):
+            x.close()
 ```
 Check it parses and skips without the game: `SKYTHON_LIVE= uv run --project python pytest livetest/test_m2_events_batch2.py -q` → `9 skipped`.
 
@@ -582,6 +618,7 @@ tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
 tools/box/box_wait_log.sh Skython.log "events: sinks registered \(batch 2\)" 60
 tools/box/box_session.sh up && source out/box-live.env
+tools/box/box_console.sh --list | grep -q '"menu"' || echo "STOP: no DevBench menu tool (test_menu_open_and_close needs it); ask the owner"
 tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
 tools/box/box_console.sh "load s4test"      # never saved; then Task 1b block B6
 tools/box/box_wait_log.sh Skython.log "events: game_loaded epoch 1" 300
@@ -589,7 +626,7 @@ source livetest/s4test.env
 SKYTHON_LIVE=1 SKYTHON_BOX=1 uv run --project python pytest livetest/test_m2_events_batch2.py -q -s -rs
 tools/box/box_stop.sh
 ```
-pytest runs the file in order; `test_player_location_after_coc` must run last (it is last in the file). Then a second launch for the regression run on a clean `s4test` (the first one ended indoors):
+pytest runs the file in order; `test_coc_delivers_player_location_and_cell_events` must run last (it is last in the file). Then a second launch for the regression run on a clean `s4test` (the first one ended indoors):
 ```bash
 tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log "python host: (running|failed|disabled)" 600
@@ -598,19 +635,19 @@ tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600
 tools/box/box_console.sh "load s4test"
 tools/box/box_wait_log.sh Skython.log "events: game_loaded epoch 1" 300
 SKYTHON_LIVE=1 SKYTHON_BOX=1 uv run --project python pytest livetest/test_m2_events_batch1.py -q -rs
-SKYTHON_LIVE=1 SKYTHON_BOX=1 uv run --project python pytest livetest --deselect livetest/test_m1_mainmenu.py --deselect livetest/test_m1_throughput.py --deselect livetest/test_m2_events_batch2.py -q -rs
+SKYTHON_LIVE=1 SKYTHON_BOX=1 uv run --project python pytest livetest/test_m1_*.py --deselect livetest/test_m1_mainmenu.py --deselect livetest/test_m1_throughput.py -q -rs
 tools/box/box_files.sh pull Skython.log >/dev/null
 grep "events: \|lifecycle: kSaveGame" "$SKSE_LOG_DIR/Skython.log"
 grep '\[error\]' "$SKSE_LOG_DIR/Skython.log" | grep -v livetest_broken || echo "no unexpected errors"
 tools/box/box_stop.sh
 ```
-Expected: launch 1: 9 passed (the flood test prints its numbers: keep them); `events: game_loaded epoch 1` appeared **after** `lifecycle: Loading Menu closed` in the log (check the order with `grep -n`; if it came before, `NoteInteractive` is wrong). Launch 2: batch 1 still 8 passed; the M1 suite 77 passed with its known skips; no `sink threw`; `no unexpected errors`. `lifecycle: kSaveGame` does not appear (nothing saved).
+Expected: launch 1: 9 passed (the flood test prints its numbers: keep them); `events: game_loaded epoch 1` appeared **after** `lifecycle: Loading Menu closed` in the log (check the order with `grep -n`; if it came before, `NoteInteractive` is wrong). Launch 2: batch 1 still 8 passed; the M1 suite (only `livetest/test_m1_*.py`: `test_m2_drain_timing.py` needs `trace-timing.ini` and runs on purpose only; batch 1 ran on its own just before) `77 passed, 12 skipped, 5 deselected` with its known skips; no `sink threw`; `no unexpected errors`. `lifecycle: kSaveGame` does not appear (nothing saved).
 
-If `test_cell_attach_and_detach_without_a_loading_screen` fails because the player did not move (positions equal), or a Loading Menu opened: record it in RESULTS with the printed line and STOP; do not switch to `MoveTo` (that opens a Loading Menu and every cell event would be suppressed by design).
+If `test_cell_attach_and_detach_without_a_loading_screen` fails because the player did not move (positions equal), or a Loading Menu opened: record it in RESULTS with the printed line and STOP; do not switch that test to `MoveTo`: it is the no-loading-screen case on purpose (the loading-screen case is the `coc` test, where cell events are delivered too since R60).
 
 - [ ] **Step 8: Record**
 
-Append to `spikes/RESULTS.md`: `**Task 40, sinks batch 2 and lifecycle events (box, Windows-native, <date/time>, Skyrim 1.6.1170.0, s4test, never saved; 2 launches; SKSE plugins: <list>):**` pass counts; every `events: first <event> event on thread ...` line; the order of `Loading Menu closed` and `events: game_loaded epoch 1`; the cell line (`attach>=.. detach>=.. loading_menus=0`) and whether attach repeated for one reference; the player_location line (delivered or suppressed: the loading rule at work); whether the wolves fought at aggression 0 or needed the aggression 3 retry; the flood line verbatim with the Review Focus 1 verdict (held queue at most 4, `first_dropped` equals the seq gap, bench p50 before/during, `max_task_drain_ms` before/after).
+Append to `spikes/RESULTS.md`: `**Task 40, sinks batch 2 and lifecycle events (box, Windows-native, <date/time>, Skyrim 1.6.1170.0, s4test, never saved; 2 launches; SKSE plugins: <list>):**` pass counts; every `events: first <event> event on thread ...` line; the order of `Loading Menu closed` and `events: game_loaded epoch 1`; the cell line (`attach>=.. detach>=.. loading_menus=0`) and whether attach repeated for one reference; the player_location line verbatim (before/after `GetCurrentLocation`, the delivered changes, the cell counts and `suppressed_rise=0`: R60, a `coc` loading screen suppresses nothing); the `equip:` line (Iron Swords carried before the test); whether the wolves fought at aggression 0 or needed the aggression 3 retry; the flood line verbatim with the Review Focus 1 verdict (held queue at most 4, `first_dropped` equals the seq gap, bench p50 before/during, `max_task_drain_ms` before/after).
 
 - [ ] **Step 9: Commit**
 

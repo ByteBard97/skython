@@ -13,15 +13,15 @@
 **Files:**
 - Create: `core/include/spy/console_echo.h`, `core/src/console_echo.cpp`, `core/tests/test_console_echo.cpp`
 - Modify: `pyglue/include/spy/pymodule.h` (`ModuleHost::console_echo`), `pyglue/src/pymodule.cpp` (`_skython.console_echo`), `pyglue/linux/fake_module.cpp` (fake output)
-- Create: `plugin/src/ConsoleEcho.h`, `plugin/src/ConsoleEcho.cpp`; Modify: `plugin/src/PythonHost.cpp`, `plugin/CMakeLists.txt`
+- Create: `plugin/src/ConsoleEcho.h`, `plugin/src/ConsoleEcho.cpp`; Modify: `plugin/src/PythonHost.cpp`, `plugin/CMakeLists.txt`, `plugin/src/Lifecycle.cpp` (`console::FlushHeld()` when the main menu opens)
 - Modify: `python/src/skython/game.py` (`Game.settings`), `python/src/skython/_host.py` (settings files, echo), `python/tests/fake_skython.py` (append `console_echo`)
-- Create: `python/tests/test_settings.py`
+- Create: `python/tests/test_settings.py`; Modify: `python/tests/test_real_module.py` (append the real-module rate test)
 - Create: `livetest/scripts/livetest_settings/__init__.py`, `livetest/scripts/livetest_settings/settings.toml`, `livetest/test_m2_console_settings.py`
 - Modify: `docs/superpowers/plans/2026-10-02-skython-m1_5-m2/API-VERIFICATION.md`, `spikes/RESULTS.md` (append)
 
 **Interfaces:**
 - Consumes: Task 38's `_host.py` (`serve(..., trace_timing, clock)` call; keep it unchanged); Task 33 `Config::console_echo_errors` (in `_skython.config()` as `console_echo_errors`); Task 35's `ModuleHost` (with its `events` field) and `fake_module.cpp`; Task 36's `Game` (this task adds one attribute and one property, nothing else) and `_host`'s script-`Game` handling; v1 `_host._load_one` (`report()`, `holder`, `_STATE["config"]`, `_STATE["scripts_dir"]`), `ops::InTask`, `ops::Measured`, `livetest/smoke.py` `_read` (box-pulled reads of files next to `python.log`), `livetest/scripts/livetest_broken` (fails on purpose), `support.log_text`, `tools/box/box_console.sh --tool menu`, `tools/box/box_shot.sh`.
-- Produces: `spy::ConsoleEcho` (`core/include/spy/console_echo.h`; non-copyable; `using Sink = std::function<void(const std::string&)>`; `struct Options { int burst = 5; std::chrono::milliseconds refill{1000}; std::size_t max_line = 500; }`; `explicit ConsoleEcho(Sink, Options = {})`; `void Echo(std::string message) noexcept`; `std::uint64_t Printed() const`; `std::uint64_t Suppressed() const`), `ModuleHost::console_echo` (`std::function<void(const std::string&)>`, appended as the last member with an empty default; `fake_module.cpp` and `PythonHost.cpp` set it by name), the Python fake's `FakeSkython.console_echo(message)`, `_skython.console_echo(message: str) -> None`, `spy::console::Echo(std::string) -> void` (`plugin/src/ConsoleEcho.h`), `Game.settings: Mapping[str, Any]`, the `_host` settings rules (`scripts/<name>.toml`, then `scripts/<name>/settings.toml`; TOML error → `failed: settings: <error>`, setup skipped), log line `console: printed <line>` (game build).
+- Produces: `spy::ConsoleEcho` (`core/include/spy/console_echo.h`; non-copyable; `using Sink = std::function<void(const std::string&)>`; `struct Options { int burst = 5; std::chrono::milliseconds refill{1000}; std::size_t max_line = 500; }`; `explicit ConsoleEcho(Sink)`, `ConsoleEcho(Sink, Options)`; `void Echo(std::string message) noexcept`; `std::uint64_t Printed() const`; `std::uint64_t Suppressed() const`), `ModuleHost::console_echo` (`std::function<void(const std::string&)>`, appended as the last member with an empty default; `fake_module.cpp` and `PythonHost.cpp` set it by name), the Python fake's `FakeSkython.console_echo(message)`, `_skython.console_echo(message: str) -> None`, `spy::console::Echo(std::string) -> void` and `spy::console::FlushHeld() noexcept -> void` (`plugin/src/ConsoleEcho.h`), `Game.settings: Mapping[str, Any]`, the `_host` settings rules (`scripts/<name>.toml`, then `scripts/<name>/settings.toml`; TOML error → `failed: settings: <error>`, setup skipped), log line `console: printed <line>` (game build).
 
 - [ ] **Step 1: Write the failing core test**
 
@@ -132,7 +132,10 @@ public:
         std::chrono::milliseconds refill{ 1000 };
         std::size_t max_line = 500;  // longer lines are cut (the console shows one line)
     };
-    explicit ConsoleEcho(Sink sink, Options opts = {});
+    // Two constructors, not `Options opts = {}`: GCC 11 rejects a default argument that needs a nested struct's default
+    // member initializers inside the enclosing class ("could not convert '{}'"; measured while checking this plan).
+    explicit ConsoleEcho(Sink sink);
+    ConsoleEcho(Sink sink, Options opts);
     ~ConsoleEcho();
     ConsoleEcho(const ConsoleEcho&) = delete;
     ConsoleEcho& operator=(const ConsoleEcho&) = delete;
@@ -165,6 +168,8 @@ private:
 #include <algorithm>
 
 namespace spy {
+ConsoleEcho::ConsoleEcho(Sink sink) : ConsoleEcho(std::move(sink), Options{}) {}
+
 ConsoleEcho::ConsoleEcho(Sink sink, Options opts)
     : sink_(std::move(sink)), opts_(opts), tokens_(opts.burst), last_(Clock::now()), worker_([this] { Worker(); }) {}
 
@@ -208,26 +213,33 @@ void ConsoleEcho::Worker()
 {
     std::unique_lock lk(mx_);
     for (;;) {
-        if (stop_) return;
-        if (queue_.empty() && pending_ > 0) {
-            Refill(Clock::now());
-            if (tokens_ >= 1.0) {
-                tokens_ -= 1.0;
-                queue_.push_back("Skython: " + std::to_string(pending_) + " more script errors; see python.log");
-                pending_ = 0;
+        try {
+            if (stop_) return;
+            if (queue_.empty() && pending_ > 0) {
+                Refill(Clock::now());
+                if (tokens_ >= 1.0) {
+                    tokens_ -= 1.0;
+                    queue_.push_back("Skython: " + std::to_string(pending_) + " more script errors; see python.log");
+                    pending_ = 0;
+                }
             }
+            if (!queue_.empty()) {
+                std::string line = std::move(queue_.front());
+                queue_.pop_front();
+                ++printed_;
+                lk.unlock();
+                try { sink_(line); } catch (...) {}
+                lk.lock();
+                continue;
+            }
+            if (pending_ > 0) cv_.wait_for(lk, opts_.refill / 4);  // wake when a token may be free for the summary
+            else cv_.wait(lk);
+        } catch (...) {
+            // No exception may end this thread (Global Constraints). An allocation failure (the summary text) drops
+            // the pending summary, so the loop cannot spin on it; the lock is held again, as at the top of the loop.
+            if (!lk.owns_lock()) lk.lock();
+            pending_ = 0;
         }
-        if (!queue_.empty()) {
-            std::string line = std::move(queue_.front());
-            queue_.pop_front();
-            ++printed_;
-            lk.unlock();
-            try { sink_(line); } catch (...) {}
-            lk.lock();
-            continue;
-        }
-        if (pending_ > 0) cv_.wait_for(lk, opts_.refill / 4);  // wake when a token may be free for the summary
-        else cv_.wait(lk);
     }
 }
 
@@ -353,6 +365,7 @@ def test_a_toml_error_fails_only_that_script_and_skips_setup(host, fake, tmp_pat
     status = run_host(host, fake)
     assert status["t24_s43_e"].startswith("failed: settings: t24_s43_e.toml:"), status
     assert sys.modules["t24_s43_e"].SEEN == {}  # setup never ran
+    assert "t24_s43_e" not in host._STATE["games"]  # its Game was closed and forgotten
     assert status["t24_s43_f"] == "ok"
 
 
@@ -371,6 +384,12 @@ def test_a_failing_script_echoes_one_console_line(host, fake, tmp_path):
     assert fake.console_lines == ["Skython: script t24_s43_h failed: ValueError: boom; see python.log"]
 
 
+def test_a_timed_out_script_echoes_one_console_line(host, fake, tmp_path):
+    script(tmp_path, "t24_s43_j", "import time\n\ndef setup(game):\n    time.sleep(1.0)\n")  # host timeout 0.5 s
+    run_host(host, fake)
+    assert fake.console_lines == ["Skython: script t24_s43_j timeout: setup still running after 0.5 s; see python.log"]
+
+
 def test_console_echo_errors_false_echoes_nothing(host, fake, tmp_path):
     fake.config_overrides["console_echo_errors"] = False
     script(tmp_path, "t24_s43_i", "def setup(game):\n    raise ValueError('boom')\n")
@@ -380,15 +399,20 @@ def test_console_echo_errors_false_echoes_nothing(host, fake, tmp_path):
 Append to `python/tests/test_real_module.py` (it runs only with `SKYTHON_REAL_MODULE_DIR`, against the C++ `ConsoleEcho`):
 ```python
 def test_console_echo_rate_limit_in_the_real_module(real):
+    log_file = pathlib.Path(json.loads(real.config())["log_dir"], "plugin.log")
+    time.sleep(5.5)  # a full bucket: earlier tests in this process may have spent tokens (5 tokens, 1 per second)
+    start = log_file.stat().st_size if log_file.exists() else 0  # count only lines written from here on
     for i in range(20):
         real.console_echo(f"Skython: script t43_{i} failed: X; see python.log")
     time.sleep(1.6)  # one refill window plus slack: the summary comes from the limiter's own thread
-    text = pathlib.Path(json.loads(real.config())["log_dir"], "plugin.log").read_text()
+    with log_file.open("rb") as f:
+        f.seek(start)
+        text = f.read().decode("utf-8", "replace")
     lines = [l for l in text.splitlines() if " console: " in l]
     assert len(lines) == 6, lines
     assert lines[-1].endswith("console: Skython: 15 more script errors; see python.log")
 ```
-Add `import pathlib` to that file's imports if absent. Run:
+Add `import pathlib` to that file's imports if absent (`json` and `time` are already imported). Run:
 `uv run --project python pytest python/tests/test_settings.py -q`
 Expected: FAIL (`AttributeError: 'Game' object has no attribute 'settings'` and the echo assertions).
 
@@ -445,10 +469,14 @@ In `_load_one.run()`, replace the line `                        setup(game)` wit
                         except _SettingsError as e:
                             holder["error"] = f"settings: {e}"
                             holder["traceback"] = ""
+                            game.close()  # setup never ran: this Game must not linger or drive the game
+                            with _LOCK:
+                                if current():  # only this load's own record; a newer load keeps its Game
+                                    _STATE["games"].pop(name, None)
                         else:
                             setup(game)
 ```
-In `report()`, in the `elif status.startswith("failed"):` branch (after its `log.error`) and in the `failed: no setup` branch, add `_echo_failure(name, status)`. In tests `_STATE["config"]` is the fake's config only after `main()`; `_echo_failure` treats a missing config as "echo on" (the default). Run:
+In `report()`, in the `elif status.startswith("failed"):` branch (after its `log.error`) and in the `failed: no setup` branch, add `_echo_failure(name, status)`. At the end of `_load_one`, in the `if timed_out:` branch after its `log.error(...)`, also add `_echo_failure(name, status)`: a timeout is a script failure too (Contracts: "a script failure also calls `_skython.console_echo`"), so the console shows `Skython: script <name> timeout: setup still running after <n> s; see python.log`. In tests `_STATE["config"]` is the fake's config only after `main()`; `_echo_failure` treats a missing config as "echo on" (the default). Run:
 `uv run --project python pytest python/tests/test_settings.py python/tests/test_host.py -q` → all pass; then the whole suite on both versions: `uv run --project python --python 3.12 pytest python/tests -q` and `uv run --project python --python 3.14 pytest python/tests -q` → all pass. Rebuild the Linux module and run the real-module test: `cmake --build pyglue/build -j && SKYTHON_REAL_MODULE_DIR=pyglue/build uv run --project python pytest python/tests/test_real_module.py -q -k console_echo` → `1 passed`.
 
 - [ ] **Step 6: The game build**
@@ -464,6 +492,9 @@ namespace spy::console {
 // Contracts: at most one line per second with a burst of 5; extra lines are summarised. Each line is printed inside one
 // AddTask. Never blocks, never throws.
 void Echo(std::string message);
+// A line printed before the console exists (a script failing at kDataLoaded, before the main menu) is held (at most 5);
+// Lifecycle's Main Menu sink calls this once the main menu opens, and one AddTask prints the held lines. Never throws.
+void FlushHeld() noexcept;
 }
 ```
 `plugin/src/ConsoleEcho.cpp`:
@@ -477,6 +508,19 @@ void Echo(std::string message);
 
 namespace spy::console {
 namespace {
+// Lines that arrived before the console existed. Touched only inside our SKSE tasks (serialized, observed: R49).
+std::deque<std::string>& Held() { static auto* d = new std::deque<std::string>; return *d; }
+
+// Inside an SKSE task only.
+void PrintHeld(RE::ConsoleLog* c)
+{
+    while (!Held().empty()) {
+        c->Print("%s", Held().front().c_str());
+        log::Info("console: printed " + Held().front() + " (held until the console existed)");
+        Held().pop_front();
+    }
+}
+
 void PrintInTask(const std::string& line)
 {
     SKSE::GetTaskInterface()->AddTask([line] {
@@ -484,10 +528,14 @@ void PrintInTask(const std::string& line)
         ops::Measured measured;
         try {
             if (auto* c = RE::ConsoleLog::GetSingleton()) {
+                PrintHeld(c);
                 c->Print("%s", line.c_str());  // never the line as the format string
                 log::Info("console: printed " + line);
+            } else if (Held().size() < 5) {
+                Held().push_back(line);
+                log::Info("console: no console yet; held: " + line);
             } else {
-                log::Warn("console: no console yet; dropped: " + line);
+                log::Warn("console: no console yet and 5 lines held; dropped: " + line);
             }
         } catch (...) {
             log::Error("console: printing threw");
@@ -503,8 +551,25 @@ spy::ConsoleEcho& Limiter()
 }
 
 void Echo(std::string message) { Limiter().Echo(std::move(message)); }
+
+void FlushHeld() noexcept
+{
+    try {
+        SKSE::GetTaskInterface()->AddTask([] {
+            ops::InTask in;
+            ops::Measured measured;
+            try {
+                if (auto* c = RE::ConsoleLog::GetSingleton()) PrintHeld(c);
+                else if (!Held().empty()) log::Warn("console: still no console at the main menu; lines stay held");
+            } catch (...) {
+                log::Error("console: printing held lines threw");
+            }
+        });
+    } catch (...) {}
+}
 }
 ```
+Add `#include <deque>` to `ConsoleEcho.cpp`. In `plugin/src/Lifecycle.cpp`, add `#include "ConsoleEcho.h"` and, in the menu sink's branch that logs `lifecycle: Main Menu opened; no game loaded` (after that `log::Info`), call `console::FlushHeld();` (it only queues one SKSE task: no console call on the UI thread, no Python). A script that fails at `kDataLoaded` therefore reaches the console at the main menu. The plugin log shows which case happened: `console: printed <line>` alone (the console existed) or `console: no console yet; held: <line>` followed by `console: printed <line> (held until the console existed)`; Step 8 records which.
 `plugin/src/PythonHost.cpp`: add `#include "ConsoleEcho.h"`; after the `host.log = ...;` assignment add `host.console_echo = [](const std::string& m) { console::Echo(m); };`. `plugin/CMakeLists.txt`: add `src/ConsoleEcho.cpp` to `SPY_CORE_SOURCES` (`spy/console_echo.h` comes with `spy_core`).
 
 - [ ] **Step 7: The live check**
@@ -605,11 +670,11 @@ Expected: 3 passed; Read the screenshot (`$SKYTHON_STATE/box-shot.png`) and conf
 
 - [ ] **Step 8: Record and commit**
 
-Append to `spikes/RESULTS.md`: `**Task 43, console echo and script settings (box, Windows-native, <date/time>, Skyrim 1.6.1170.0, s4test, never saved; SKSE plugins: <list>):**` the `console: printed ...` line verbatim, the method that showed it in the game (screenshot or a DevBench tool), the settings JSON, and the Linux results (core 4/4, Python suite counts on 3.12 and 3.14, real-module rate test).
+Append to `spikes/RESULTS.md`: `**Task 43, console echo and script settings (box, Windows-native, <date/time>, Skyrim 1.6.1170.0, s4test, never saved; SKSE plugins: <list>):**` the `console: printed ...` line verbatim, whether the line was printed at once or held until the main menu (`console: no console yet; held:` present or not), the method that showed it in the game (screenshot or a DevBench tool), the settings JSON, and the Linux results (core 4/4, Python suite counts on 3.12 and 3.14, real-module rate test).
 ```bash
 git add core/include/spy/console_echo.h core/src/console_echo.cpp core/tests/test_console_echo.cpp \
   pyglue/include/spy/pymodule.h pyglue/src/pymodule.cpp pyglue/linux/fake_module.cpp \
-  plugin/src/ConsoleEcho.h plugin/src/ConsoleEcho.cpp plugin/src/PythonHost.cpp plugin/CMakeLists.txt \
+  plugin/src/ConsoleEcho.h plugin/src/ConsoleEcho.cpp plugin/src/PythonHost.cpp plugin/CMakeLists.txt plugin/src/Lifecycle.cpp \
   python/src/skython/game.py python/src/skython/_host.py python/tests/fake_skython.py python/tests/test_settings.py \
   python/tests/test_real_module.py livetest/scripts/livetest_settings livetest/test_m2_console_settings.py \
   docs/superpowers/plans/2026-10-02-skython-m1_5-m2/API-VERIFICATION.md spikes/RESULTS.md

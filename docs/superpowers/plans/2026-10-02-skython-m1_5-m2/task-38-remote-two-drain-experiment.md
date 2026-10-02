@@ -13,12 +13,13 @@
 **What is added.**
 - `spy::NowUs()` (`core/include/spy/clock.h`): `std::chrono::steady_clock` microseconds, the one clock of every stamp; `_skython.now_us()` returns it to Python (index Contracts).
 - `spy::CurrentRequestId()` (core `dispatcher.h`): the id of the request whose `Backend::Run` is running on this thread, 0 elsewhere. `Backend::Run` receives no request id, and the `timing:` line must name the id so it can be joined with the bridge's line. A `thread_local` set around the one `backend_.Run` call in `Dispatcher::Submit`.
-- `GameBackend` with `trace_timing = true`: one `Timing` record per request (`id`, `submit` when `Run` is entered, `task_start` when the SKSE task body starts, `callback` when the VM calls back, stamped in `Ops.cpp`'s `Callback` through a `thread_local` the task body sets), and one log line per request, written right after `done` is called: `timing: id=<id> submit=<us> task_start=<us> callback=<us> done=<us>`. `callback=0` means no VM callback was made (an op without one, or an error before dispatch).
+- `GameBackend` with `trace_timing = true`: one `Timing` record per request (`id`, `submit` when `Run` is entered, `task_start` when the SKSE task body starts, `callback` when the VM calls back, stamped in `Ops.cpp`'s `Callback` through a `thread_local` the task body sets), and one log line per request, written right after `done` is called: `timing: id=<id> submit=<us> task_start=<us> callback=<us> done=<us> frame_dt=<us>` (`frame_dt`: the engine's `RE::GetSecondsSinceLastFrame()` (`RE/M/Misc.h`) read when the task body starts, in µs, so the frame length comes from the engine, not from an estimate). `callback=0` means no VM callback was made (an op without one, or an error before dispatch).
 - The bridge with `trace_timing` (passed by `_host` from the config, clock `_skython.now_us`): `timing: id=<id> bridge_read=<us> bridge_write=<us>` per request, `bridge_read` once the request frame is fully read, `bridge_write` once its response frame is sent. Event frames and requests the bridge itself refuses get no line.
 - `livetest_smoke` gains a `sweep` command (in-process, straight through `_skython.call` with request ids from a given base, stamped with `now_us`), and `livetest/test_m2_drain_timing.py` runs both sweeps and writes `livetest/results/drain_timing.json`.
 
 **Files:**
 - Create: `core/include/spy/clock.h`, `plugin/config/variants/trace-timing.ini` (owned here: the dev ini with `trace_timing = true`; Tasks 42 and 44 use it), `livetest/test_m2_drain_timing.py`, `livetest/results/drain_timing.json` (written by the run)
+- Modify: `livetest/smoke.py` (`command(..., first_poll_after=0.0)`: wait before the first reply poll),
 - Modify: `core/include/spy/dispatcher.h`, `core/src/dispatcher.cpp` (`CurrentRequestId`), `core/tests/test_dispatcher.cpp` (one test), `pyglue/src/pymodule.cpp` (`now_us`), `pyglue/tests/test_module.py` (one test), `plugin/src/Ops.h` (`Timing`, `t_timing`, `WithTiming`), `plugin/src/Ops.cpp` (`Callback` stamps `callback`), `plugin/src/GameBackend.cpp` (stamps and the `timing:` line), `python/src/skython/bridge.py` (`trace_timing`, `clock`), `python/src/skython/_host.py` (passes both), `python/tests/fake_skython.py` (`now_us`), `python/tests/test_bridge.py` and `python/tests/test_host.py` (one test each, plus one in `test_bridge.py` for the default), `livetest/scripts/livetest_smoke/__init__.py` (`sweep`), `spikes/RESULTS.md` (the Task 38 entry)
 
 **Interfaces:**
@@ -27,11 +28,12 @@
   - `spy::NowUs() noexcept -> std::int64_t` (`spy/clock.h`); `spy::CurrentRequestId() noexcept -> std::uint64_t` (`spy/dispatcher.h`).
   - `_skython.now_us() -> int` in both builds (index Contracts); the Python fake's `FakeSkython.now_us()` (`time.monotonic_ns() // 1000`).
   - `skython.bridge.serve(..., trace_timing: bool = False, clock: Callable[[], int] | None = None)`; without `clock` the bridge uses `time.monotonic_ns() // 1000`. `_host` passes `trace_timing=cfg["trace_timing"]`, `clock=_skython.now_us`.
-  - Log lines (exact): plugin `timing: id=<id> submit=<us> task_start=<us> callback=<us> done=<us>`; bridge (logger `skython.bridge`, INFO, `python.log`) `timing: id=<id> bridge_read=<us> bridge_write=<us>`.
+  - Log lines (exact): plugin `timing: id=<id> submit=<us> task_start=<us> callback=<us> done=<us> frame_dt=<us>` (`frame_dt`: `RE::GetSecondsSinceLastFrame()` read at task start, in µs: the engine's own frame time); bridge (logger `skython.bridge`, INFO, `python.log`) `timing: id=<id> bridge_read=<us> bridge_write=<us>`.
   - `livetest_smoke` command `sweep` (`sleeps_ms: list[int]`, `calls: int`, `id_base: int`) replying `{"calls": [[id, sleep_ms, start_us, end_us], ...]}`.
+  - `livetest/smoke.py` `command(cmd, timeout=300.0, first_poll_after=0.0, **kw)`: sleeps `first_poll_after` seconds before the first poll of `livetest_reply.json` (each poll is an ssh round trip in box mode; polling every 0.2 s during a long command loads the box the sweep measures). Not sent to the game.
   - `plugin/config/variants/trace-timing.ini` (the dev ini with `trace_timing = true`, nothing else changed; Tasks 42 and 44 deploy it).
   - Raw-request id bases (index Global Constraints and Contracts, Live tests): `IN_BASE = 3_800_000_000` (in-process `sweep`), `REMOTE_BASE = 3_900_000_000` (bridge), so the ids never collide with another client's (every transport counts from 1; the box's `live_dashboard` polls).
-  - `livetest/results/drain_timing.json`: `date`, `game_version`, `runtime`, `calls_per_step`, `sleeps_ms`, `frame_ms_estimate`, `tie_back` (`remote_game_p50_ms`, `inprocess_game_p50_ms`, Task 31's `92.39` / `46.11`), `inprocess.steps` and `remote.steps` (one per pause: totals and phase spreads `{p10, p50, p90}` in ms), `raw.inprocess` rows `[id, sleep_ms, start, submit, task_start, callback, done, end]` and `raw.remote` rows `[id, sleep_ms, client_ms, bridge_read, submit, task_start, callback, done, bridge_write]` (µs stamps), `notes`.
+  - `livetest/results/drain_timing.json`: `date`, `game_version`, `runtime`, `calls_per_step`, `sleeps_ms`, `frame_ms_estimate` (median `frame_dt`), `frame_ms_from_task_starts`, `non_sweep_timing_lines`, `tie_back` (`remote_game_p50_ms`, `inprocess_game_p50_ms`, Task 31's `92.39` / `46.11`), `inprocess.steps` and `remote.steps` (one per pause: totals and phase spreads `{p10, p50, p90}` in ms), `raw.inprocess` rows `[id, sleep_ms, start, submit, task_start, callback, done, end]` and `raw.remote` rows `[id, sleep_ms, client_ms, bridge_read, submit, task_start, callback, done, bridge_write]` (µs stamps), `raw.frame_dt_us` (id → `frame_dt`), `notes`; each remote step also carries `arrival_phase` (`(submit - previous call's task_start) / frame`, spread: quantization predicts just over 1.0 at pause 0).
 
 - [ ] **Step 1: The core pieces, test first**
 
@@ -63,7 +65,7 @@ TEST_CASE("CurrentRequestId is the request's id inside Backend::Run and 0 outsid
 and add `#include "spy/clock.h"` to its includes.
 
 Run: `cmake --build core/build -j 2>&1 | grep -m3 "error"`
-Expected: `error: 'CurrentRequestId' is not a member of 'spy'` and `fatal error: spy/clock.h: No such file or directory`.
+Expected: only `fatal error: spy/clock.h: No such file or directory` (a missing include is fatal, so the compiler stops there and never reports the missing `CurrentRequestId`).
 
 Create `core/include/spy/clock.h`:
 ```cpp
@@ -152,7 +154,10 @@ def test_trace_timing_logs_one_line_per_request_and_none_for_events(start, fake,
         fake._fake_push_event("channel", json.dumps({"channel": "t", "payload": "", "truncated": False}))
         wait_until(lambda: seen, what="the event")
     lines = [m for m in (TIMING.fullmatch(r.getMessage()) for r in caplog.records) if m]
-    assert sorted(int(m[1]) for m in lines) == [1, 2, 3, 4]  # three calls and the subscribe; the event frame has none
+    ids = [int(m[1]) for m in lines]
+    # Three calls and the subscribe (ids 1-4); leaving `with remote(b)` closes the Game, whose events.unsubscribe is
+    # id 5 and may or may not be logged before the connection closes. The event frame has no line.
+    assert {1, 2, 3, 4} <= set(ids) and all(i <= 5 for i in ids) and len(ids) == len(set(ids)), ids
     assert all(int(m[2]) < int(m[3]) for m in lines)
 
 
@@ -242,6 +247,7 @@ struct Timing
     std::int64_t submit = 0;
     std::atomic<std::int64_t> task_start{0};
     std::atomic<std::int64_t> callback{0};
+    std::int64_t frame_dt = 0;  // RE::GetSecondsSinceLastFrame() in µs, read at task start
 };
 inline thread_local std::shared_ptr<Timing> t_timing;
 struct WithTiming
@@ -283,7 +289,10 @@ In `plugin/src/GameBackend.cpp`, add `#include "spy/clock.h"` and `#include <mem
         SKSE::GetTaskInterface()->AddTask([op, args, done, cancelled, progress, timing] {
             ops::InTask in;
             ops::Measured measured;  // Task 31 drain meter: before the cancelled() check, a cancelled body still ran
-            if (timing) timing->task_start.store(NowUs());
+            if (timing) {
+                timing->task_start.store(NowUs());
+                timing->frame_dt = static_cast<std::int64_t>(RE::GetSecondsSinceLastFrame() * 1'000'000.0f);
+            }
             ops::WithTiming traced(timing);  // a Callback built below keeps it
             if (cancelled()) return;  // timed out, cancelled or a load started while queued
             try {
@@ -298,7 +307,7 @@ In `plugin/src/GameBackend.cpp`, add `#include "spy/clock.h"` and `#include <mem
         });
     }
 ```
-and add to the `private:` section:
+(`RE::GetSecondsSinceLastFrame()` is declared in `RE/M/Misc.h`, which `<RE/Skyrim.h>` already brings in), and add to the `private:` section:
 ```cpp
     // Task 38: stamp `done`, hand the result on, then write the request's one line. The line is written after done so
     // the log write is not inside the measured path; Log.cpp flushes every info line (a synchronous write on this
@@ -310,7 +319,8 @@ and add to the `private:` section:
             done(std::move(r));
             log::Info("timing: id=" + std::to_string(t->id) + " submit=" + std::to_string(t->submit) +
                       " task_start=" + std::to_string(t->task_start.load()) + " callback=" +
-                      std::to_string(t->callback.load()) + " done=" + std::to_string(at));
+                      std::to_string(t->callback.load()) + " done=" + std::to_string(at) +
+                      " frame_dt=" + std::to_string(t->frame_dt));
         };
     }
 ```
@@ -325,7 +335,19 @@ Expected: `1`, and `diff` prints only `< trace_timing = false` / `> trace_timing
 Run: `tools/remote_build.sh plugin Skython.dll && tools/remote_build.sh plugin SkythonCore.dll`
 Expected: both exit 0 with 0 warnings (`SPY_TEST_HOOKS=OFF`), `out/Skython.dll` and `out/SkythonCore.dll` refreshed. The Linux core and pyglue builds of Steps 1-2 already compiled `clock.h` and `CurrentRequestId`.
 
-- [ ] **Step 6: The in-process `sweep` command**
+- [ ] **Step 6: The in-process `sweep` command and a quieter reply poll**
+
+In `livetest/smoke.py`, change `command`'s signature and add one line before its polling loop, so a long command is not polled over ssh every 0.2 s while the game measures (B#9: in box mode every poll is a `box_files.sh pull`):
+```python
+def command(cmd: str, timeout: float = 300.0, first_poll_after: float = 0.0, **kw) -> dict:
+```
+and, right after `deadline = time.monotonic() + timeout`:
+```python
+    if first_poll_after > 0:
+        time.sleep(min(first_poll_after, timeout))  # the command cannot be done sooner; do not load the box meanwhile
+```
+Existing callers pass no `first_poll_after` and behave exactly as before.
+
 
 In `livetest/scripts/livetest_smoke/__init__.py`, add before `def _handle`:
 ```python
@@ -381,14 +403,14 @@ import time
 import pytest
 
 from smoke import command, wait_smoke
-from support import log_text, python_log_text, raw_connect, rpc
+from support import BOX, REPO, box_pull, log_text, python_log_text, raw_connect, rpc
 
 RESULTS = pathlib.Path(__file__).parent / "results" / "drain_timing.json"
 SLEEPS_MS = (0, 2, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50)
 CALLS = int(os.environ.get("SPY_DRAIN_CALLS", "100"))
 IN_BASE = 3_800_000_000      # far above any other client's ids (every transport counts from 1; live_dashboard polls)
 REMOTE_BASE = 3_900_000_000
-PLUGIN = re.compile(r"timing: id=(\d+) submit=(\d+) task_start=(\d+) callback=(\d+) done=(\d+)")
+PLUGIN = re.compile(r"timing: id=(\d+) submit=(\d+) task_start=(\d+) callback=(\d+) done=(\d+) frame_dt=(\d+)")
 BRIDGE = re.compile(r"timing: id=(\d+) bridge_read=(\d+) bridge_write=(\d+)")
 RANDOM_INT = {"script": "Utility", "function": "RandomInt", "args": [1, 6]}
 TASK31 = {"remote_p50_ms": 92.39, "inprocess_p50_ms": 46.11}
@@ -407,6 +429,17 @@ def spread(values) -> dict:
 
 def ms(a: int, b: int) -> float:
     return (b - a) / 1000
+
+
+def bridge_log_text() -> str:
+    """python.log rotates (1 MiB x 3, appended across launches), and about 1300 timing lines can cross a rotation:
+    read python.log.1 too, older text first. A rotated file reads as new in full, so it may hold lines of earlier
+    launches with the same ids; the caller's dict keeps the last line per id, which is this run's."""
+    if not BOX:
+        return python_log_text()
+    box_pull("Skython/python.log.1", "Skython/python.log")
+    mirror = REPO / "out" / "box-skse" / "Skython"
+    return "".join((mirror / n).read_text(errors="replace") for n in ("python.log.1", "python.log") if (mirror / n).exists())
 
 
 def remote_sweep(session) -> list:
@@ -439,14 +472,20 @@ def game_p50(game, n: int = 100) -> float:
 
 def test_two_drain_experiment(session, game):
     wait_smoke()  # the in-process script is up and serving commands
-    inproc = command("sweep", timeout=600, sleeps_ms=list(SLEEPS_MS), calls=CALLS, id_base=IN_BASE)["calls"]
+    # About 70 ms per call (a frame plus the pause, on average): wait that long before polling the reply over ssh.
+    estimate_s = len(SLEEPS_MS) * CALLS * 0.07
+    inproc = command("sweep", timeout=600, first_poll_after=estimate_s, sleeps_ms=list(SLEEPS_MS), calls=CALLS,
+                     id_base=IN_BASE)["calls"]
     remote = remote_sweep(session)
     tie_back = {"remote_game_p50_ms": game_p50(game), "inprocess_game_p50_ms": command("bench", calls=100)["p50_ms"],
                 "task31": TASK31}
 
-    plugin = {int(m[1]): tuple(int(x) for x in m.groups()[1:]) for m in PLUGIN.finditer(log_text("Skython.log"))}
-    bridge = {int(m[1]): (int(m[2]), int(m[3])) for m in BRIDGE.finditer(python_log_text())}
+    matches = list(PLUGIN.finditer(log_text("Skython.log")))
+    plugin = {int(m[1]): tuple(int(x) for x in m.groups()[1:5]) for m in matches}  # submit, task_start, callback, done
+    frame_dt = {int(m[1]): int(m[6]) for m in matches}
+    bridge = {int(m[1]): (int(m[2]), int(m[3])) for m in BRIDGE.finditer(bridge_log_text())}
     ids = [r[0] for r in inproc] + [r[0] for r in remote]
+    non_sweep = len(set(plugin) - set(ids))  # other clients (live_dashboard, the tie-back calls) also log lines
     missing = [i for i in ids if i not in plugin]
     assert not missing, (f"{len(missing)} of {len(ids)} calls have no plugin timing line: is "
                          "plugin/config/variants/trace-timing.ini deployed?")
@@ -468,7 +507,12 @@ def test_two_drain_experiment(session, game):
                               "done_to_python": spread([ms(r[6], r[7]) for r in rows])}}
 
     def re_step(rows):
+        rows = sorted(rows)  # by id: call order
+        # Quantization signature: a call that just misses a drain arrives a little over one frame after the previous
+        # call's task started (arrival_phase just over 1.0 at pause 0).
+        phase = [(r[4] - p[5]) / 1000 / frame_ms for p, r in zip(rows, rows[1:])]
         return {"client_ms": spread([r[2] for r in rows]),
+                "arrival_phase": spread(phase) if phase else None,
                 "server_ms": spread([ms(r[3], r[8]) for r in rows]),
                 "phases_ms": {"read_to_submit": spread([ms(r[3], r[4]) for r in rows]),
                               "queued": spread([ms(r[4], r[5]) for r in rows]),
@@ -478,28 +522,33 @@ def test_two_drain_experiment(session, game):
                               "tunnel_and_client": spread([r[2] - ms(r[3], r[8]) for r in rows])}}
 
     starts = [r[4] for r in in_rows if r[1] == 0]  # in-process, no pause: about one call per frame
-    frame_ms = round(statistics.median(ms(a, b) for a, b in zip(starts, starts[1:])), 2)
+    frame_from_starts = round(statistics.median(ms(a, b) for a, b in zip(starts, starts[1:])), 2)
+    frame_ms = round(statistics.median(frame_dt[i] for i in ids) / 1000, 2)  # the engine's own frame time
     in_steps = [{"sleep_ms": s, **in_step([r for r in in_rows if r[1] == s])} for s in SLEEPS_MS]
     re_steps = [{"sleep_ms": s, **re_step([r for r in re_rows if r[1] == s])} for s in SLEEPS_MS]
     welcome = game.welcome
     out = {
         "date": datetime.datetime.now().isoformat(timespec="seconds"),
         "game_version": welcome.get("game_version", "unknown"), "runtime": welcome.get("runtime", "unknown"),
-        "calls_per_step": CALLS, "sleeps_ms": list(SLEEPS_MS), "frame_ms_estimate": frame_ms, "tie_back": tie_back,
+        "calls_per_step": CALLS, "sleeps_ms": list(SLEEPS_MS), "frame_ms_estimate": frame_ms,
+        "frame_ms_from_task_starts": frame_from_starts, "non_sweep_timing_lines": non_sweep, "tie_back": tie_back,
         "inprocess": {"steps": in_steps}, "remote": {"steps": re_steps},
-        "raw": {"inprocess": in_rows, "remote": re_rows},
+        "raw": {"inprocess": in_rows, "remote": re_rows, "frame_dt_us": {str(i): frame_dt[i] for i in ids}},
         "notes": ["record only: trace_timing stamps, no behaviour change",
                   "each plugin timing line is written (and flushed: Log.cpp flush_on(info)) right after done, on the "
                   "thread that called done; that write is a small perturbation of the next call's queue time",
-                  "frame_ms_estimate: median gap between task_start of consecutive in-process calls with no pause"],
+                  "frame_ms_estimate: median frame_dt (RE::GetSecondsSinceLastFrame at task start) over the sweep calls; "
+                  "frame_ms_from_task_starts: median gap between task_start of consecutive in-process calls with no pause",
+                  f"non_sweep_timing_lines: {non_sweep} plugin timing lines from other requests during the run "
+                  "(tie-back calls, live_dashboard if it was connected)"],
     }
     RESULTS.parent.mkdir(exist_ok=True)
     RESULTS.write_text(json.dumps(out, indent=1) + "\n")
     z_in, z_re = in_steps[0], re_steps[0]
-    print("RESULTS: frame ~{} ms; in-process total p50 by pause {}; remote client p50 by pause {}; at pause 0: queued "
+    print("RESULTS: frame ~{} ms (frame_dt; task-start gaps {} ms); remote arrival_phase p50 at pause 0 {}; in-process total p50 by pause {}; remote client p50 by pause {}; at pause 0: queued "
           "p50 {} ms in-process vs {} ms remote, vm p50 {} vs {}, remote read_to_submit {} / done_to_write {} / tunnel "
           "and client {}; Game-based tie-back remote {} ms, in-process {} ms (Task 31: 92.39 / 46.11)".format(
-              frame_ms,
+              frame_ms, frame_from_starts, z_re["arrival_phase"] and z_re["arrival_phase"]["p50"],
               " ".join(f"{s['sleep_ms']}:{s['total_ms']['p50']}" for s in in_steps),
               " ".join(f"{s['sleep_ms']}:{s['client_ms']['p50']}" for s in re_steps),
               z_in["phases_ms"]["queued"]["p50"], z_re["phases_ms"]["queued"]["p50"],
@@ -518,7 +567,7 @@ git add core/include/spy/clock.h core/include/spy/dispatcher.h core/src/dispatch
         pyglue/src/pymodule.cpp pyglue/tests/test_module.py plugin/src/Ops.h plugin/src/Ops.cpp plugin/src/GameBackend.cpp \
         plugin/config/variants/trace-timing.ini python/src/skython/bridge.py python/src/skython/_host.py \
         python/tests/fake_skython.py python/tests/test_bridge.py python/tests/test_host.py \
-        livetest/scripts/livetest_smoke/__init__.py livetest/test_m2_drain_timing.py
+        livetest/smoke.py livetest/scripts/livetest_smoke/__init__.py livetest/test_m2_drain_timing.py
 git commit -m "feat: trace_timing stamps in the game backend and the bridge, now_us, and the drain timing sweep"
 ```
 
@@ -526,6 +575,7 @@ git commit -m "feat: trace_timing stamps in the game backend and the bridge, now
 
 The game runs on the Windows box; every wait is bounded and counts only this launch's log text.
 ```bash
+source tools/box/box_env.sh
 tools/box/box_deploy.sh out/Skython.dll plugin/config/variants/trace-timing.ini   # loader, core and the timing ini
 tools/box/box_deploy.sh --package
 tools/box/box_deploy.sh --scripts livetest/scripts
@@ -535,21 +585,24 @@ tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600 || echo "S
 tools/box/box_session.sh up && source out/box-live.env && source livetest/s4test.env
 tools/box/box_console.sh "load s4test"   # never saved
 tools/box/box_wait_log.sh Skython.log "lifecycle: interactive = true" 300
-SKYTHON_LIVE=1 uv run --project python pytest livetest/test_m2_drain_timing.py -q -s -rs 2>&1 | tee out/t38-live.txt | tail -3
-tools/box/box_files.sh pull Skython.log Skython/python.log SkythonLoader.log >/dev/null
+SKYTHON_LIVE=1 SKYTHON_BOX=1 uv run --project python pytest livetest/test_m2_drain_timing.py -q -s -rs 2>&1 | tee out/t38-live.txt | tail -3
+tools/box/box_files.sh pull Skython.log Skython/python.log Skython/python.log.1 SkythonLoader.log >/dev/null
 mkdir -p out/t38 && cp "$SKSE_LOG_DIR/Skython.log" "$SKSE_LOG_DIR/SkythonLoader.log" "$SKSE_LOG_DIR/Skython/python.log" out/t38/ && mv out/t38-live.txt out/t38/live.txt
+cp "$SKSE_LOG_DIR/Skython/python.log.1" out/t38/ 2>/dev/null || echo "python.log did not rotate during this launch"
 grep -c "timing: id=" out/t38/Skython.log out/t38/python.log
+grep -c "bridge: no event hub" out/t38/python.log      # 1 while Task 39 is not built in; 0 once it is (see below)
+grep -c "live_dashboard connected" out/t38/python.log  # 0 = the box's live_dashboard was not connected
 grep '\[error\]' out/t38/Skython.log | grep -v livetest_broken || echo "no unexpected errors"
 tools/box/box_stop.sh
 tools/box/box_session.sh down
 tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini   # back to the dev ini (trace_timing off)
 ```
-Expected: the launch log names the runtime 1.6.1170 and the SKSE plugins loaded (record them); the test prints one `RESULTS:` line and ends `1 passed` in about 5 minutes (1200 in-process calls, 1200 remote calls, 200 tie-back calls). `grep -c` prints at least 2600 for `Skython.log` (every sweep and tie-back call; other clients add more) and at least 1300 for `python.log` (remote sweep plus the Game-based tie-back). The error scan prints `no unexpected errors` (only the deliberate `livetest_broken` may log at error level). `box_stop.sh` prints `GONE`. `livetest/results/drain_timing.json` is written. A missing-line assertion is a setup problem (wrong ini, rotated log), never a result: fix the setup and rerun.
+Expected: the launch log names the runtime 1.6.1170 and the SKSE plugins loaded (record them); bridge connections work although the plugin has no event hub yet (Task 39 sets `ModuleHost.events`): Task 37's bridge logs `bridge: no event hub (<error>); events are unsupported on this connection` exactly once per process (the `grep -c` prints 1; 0 if this DLL already contains Task 39), serves every request with consumer 0, and a remote `game.on(...)` would raise `Unsupported`; that is expected here, not a failure (this test subscribes to nothing); the test prints one `RESULTS:` line and ends `1 passed` in about 5 minutes (1200 in-process calls, 1200 remote calls, 200 tie-back calls). `grep -c "timing: id="` prints at least 2600 for `Skython.log` (every sweep and tie-back call; other clients add more) and at least 1300 for `python.log` plus `python.log.1` together (remote sweep plus the Game-based tie-back; the test itself reads both files). The error scan prints `no unexpected errors` (only the deliberate `livetest_broken` may log at error level). `box_stop.sh` prints `GONE`. `livetest/results/drain_timing.json` is written. A missing-line assertion is a setup problem (wrong ini, rotated log), never a result: fix the setup and rerun.
 
 - [ ] **Step 9: Record**
 
 Append to `spikes/RESULTS.md`, after the last task entry, one bullet in the v1 form:
-`- **Task 38, remote two-drain experiment (box, Windows-native, <date> <start>-<end>, Skyrim 1.6.1170.0, s4test, unpaused, never saved; 1 launch, SKSE plugins: <the list from this launch's log>; record only):**` followed by the test's `RESULTS:` line verbatim, then two sentences of reading taken from `drain_timing.json`: (1) which phase holds the extra ~frame remotely at pause 0 (`queued` vs `vm` vs `done_to_write` vs `tunnel_and_client`), and (2) whether in-process `total_ms.p50 + sleep_ms` steps by multiples of `frame_ms_estimate` across the pauses (the quantization signature) and at which pause, if any, the remote `client_ms.p50` drops to one frame. End with `No behaviour change; nothing fixed (index "After this plan"). Logs: out/t38/.` Every number comes from this run's output; if the data contradicts the hypothesis, say so plainly.
+`- **Task 38, remote two-drain experiment (box, Windows-native, <date> <start>-<end>, Skyrim 1.6.1170.0, s4test, unpaused, never saved; 1 launch, SKSE plugins: <the list from this launch's log>; record only):**` followed by the test's `RESULTS:` line verbatim, whether the box's `live_dashboard` was connected (the `live_dashboard connected` count) and `non_sweep_timing_lines` from the JSON, then two sentences of reading taken from `drain_timing.json`: (1) which phase holds the extra ~frame remotely at pause 0 (`queued` vs `vm` vs `done_to_write` vs `tunnel_and_client`), and (2) whether in-process `total_ms.p50 + sleep_ms` steps by multiples of `frame_ms_estimate` across the pauses (the quantization signature; `frame_ms_estimate` is the engine's `frame_dt` median) and at which pause, if any, the remote `client_ms.p50` drops to one frame, citing the remote `arrival_phase` p50 at pause 0 (just over 1.0 supports the hypothesis). End with `No behaviour change; nothing fixed (index "After this plan"). Logs: out/t38/.` Every number comes from this run's output; if the data contradicts the hypothesis, say so plainly.
 
 - [ ] **Step 10: Commit the record**
 

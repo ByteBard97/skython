@@ -6,7 +6,7 @@
 >
 > **Depends on:** Task 41 (`Game.save`, `livetest/support.py` `load_save`, `livetest/conftest.py` `fresh_save`, which already loads `skythonbase` when it exists on the box, else `s4test`), Task 48 (SkythonTest.esp PASS, deployed), Gate 0 (owner decision 7, recorded as accepted; README **Owner decisions**).
 >
-> **STOP and ask the owner (do not improvise) if:** `tools/box/box_saves.sh count skythonbase` prints anything but `0` before the save (the name is taken: never save over it, never pick another name without the owner); `coc SkythonTestCell` from the main menu does not reach the cell within 5 minutes; `game.save` fails or the count is not `1` afterwards; the game crashes.
+> **STOP and ask the owner (do not improvise) if:** `tools/box/box_saves.sh count skythonbase` prints anything but `0` before the save (the name is taken: never save over it, never pick another name without the owner); `coc SkythonTestCell` from the main menu does not reach the cell within 5 minutes; `game.save` fails or the count is not `1` within the bounded 60 s poll afterwards (`game.save` answers when the engine **started** the save; the `.ess` can appear a moment later, so the count is polled, never read once); the game crashes.
 
 **What the base save is.** One save, made once, from the main menu: `coc SkythonTestCell` starts the game directly in the test cell (no character creation, no intro: the player is the default character), then `game.save("skythonbase")`. Nothing else is touched before the save: no `set_property`, no `call_method` that writes (only reads such as `GetCounter`, `IsRunning`, `IsDead`), the test quest has never run, the NPC is alive, the quest scripts hold the Contracts' initial property values (`Counter` 7, `Ratio` 0.5, `Flag` True, `Label` `"initial label"`, `Target` = `SkythonTestNPC`, `BaseCounter` 3, `BaseLabel` `"base label"`), so every later test that starts from `skythonbase` starts from the same state. Old saves made without the ESP (`s4test`, `spikebase`) stay loadable (the ESP is only ever added). **`skythonbase` depends on SkythonTest.esp:** every box session that loads it must run `tools/box/box_plugins.sh add` before `box_launch.sh` (README Global Constraints, "`plugins.txt` around launches"; `box_quit.sh`/`box_stop.sh` run `box_plugins.sh restore-if-added` afterwards); loading it without the plugin raises the game's missing-content prompt.
 
@@ -26,8 +26,6 @@ Create `livetest/test_m15_base_save.py`:
 """Task 49: the base save `skythonbase` (made once from the main menu with `coc SkythonTestCell`) and the fresh_save
 fixture that prefers it. Needs SkythonTest.esp and its scripts on the box with the plugins.txt line added
 (tools/box/box_plugins.sh add): skythonbase depends on the plugin. Loads saves; never saves."""
-import pytest
-
 from support import load_save, log_text
 
 CELL = "skythontest.esp|0x000802"
@@ -149,7 +147,7 @@ g.close()
 PY
 tools/box/box_shot.sh out/t49-before-save.png
 ```
-Expected: `console: 0 ...`; an `events:` list (record it as found: whether a main-menu `coc` raises `new_game` and/or `game_loaded` is an observation, not a pass condition; it may also be empty after 180 s); `cell: SkythonTest.esp|0x000802`; `quest running: False stage: 0`; `npc dead: False npc cell: SkythonTest.esp|0x000802`; `counters: 7 3` (the initial values: read-only calls, nothing written); the screenshot shows the player in the lit test room with the NPC. A different cell, a running quest, a dead NPC or other counters: do not save; STOP. If the heredoc dies in `wait_ready` with `NotReady` (the lifecycle never reported interactive after a main-menu `coc`), that is a Task 40/41 lifecycle finding: record it with the `events:` line and `Skython.log`, do not save, do not try another route; STOP and report.
+Expected: `console: 0 ...`; `events: [('new_game', <n>, {}), ('game_loaded', <n>, {'new_game': True})]` (a main-menu `coc` starts a new game: Task 40 raises `new_game` on `kNewGame`, then `game_loaded` with `new_game: true` at the interactive signal; this is the live check of both). If either is missing, or `game_loaded` carries `new_game: false`, record it in Step 8 as a **Task 40 defect for the owner** (with the `events:` line and the `Skython.log` lifecycle lines) and still make the save (the base save does not depend on the events); `cell: SkythonTest.esp|0x000802`; `quest running: False stage: 0`; `npc dead: False npc cell: SkythonTest.esp|0x000802`; `counters: 7 3` (the initial values: read-only calls, nothing written); the screenshot shows the player in the lit test room with the NPC. A different cell, a running quest, a dead NPC or other counters: do not save; STOP. If the heredoc dies in `wait_ready` with `NotReady` (the lifecycle never reported interactive after a main-menu `coc`), that is a Task 40/41 lifecycle finding: record it with the `events:` line and `Skython.log`, do not save, do not try another route; STOP and report.
 
 - [ ] **Step 6: Save once, then confirm**
 
@@ -165,11 +163,12 @@ with skython.connect(port=s.port, token=s.token, client_name="t49-save") as g:
     print("saved:", g.save("skythonbase"))
 PY
 tools/box/box_wait_log.sh Skython.log "saveload: saved skythonbase" 120
-tools/box/box_saves.sh count skythonbase
+# game.save answers once the engine started the save; the .ess can appear a moment later: poll, bounded (60 s).
+n=0; for i in $(seq 1 30); do n="$(tools/box/box_saves.sh count skythonbase)"; [ "$n" = 1 ] && break; sleep 2; done; echo "count after save: $n"
 tools/box/box_quit.sh || tools/box/box_stop.sh
 tools/box/box_session.sh down
 ```
-Expected: `0` (re-checked just before saving); `saved: skythonbase`; `MATCH ... saveload: saved skythonbase`; `1`; the quit tool ends with `RESTORED <sha>`. `game.save` refuses an existing name (`bad_request`, `save_exists`), so a second run of this step cannot overwrite it.
+Expected: `0` (re-checked just before saving); `saved: skythonbase` (the engine started the save); `MATCH ... saveload: saved skythonbase`; `count after save: 1` (anything else after the 60 s poll: STOP); the quit tool ends with `RESTORED <sha>`. `game.save` refuses an existing name (`bad_request`, `save_exists`), so a second run of this step cannot overwrite it.
 
 - [ ] **Step 7: The fixture lands on `skythonbase`**
 
@@ -191,7 +190,7 @@ Expected: `test_m15_base_save.py` 2 passed (loads from the main menu: `game.load
 
 Append to `spikes/RESULTS.md`:
 ```markdown
-- **Task 49, base save skythonbase (box, Windows-native, <date time>, Skyrim 1.6.1170.0; 2 launches; SKSE plugins loaded: <list>):** `box_saves.sh count skythonbase` 0 before, 1 after. From the main menu, `coc SkythonTestCell` (DevBench console) -> player in SkythonTest.esp|0x000802, quest |0x000800 not running at stage 0, SkythonTestNPC |0x000804 alive in the cell; events seen during the coc: <list, e.g. none / new_game / game_loaded epoch n>. `game.save("skythonbase")` -> `saveload: saved skythonbase`. Launch 2: `test_m15_base_save.py` 2 passed (`fresh_save` loads skythonbase: `saveload: load started skythonbase`), `test_m15_esp_smoke.py` passed on it (`coc` test deselected); initial property values as in the README Contracts. **skythonbase depends on SkythonTest.esp: add the plugins.txt line (box_plugins.sh add) before every launch that loads it.** **Owner removal list:** save `skythonbase` (.ess and .skse) in `C:\Users\geoff\Documents\My Games\Skyrim Special Edition\Saves`.
+- **Task 49, base save skythonbase (box, Windows-native, <date time>, Skyrim 1.6.1170.0; 2 launches; SKSE plugins loaded: <list>):** `box_saves.sh count skythonbase` 0 before, 1 after. From the main menu, `coc SkythonTestCell` (DevBench console) -> player in SkythonTest.esp|0x000802, quest |0x000800 not running at stage 0, SkythonTestNPC |0x000804 alive in the cell; events seen during the coc: <new_game, then game_loaded epoch n new_game true | what was seen instead: Task 40 defect recorded for the owner>. `game.save("skythonbase")` -> `saveload: saved skythonbase`. Launch 2: `test_m15_base_save.py` 2 passed (`fresh_save` loads skythonbase: `saveload: load started skythonbase`), `test_m15_esp_smoke.py` passed on it (`coc` test deselected); initial property values as in the README Contracts. **skythonbase depends on SkythonTest.esp: add the plugins.txt line (box_plugins.sh add) before every launch that loads it.** **Owner removal list:** save `skythonbase` (.ess and .skse) in `C:\Users\geoff\Documents\My Games\Skyrim Special Edition\Saves`.
 ```
 ```bash
 git add spikes/RESULTS.md

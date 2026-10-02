@@ -4,7 +4,7 @@ Carry-forward from the v1 plan: alias **arguments** had no live test (Task 29: n
 
 > Part of the [Skython M1.5/M2 plan](README.md). Read the index's **Global Constraints**, **Contracts** (Papyrus, Live tests) and **Gates** first. Steps use checkbox (`- [ ]`) syntax.
 
-> **Gate:** start only after Task 49 is done: the base save `skythonbase` exists on the box (in `SkythonTestCell`), `SkythonTest.esp` and the six decision-7 `.pex` files are deployed, and `fresh_save` prefers `skythonbase`.
+> **Gate:** start only after Task 49 is done: the base save `skythonbase` exists on the box (in `SkythonTestCell`), `SkythonTest.esp` and the six decision-7 `.pex` files are deployed, and `fresh_save` prefers `skythonbase`. **Decision-8 names:** `SCENARIO_FUNCTION` and `CHANNEL` in `_testesp.py` are taken from Task 48's RESULTS entry (its line "decision-8 names used: scenario function `...`, channel `...`"), never from the defaults below when that line names others; no such line in `spikes/RESULTS.md` → STOP (Task 48 is not done).
 >
 > **Runs on:** Linux (the test files), then the Windows box + game through the dev bridge.
 >
@@ -18,7 +18,7 @@ Carry-forward from the v1 plan: alias **arguments** had no live test (Task 29: n
 
 **Interfaces:**
 - Consumes:
-  - Task 48 (index Contracts, **Test ESP**): quest `SkythonTest.esp|0x000800` with script `SkythonTestQuest` (extends `SkythonTestQuestBase`); aliases 0 `SkythonTarget`, 1 `SkythonItem`, 2 `SkythonExtra` (ReferenceAlias + `SkythonTestAlias`), 3 `SkythonPlace` (LocationAlias + `SkythonTestLocationAlias`), all optional; objective 10; actor `SkythonTestNPC` `|0x000804` in cell `SkythonTestCell` `|0x000802`; location `|0x000801`; marker `|0x000805`; initial values (`Counter` 7, `Ratio` 0.5, `Flag` True, `Label` `"initial label"`, `Target` `|0x000804`, `BaseCounter` 3, `BaseLabel` `"base label"`, `SkythonTestAlias.Tag` 5, `SkythonTestLocationAlias.Tag` 6); `Int BumpCounter(Int n)` (adds `n` to `Counter`, returns the new `Counter`); `Int GetCounter()`; `String DescribeAlias(ReferenceAlias akAlias)` → `"none"`, `"foreign"`, `"empty"` or `"filled"`; full property `Computed` (Int, getter only).
+  - Task 48 (index Contracts, **Test ESP**): quest `SkythonTest.esp|0x000800` with script `SkythonTestQuest` (extends `SkythonTestQuestBase`); aliases 0 `SkythonTarget`, 1 `SkythonItem`, 2 `SkythonExtra` (ReferenceAlias + `SkythonTestAlias`), 3 `SkythonPlace` (LocationAlias + `SkythonTestLocationAlias`), all optional; objective 10; actor `SkythonTestNPC` `|0x000804` in cell `SkythonTestCell` `|0x000802`; location `|0x000801`; marker `|0x000805`; initial values (`Counter` 7, `Ratio` 0.5, `Flag` True, `Label` `"initial label"`, `Target` `|0x000804`, `BaseCounter` 3, `BaseLabel` `"base label"`, `SkythonTestAlias.Tag` 5, `SkythonTestLocationAlias.Tag` 6); `Int BumpCounter(Int n)` (adds `n` to `Counter`, returns the new `Counter`); `Int GetCounter()`; `String DescribeAlias(ReferenceAlias akAlias)` → `"none"`, `"foreign"`, `"empty"` or `"filled"`; `String DescribeLocationAlias(LocationAlias akAlias)` → the same four answers (`"empty"` when `GetLocation()` is `None`); `Int AliasTag(SkythonTestAlias akAlias)` → the alias script's `Tag`; full property `Computed` (Int, getter only); the RESULTS line "decision-8 names used: scenario function `<name>`, channel `<name>`".
   - Task 49: `skythonbase`, `fresh_save` (module fixture in `livetest/conftest.py`, loads `skythonbase`).
   - Task 36: `Game.wait_for(predicate, timeout, *, interval=0.25)`.
   - v1: `Game.call_method`, `get_property`, `set_property`, `form`, `alias(quest, alias_id, alias_type="ReferenceAlias")`; `skython.errors.TypeMismatch`, `Unsupported`; `support.spy_env`; `livetest/s4test.env` (`SPY_PLAIN_QUEST=0x0010FDD5 SPY_PLAIN_ALIAS=0`: a plain alias in `Skyrim.esm`, save-independent data).
@@ -56,7 +56,9 @@ QUEST_SCRIPT = "SkythonTestQuest"
 BASE_SCRIPT = "SkythonTestQuestBase"
 ALIAS_SCRIPT = "SkythonTestAlias"
 LOCATION_ALIAS_SCRIPT = "SkythonTestLocationAlias"
-# Owner decision 8 (plan index, Owner decisions): the scenario function and the fragments' channel.
+# Owner decision 8 (plan index, Owner decisions): the scenario function and the fragments' channel, exactly as
+# Task 48's RESULTS entry records them ("decision-8 names used: ..."). These are the proposal's names; if that line
+# names others, write those here instead (Tasks 53-56 use t.SCENARIO_FUNCTION and t.CHANNEL, never literals).
 SCENARIO_FUNCTION = "SetupScenario"
 CHANNEL = "skython_test"
 STAGES = (10, 20, 100, 200)
@@ -187,6 +189,13 @@ uv run --project python python -c "import sys; sys.path.insert(0, 'livetest/scri
 ```
 Expected: `stage_10 SkythonTest.esp|0x000800`.
 
+Check the two decision-8 names against Task 48's RESULTS entry:
+```bash
+grep -o 'decision-8 names used: scenario function `[^`]*`, channel `[^`]*`' spikes/RESULTS.md
+uv run --project python python -c "import sys; sys.path.insert(0, 'livetest/scripts'); import _testesp as t; print(f'decision-8 names used: scenario function \`{t.SCENARIO_FUNCTION}\`, channel \`{t.CHANNEL}\`')"
+```
+Expected: the two printed lines are identical. No line from the `grep` → STOP (Task 48's entry is missing); different lines → edit `SCENARIO_FUNCTION`/`CHANNEL` in `_testesp.py` to the RESULTS names and rerun.
+
 - [ ] **Step 2: Write the live tests**
 
 Create `livetest/test_m15_own_script.py`:
@@ -215,8 +224,10 @@ def mgame(session, fresh_save):
 
 @pytest.fixture(scope="module")
 def esp(mgame):
+    # Start the quest first: alias scripts may bind only once the quest runs, and discover() calls Alias.GetName
+    # through them, so discovering on a stopped quest could raise a false "no script object bound" STOP.
+    t.ensure_running(mgame, t.quest(mgame))
     h = t.discover(mgame)
-    t.ensure_running(mgame, h.quest)
     print(f"\n{t.QUEST_KEY}: aliases {h.alias_names}, npc {h.npc.form_key}, objectives {h.objectives}")
     return h
 
@@ -284,6 +295,27 @@ def test_location_alias_force_get_clear_round_trip(game, esp):
     assert game.call_method(la, "LocationAlias", "GetLocation") is None
 
 
+def test_location_alias_argument_arrives_as_that_alias(game, esp):
+    # The BindAlias path with a LocationAlias parameter: "empty" while alias 3 holds no location, "filled" after
+    # ForceLocationTo (an argument that arrived as None would answer "none", another quest's alias "foreign").
+    la = esp.location_alias
+    assert game.call_method(esp.quest, t.QUEST_SCRIPT, "DescribeLocationAlias", la) == "empty"
+    game.call_method(la, "LocationAlias", "ForceLocationTo", t.location(game))
+    try:
+        assert game.call_method(esp.quest, t.QUEST_SCRIPT, "DescribeLocationAlias", la) == "filled"
+    finally:
+        game.call_method(la, "LocationAlias", "Clear")
+    assert game.call_method(esp.quest, t.QUEST_SCRIPT, "DescribeLocationAlias", la) == "empty"
+    assert game.call_method(esp.quest, t.QUEST_SCRIPT, "DescribeLocationAlias", None) == "none"
+
+
+def test_alias_argument_typed_as_our_alias_script(game, esp):
+    # A parameter typed SkythonTestAlias (our own alias script, not the native ReferenceAlias): the bound object is
+    # re-typed to that script, so the function reads the script's own property Tag (initial 5).
+    target = esp.ref_aliases[t.TARGET_ALIAS]
+    assert game.call_method(esp.quest, t.QUEST_SCRIPT, "AliasTag", target) == t.INITIAL[t.ALIAS_SCRIPT]["Tag"]  # 5
+
+
 def test_full_property_is_unsupported_before_anything_runs(game, esp):
     with pytest.raises(errors.Unsupported, match="full property"):
         game.get_property(esp.quest, t.QUEST_SCRIPT, "Computed")
@@ -296,7 +328,7 @@ Collect without a game (every test must be collected and skipped, none errored):
 cd /home/geoff/projects/games/skyrim/skyrim-python
 uv run --project python pytest livetest/test_m15_own_script.py -q -rs 2>&1 | tail -3
 ```
-Expected: `8 skipped` with the reason `live test: set SKYTHON_LIVE=1 with the game running`.
+Expected: `10 skipped` with the reason `live test: set SKYTHON_LIVE=1 with the game running`.
 
 - [ ] **Step 3: Run on the box**
 
@@ -307,10 +339,11 @@ tools/box/box_plugins.sh add                                # *SkythonTest.esp i
 tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log 'python host: running' 600
 tools/box/box_session.sh up && source out/box-live.env && source livetest/s4test.env
+tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600   # fresh_save's game.load is refused while "starting"
 export SKYTHON_LIVE=1 SKYTHON_BOX=1
 uv run --project python pytest livetest/test_m15_own_script.py -q -rs -s
 ```
-Expected: `8 passed`, no skips. The `-s` output shows the alias names, the NPC's form key and the objective list (all equal to the index's Test ESP values, or `discover` would have failed).
+Expected: `10 passed`, no skips. The `-s` output shows the alias names, the NPC's form key and the objective list (all equal to the index's Test ESP values, or `discover` would have failed).
 
 Then the evidence and the stop:
 ```bash
@@ -318,6 +351,7 @@ tools/box/box_files.sh pull skse64.log Skython.log Skython/python.log
 grep -E "loaded correctly|no version data|disabled" out/box-skse/skse64.log
 grep -E "error|ERROR|critical" out/box-skse/Skython.log | grep -v livetest_broken || echo "no unexpected errors"
 tools/box/box_stop.sh
+tools/box/box_session.sh down
 tools/box/box_plugins.sh show                               # plugins.txt equals its backup again
 ```
 Expected: the plugin list (for the RESULTS entry), `no unexpected errors`, `box_stop.sh` reports the game gone, and `show` prints the backup's content with no `SkythonTest.esp` line. No save was written (this task never saves).
@@ -326,7 +360,7 @@ Expected: the plugin list (for the RESULTS entry), `no unexpected errors`, `box_
 
 Append to the "Plugin findings" list in `spikes/RESULTS.md`, filled from the Step 3 output (no bracket left):
 ```markdown
-- **Task 50, own-script tests on SkythonTest.esp (box, Windows-native, <date and time>, Skyrim 1.6.1170.0, skythonbase, never saved; 1 launch, SKSE plugins: <list from skse64.log>):** `test_m15_own_script.py` 8 passed; `discover` confirmed the plan's ESP values (aliases 0-3 with their names and scripts, `SkythonTestNPC`, objectives <list>). **Alias arguments work (closes Task 29's gap):** `DescribeAlias` answered `empty` for aliases 0-2, `filled` for alias 0 after `ForceRefTo(SkythonTestNPC)` (the others stayed `empty`), `none` for `None` (the argument arrives as that alias, R45 BindAlias path); the plain `Skyrim.esm` alias 0 of 0x10FDD5 and the location alias are `type_mismatch` (<message>). **LocationAlias ops (closes S4's NOT_RUN):** on alias 3 (`SkythonTestLocationAlias`), `ForceLocationTo` WhiterunLocation then `SkythonTestLocation`, `GetLocation` returned each, `Clear` then `GetLocation -> None`. Own bytecode member `BumpCounter(3)` -> 10 from the initial 7 (`GetCounter` agreed). Full property `Computed`: get and set `unsupported` before anything runs.
+- **Task 50, own-script tests on SkythonTest.esp (box, Windows-native, <date and time>, Skyrim 1.6.1170.0, skythonbase, never saved; 1 launch, SKSE plugins: <list from skse64.log>):** `test_m15_own_script.py` 10 passed; `discover` confirmed the plan's ESP values (aliases 0-3 with their names and scripts, `SkythonTestNPC`, objectives <list>). **Alias arguments work (closes Task 29's gap):** `DescribeAlias` answered `empty` for aliases 0-2, `filled` for alias 0 after `ForceRefTo(SkythonTestNPC)` (the others stayed `empty`), `none` for `None` (the argument arrives as that alias, R45 BindAlias path); the plain `Skyrim.esm` alias 0 of 0x10FDD5 and the location alias are `type_mismatch` (<message>); `DescribeLocationAlias` answered `empty`, `filled` after `ForceLocationTo(SkythonTestLocation)`, `empty` after `Clear`, `none` for `None`; `AliasTag(alias 0)` -> 5 (a parameter typed as our own alias script). **LocationAlias ops (closes S4's NOT_RUN):** on alias 3 (`SkythonTestLocationAlias`), `ForceLocationTo` WhiterunLocation then `SkythonTestLocation`, `GetLocation` returned each, `Clear` then `GetLocation -> None`. Own bytecode member `BumpCounter(3)` -> 10 from the initial 7 (`GetCounter` agreed). Full property `Computed`: get and set `unsupported` before anything runs.
 ```
 Also update the S4 row's `LocationAlias NOT_RUN (50 empty), verified in M1.5` to `LocationAlias NOT_RUN in S4; PASS in M1.5 (Task 50)`.
 

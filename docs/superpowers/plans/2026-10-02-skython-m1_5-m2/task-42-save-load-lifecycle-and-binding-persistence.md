@@ -8,7 +8,7 @@
 >
 > **Depends on:** Task 38 (`plugin/config/variants/trace-timing.ini`), Task 39 (the diagnostics keys), Task 40 (events, `support.py` helpers), Task 41 (save/load, helpers).
 >
-> **Saves:** this task makes exactly three new throwaway saves per run, `skython_t42a_<ts>`, `skython_t42b_<ts>` and `skython_t42bind_<ts>` (`new_save_name`, count 0 first, polled to 1 after), and loads only those and `s4test`. Never `save` over anything. All three go on the owner's removal list. End games with `tools/box/box_stop.sh`.
+> **Saves:** this task makes exactly three new throwaway saves per run, `skython_t42a_<ts>`, `skython_t42b_<ts>` and `skython_t42bind_<ts>` (`new_save_name`, count 0 first; `wait_save_file` polls until the `.ess` is on disk before any load, because `game.save` answers when the engine started the save, not when the file is written), and loads only those and `s4test` (Step 5b loads `skython_t42bind_<ts>` again in a second launch). Never `save` over anything. All three go on the owner's removal list. End games with `tools/box/box_stop.sh`.
 >
 > **Record only for the carry-forward:** the PackHandle/GetAlias measurement changes no behaviour. R45 stands whatever it shows: aliases are never bound on demand, alias arguments still bind only an object already bound to the alias.
 
@@ -20,8 +20,8 @@
 - Modify: `livetest/results/new_saves.txt` (appended by `new_save_name`), `spikes/RESULTS.md` (append)
 
 **Interfaces:**
-- Consumes: Task 38 `plugin/config/variants/trace-timing.ini` (the dev ini with `trace_timing = true`; this task only checks and deploys it); Task 33 `Config::trace_timing` (`settings::Get().trace_timing`); Task 36 `Game.on`, `Game.on_game_loaded`, `Game.save`, `Game.load`, `Event.suppressed`, `Event.epoch`; Task 39 `game.state` diagnostics `events_suppressed_total` (one of the four event-hub keys Task 39 owns; this task adds none); Task 40 events `menu_open`, `cell_attach`, `activate`, `game_loaded`, and `livetest/support.py` `PLAYER`, `translate_player`; Task 41 `livetest/support.py` `new_save_name(tag)`, `wait_save_file(name)`, `load_save(game, name)`, `box_save_count`; v1 `pv::ResolveTarget` (`PapyrusValues.cpp`), `values.Form`/`Alias`, `errors.StaleReference`/`NotFound`/`TypeMismatch`, `livetest/s4test.env` (`SPY_S4_REF`, `SPY_PLAIN_QUEST`, `SPY_PLAIN_ALIAS`), `support.log_text`, `support.spy_env`.
-- Produces: the live proof of spec 8's save/load lifecycle on throwaway saves (Review Focus 3 and 5); the dev log line `values: <target> bound before call: <true|false>` (once per target per epoch, only with `trace_timing = true`; Task 44 and later probes may read it); `livetest/results/binding_persistence.json`; RESULTS entries for the owner question from Task 29.
+- Consumes: Task 39 `life::SaveLoadInProgress` as the hub's loading source (true only for a save load or new game, never for door, fast-travel or coc loading screens; this task's load of a save is exactly such a load, so `cell_attach` raised during it is suppressed); Task 38 `plugin/config/variants/trace-timing.ini` (the dev ini with `trace_timing = true`; this task only checks and deploys it); Task 33 `Config::trace_timing` (`settings::Get().trace_timing`); Task 36 `Game.on`, `Game.on_game_loaded`, `Game.save`, `Game.load`, `Event.suppressed`, `Event.epoch`; Task 39 `game.state` diagnostics `events_suppressed_total` (one of the four event-hub keys Task 39 owns; this task adds none); Task 40 events `menu_open`, `cell_attach`, `activate`, `game_loaded`, and `livetest/support.py` `PLAYER`, `translate_player`; Task 41 `livetest/support.py` `new_save_name(tag)`, `wait_save_file(name)`, `load_save(game, name)`, `box_save_count`; v1 `pv::ResolveTarget` (`PapyrusValues.cpp`), `values.Form`/`Alias`, `errors.StaleReference`/`NotFound`/`TypeMismatch`, `livetest/s4test.env` (`SPY_S4_REF`, `SPY_PLAIN_QUEST`, `SPY_PLAIN_ALIAS`), `support.log_text`, `support.spy_env`.
+- Produces: the live proof of spec 8's save/load lifecycle on throwaway saves (Review Focus 3 and 5); `livetest/results/binding_persistence.json` keys `save`, `alias`, `cold_form`, `control`, `fresh_launch`, `old_epoch_event_reference`, `when`; the dev log line `values: <target> bound before call: <true|false>` (once per target per epoch, only with `trace_timing = true`; Task 44 and later probes may read it); `livetest/results/binding_persistence.json`; RESULTS entries for the owner question from Task 29.
 
 - [ ] **Step 1: The dev-only binding log in `ResolveTarget`**
 
@@ -81,7 +81,9 @@ from support import (PLAYER, REPO, load_save, log_text, new_save_name, spy_env, 
 IRON_SWORD = "Skyrim.esm|0x012EB7"
 GLASS_BOW = "Skyrim.esm|0x0139A5"
 STEEL_WAR_AXE = "Skyrim.esm|0x013983"   # a cold base form: nothing in Tasks 27-41 touches it
+IRON_DAGGER = "Skyrim.esm|0x01397E"     # the control: a second cold form, first touched only after the save
 STATE: dict = {}
+RESULT_FILE = REPO / "livetest" / "results" / "binding_persistence.json"
 
 
 def place(game, base_key: str, persist: bool) -> Form:
@@ -199,23 +201,56 @@ def test_packhandle_and_getalias_binding_across_a_save(game):
     assert before_save.startswith("works"), before_save
     assert isinstance(game.call_method(axe, "Form", "GetName"), str)       # cold: PackHandle binds it
     name_c = save_new(game, "t42bind")
+    # Control: a second cold form bound only AFTER the save. Its binding is not in the save, so after the load its
+    # line must read false. If it reads true, the VM kept bindings in memory across the load and the in-session axe
+    # result says nothing about the save: "inconclusive" (the fresh-launch run below decides).
+    dagger = game.form(IRON_DAGGER)
+    assert isinstance(game.call_method(dagger, "Form", "GetName"), str)
     load_save(game, name_c)
     after_load = _owning_quest(game, alias)                                # first call after the load
     game.call_method(axe, "Form", "GetName")
+    game.call_method(dagger, "Form", "GetName")
     axe_lines = _bound_lines("0x013983") or _bound_lines("013983")
+    dagger_lines = _bound_lines("0x01397E") or _bound_lines("01397E")
+    control_ok = len(dagger_lines) >= 2 and dagger_lines[-1].endswith("bound before call: false")
     result = {"save": name_c, "alias": {"quest": quest_hex, "alias_id": int(alias_s), "before_save": before_save,
                                         "after_load": after_load},
               "cold_form": {"form": STEEL_WAR_AXE, "log": axe_lines},
+              "control": {"form": IRON_DAGGER, "log": dagger_lines,
+                          "in_session_result": "valid" if control_ok else "inconclusive"},
+              "fresh_launch": None,                                      # filled by test_binding_after_a_fresh_launch
               "old_epoch_event_reference": STATE.get("old_event_ref"), "when": time.strftime("%Y-%m-%d %H:%M:%S")}
-    out = REPO / "livetest" / "results" / "binding_persistence.json"
-    out.write_text(json.dumps(result, indent=2) + "\n")
+    RESULT_FILE.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
     # The cold form must show "false" before the save and one more line after the load (a new epoch).
     assert len(axe_lines) >= 2 and axe_lines[0].endswith("bound before call: false"), axe_lines
-```
-`SKYTHON_LIVE= uv run --project python pytest livetest/test_m2_lifecycle.py -q` → `3 skipped`.
+    assert len(dagger_lines) >= 2 and dagger_lines[0].endswith("bound before call: false"), dagger_lines
 
-The `bound before call` line names the target the way `pv::Describe` prints it (Task 28: the form key or the decimal id); check the first box run's log for the exact spelling of the axe and adjust only the two `_bound_lines(...)` arguments if neither matches.
+
+def test_binding_after_a_fresh_launch(game):
+    """The definitive measurement: a new game process that loads the t42bind save from the main menu (Step 5b), so
+    nothing can survive in memory. Runs only when SKYTHON_T42_FRESH names that save; loads nothing itself."""
+    import os
+    name_c = os.environ.get("SKYTHON_T42_FRESH")
+    if not name_c:
+        pytest.skip("Step 5b only: set SKYTHON_T42_FRESH to the t42bind save loaded at launch")
+    quest_hex, alias_s = spy_env("SPY_PLAIN_QUEST", "SPY_PLAIN_ALIAS")
+    quest = game.resolve(form_id=int(quest_hex, 16))
+    alias = game.alias(quest, int(alias_s))
+    first = _owning_quest(game, alias)                                     # the very first call of this process
+    assert isinstance(game.call_method(game.form(STEEL_WAR_AXE), "Form", "GetName"), str)
+    axe_lines = _bound_lines("0x013983") or _bound_lines("013983")
+    result = json.loads(RESULT_FILE.read_text())
+    assert result["save"] == name_c, (result["save"], name_c)
+    result["fresh_launch"] = {"alias_first_call": first, "cold_form_log": axe_lines,
+                              "when": time.strftime("%Y-%m-%d %H:%M:%S")}
+    RESULT_FILE.write_text(json.dumps(result, indent=2) + "\n")
+    print(json.dumps(result["fresh_launch"], indent=2))
+    assert axe_lines, "no 'bound before call' line for the axe after the fresh launch"
+```
+`SKYTHON_LIVE= uv run --project python pytest livetest/test_m2_lifecycle.py -q` → `4 skipped`.
+
+The `bound before call` line names the target the way `pv::Describe` prints it (Task 28: the form key or the decimal id); check the first box run's log for the exact spelling of the axe and the dagger and adjust only the `_bound_lines(...)` arguments if neither matches.
 
 - [ ] **Step 4: Build**
 
@@ -245,16 +280,34 @@ tools/box/box_files.sh pull Skython.log >/dev/null
 grep "bound before call\|saveload: \|events: game_loaded" "$SKSE_LOG_DIR/Skython.log"
 grep '\[error\]' "$SKSE_LOG_DIR/Skython.log" | grep -v livetest_broken || echo "no unexpected errors"
 tools/box/box_stop.sh
-tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini   # back to the dev ini for the next task
 ```
-Expected: 3 passed; three new names, each count 1; the printed lines (keep them all): the load line (`suppressed_rise>0`, first `cell_attach` with `suppressed>0` and the new epoch), the old-epoch reference outcome, the runtime-id line and the two stale outcomes, and the binding JSON; `no unexpected errors` (the `type_mismatch` of the alias probe is an ordinary error reply, not a log error). A crash anywhere: STOP.
+Expected: 3 passed, 1 skipped (`test_binding_after_a_fresh_launch` is Step 5b); three new names, each count 1; the printed lines (keep them all): the load line (`suppressed_rise>0`, first `cell_attach` with `suppressed>0` and the new epoch), the old-epoch reference outcome, the runtime-id line and the two stale outcomes, and the binding JSON; `no unexpected errors` (the `type_mismatch` of the alias probe is an ordinary error reply, not a log error). A crash anywhere: STOP. The control line: `control.in_session_result` in `binding_persistence.json` is `valid` (the dagger read `false` after the load) or `inconclusive`.
+
+- [ ] **Step 5b: The fresh-launch measurement (definitive)**
+
+A second launch with the trace-timing ini still deployed; the t42bind save is loaded from the main menu, so no binding can survive in memory:
+```bash
+NAME_C=$(grep '^skython_t42bind_' livetest/results/new_saves.txt | tail -n 1); echo "$NAME_C"
+tools/box/box_launch.sh
+tools/box/box_wait_log.sh Skython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
+tools/box/box_session.sh up && source out/box-live.env
+tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
+tools/box/box_console.sh "load $NAME_C"
+tools/box/box_wait_log.sh Skython.log "events: game_loaded epoch 1" 300
+source livetest/s4test.env
+SKYTHON_T42_FRESH="$NAME_C" SKYTHON_LIVE=1 SKYTHON_BOX=1 uv run --project python pytest \
+  "livetest/test_m2_lifecycle.py::test_binding_after_a_fresh_launch" -q -s -rs
+tools/box/box_stop.sh
+tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini   # back to the dev ini (whatever the results)
+```
+Expected: 1 passed; `binding_persistence.json` now has `fresh_launch` (the alias's first call and the axe's `bound before call` lines in the new process). Run the last `box_deploy.sh` line even if a step above failed or stopped early: the dev ini must be back before the next task.
 
 - [ ] **Step 6: Record**
 
 Append to `spikes/RESULTS.md`: `**Task 42, save/load lifecycle and binding persistence (box, Windows-native, <date/time>, Skyrim 1.6.1170.0, s4test plus three new saves; <n> launches; SKSE plugins: <list>):**` with:
 - Review Focus 5: subscriptions survived; `game_loaded` and later frames carried epoch <n>; persistent `PlaceAtMe` item valid after the load; vanilla NPC valid; the old-epoch event reference's outcome; the runtime-id line and both stale outcomes (`StaleReference` when the ids matched).
 - Review Focus 3: `events_suppressed_total` rise, the first delivered `cell_attach`'s `suppressed` and epoch, the Loading Menu `menu_open` delivered unsuppressed.
-- **Owner question (Task 29), PackHandle/GetAlias save persistence:** the alias line verbatim (`before_save`, `after_load`: `works` means the `Alias` object that `Quest.GetAlias` bound was in the save and came back; `type_mismatch` means it did not) and every `values: ... bound before call:` line for the axe (the line after the load says whether the PackHandle binding came back). Close with "No behaviour change; R45 stands."
+- **Owner question (Task 29), PackHandle/GetAlias save persistence:** the alias line verbatim (`before_save`, `after_load`: `works` means the `Alias` object that `Quest.GetAlias` bound was in the save and came back; `type_mismatch` means it did not) and every `values: ... bound before call:` line for the axe (the line after the load says whether the PackHandle binding came back); the **control** (the dagger's lines and `in_session_result`: `inconclusive` means the in-session answer is not evidence); the **fresh launch** (`fresh_launch.alias_first_call` and the axe's lines in the new process: this is the definitive answer). Close with "No behaviour change; R45 stands."
 - **Owner removal list (Task 42):** the three `skython_t42*` names, none removed without itemised sign-off.
 
 - [ ] **Step 7: Commit**

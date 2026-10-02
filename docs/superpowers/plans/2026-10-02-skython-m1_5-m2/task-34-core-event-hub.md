@@ -2,16 +2,17 @@
 
 > Part of the [Skython M1.5/M2 plan](README.md). Before starting, read the plan index's **Global Constraints**, **Contracts** ("C++ core", "Event frame", "Filters", "Loading rule", "The v1 events table") and the Part D brief for Task 34. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Depends on:** Task 33 (the generated `kEvents`, `find_event`, `EventSpec`, `EventField`, `EventFieldType`, the limits `kDefaultEventQueue`, `kMaxEventQueue`, `kMaxSubscriptions`, `kMaxFilterValues`, `kMaxEventsPerNext`, `kIntMin`/`kIntMax`, and the fixture `protocol/v1/fixtures/events.json`). Linux only; no game.
+> **Depends on:** Task 33 (the generated `kEvents`, `find_event`, `EventSpec`, `EventField`, `EventFieldType`, the limits `kDefaultEventQueue`, `kMaxEventQueue`, `kMaxSubscriptions`, `kMaxSubscriptionsPerConsumer`, `kMaxQueuedEventBytesPerConsumer`, `kMaxFilterValues`, `kMaxEventsPerNext`, `kIntMin`/`kIntMax`, and the fixture `protocol/v1/fixtures/events.json`). Linux only; no game.
 
 **What this task builds.** `spy::EventHub`, a pure C++ object with no game and no Python in it. Game sinks (Tasks 39-40) and the `Skython.Send` native (Task 46) call `Wants(event)` and, when it is true, `Push(event, data)`; Python threads drain it through `Next` (via `_skython.next_events`, Task 35). It owns:
 - **consumers** (one per `skython.Game`, one per bridge connection), from a counter that starts at 1 and is never reused; 0 means "none";
-- **subscriptions**, each owned by one consumer, with an id from a second counter (starts at 1, never reused), a validated filter, and its own bounded queue (`max_queue`, default `kDefaultEventQueue`, at most `kMaxEventQueue`). A full queue drops its **oldest** event and counts it; at most `kMaxSubscriptions` subscriptions exist across all consumers (beyond: `busy`);
+- **subscriptions**, each owned by one consumer, with an id from a second counter (starts at 1, never reused), a validated filter, and its own bounded queue (`max_queue`, default `kDefaultEventQueue`, at most `kMaxEventQueue`). A full queue drops its **oldest** event and counts it; one consumer holds at most `kMaxSubscriptionsPerConsumer` subscriptions and all consumers together at most `kMaxSubscriptions` (beyond either: `busy`; controller ruling R61, so one bridge client cannot starve the in-process scripts);
+- **a byte budget per consumer** (R61): each queued event counts `dump_json(data).size() + kEventFrameOverheadBytes` (96) bytes, measured once per push outside the lock; when a push takes the consumer over `EventHubOptions::max_queued_bytes_per_consumer` (default `kMaxQueuedEventBytesPerConsumer`, 16 MiB), the oldest events of the subscription being pushed to are dropped (counted in its `dropped`) until the consumer is under it again; if that subscription has nothing older, the new event itself is dropped (its `seq` was taken, so the gap still equals `dropped`). Memory is then bounded by the budget, not by `max_queue` x event size;
 - **per-subscription `seq`**: +1 for every event accepted for that subscription (queued, whether later delivered or dropped), so gaps equal drops; an event suppressed by the loading rule takes no `seq`;
 - **pending counts** `dropped` and `suppressed` per subscription, reported on its next delivered event and then reset (the frame carries each only when non-zero);
 - **the epoch stamp** (`EventHubOptions::epoch`, read when the event is pushed) and **the loading rule** (`EventHubOptions::loading`: while it is true, an event whose table entry has `deliver_while_loading: false` is not queued; each matching subscription's `suppressed` goes up by one).
 
-**Locking (the contract leaves the layout to this task; this is the choice).** One hub mutex guards every queue and table, and **one condition variable is shared by all consumers** (`Next` waits for "my consumer has an event, or is gone"; `Push` notifies only when it queued something). In addition each consumer has a **drain mutex**: `Next` holds it from the moment it takes events off the queues until its frame texts are built and returned, and `Unsubscribe` and `CloseConsumer` take it before they purge. So once `Unsubscribe` or `CloseConsumer` returns, no `Next` call still holds an event of that subscription, while frame building (`dump_json`, up to `kMaxEventsPerNext` events) never runs under the hub mutex and never lengthens `Push`'s one short critical section. Lock order is always drain, then hub; nobody waits on the condition variable while holding a drain mutex. `Push` reads `loading()` (only for events not delivered while loading) and `epoch()` once per call, **outside** the hub mutex (in the plugin they take the lifecycle's own lock), makes one shared copy of the data, and inside the lock only filters, stamps and moves pointers. `Wants` is lock-free: one atomic subscriber count per table entry. `Push` never throws (an allocation failure loses that one event) and never waits for a reader.
+**Locking (the contract leaves the layout to this task; this is the choice).** One hub mutex guards every queue and table, and **each consumer has its own condition variable** (`Next` waits on its consumer's for "my consumer has an event, or is gone"; `Push` notifies only the consumers it queued something for, after releasing the hub mutex, so a push wakes no unrelated consumer; the condition variable is held by `shared_ptr`, so a `Next` waiting on it is safe while `CloseConsumer` erases the consumer and then notifies it). `Next` merges a consumer's subscriptions with a min-heap of their front events' push order, so taking `k` events costs O(subscriptions + k log subscriptions) under the hub mutex, not O(k x subscriptions). In addition each consumer has a **drain mutex**: `Next` holds it from the moment it takes events off the queues until its frame texts are built and returned, and `Unsubscribe` and `CloseConsumer` take it before they purge. So once `Unsubscribe` or `CloseConsumer` returns, no `Next` call still holds an event of that subscription, while frame building (`dump_json`, up to `kMaxEventsPerNext` events) never runs under the hub mutex and never lengthens `Push`'s one short critical section. Lock order is always drain, then hub; nobody waits on the condition variable while holding a drain mutex. `Push` reads `loading()` (only for events not delivered while loading) and `epoch()` once per call, **outside** the hub mutex (in the plugin they take the lifecycle's own lock), makes one shared copy of the data, and inside the lock only filters, stamps and moves pointers. `Wants` is lock-free: one atomic subscriber count per table entry (incremented and decremented with release order, read with acquire order, so a sink that sees a count above zero also sees the subscription's setup). `Push` never throws (an allocation failure loses that one event) and never waits for a reader.
 
 **Filters.** `parse_event_filter(event, filter)` validates a filter against the event's table entry and normalises it once, so matching under the lock is a flat compare: a form field keeps form ids (from form references that carry `form_id`; a form key alone is refused with "resolve the form first"), an int field keeps Papyrus Int values, a string field keeps ASCII-lowercased strings. `null` (or an absent filter) means "every event". `filter_matches(filter, event, data)` is AND across fields, OR within one; a missing or `null` event field never matches; strings compare ASCII-case-insensitively (bytes above 0x7F are compared as they are). Error messages are the substrings `events.json`'s `invalid_filters` entries name, for example `hit needs a filter on target or aggressor`.
 
@@ -21,7 +22,7 @@
 - `core/CMakeLists.txt` needs no change: it globs `src/*.cpp` and `tests/*.cpp`.
 
 **Interfaces:**
-- Consumes: `spy::kEvents`, `spy::find_event`, `spy::EventSpec`, `spy::EventField`, `spy::EventFieldType`, `spy::kDefaultEventQueue`, `spy::kMaxEventQueue`, `spy::kMaxSubscriptions`, `spy::kMaxFilterValues`, `spy::kMaxEventsPerNext`, `spy::kIntMin`, `spy::kIntMax` (Task 33, generated); `spy::ProtocolError`, `spy::dump_json`, `spy::describe`, `spy::clip_text`, `spy::ascii_lower`, `spy::is_uint`, `spy::form_ref_from_json` (v1 core); `protocol/v1/fixtures/events.json` (Task 33).
+- Consumes: `spy::kEvents`, `spy::find_event`, `spy::EventSpec`, `spy::EventField`, `spy::EventFieldType`, `spy::kDefaultEventQueue`, `spy::kMaxEventQueue`, `spy::kMaxSubscriptions`, `spy::kMaxSubscriptionsPerConsumer`, `spy::kMaxQueuedEventBytesPerConsumer`, `spy::kMaxFilterValues`, `spy::kMaxEventsPerNext`, `spy::kIntMin`, `spy::kIntMax` (Task 33, generated); `spy::ProtocolError`, `spy::dump_json`, `spy::describe`, `spy::clip_text`, `spy::ascii_lower`, `spy::is_uint`, `spy::form_ref_from_json` (v1 core); `protocol/v1/fixtures/events.json` (Task 33).
 - Produces (exactly the index Contracts, `core/include/spy/events.h`):
 ```cpp
 using SubId = std::uint64_t;       // from a counter, never reused, starts at 1
@@ -29,10 +30,12 @@ using ConsumerId = std::uint64_t;  // from a counter, never reused, starts at 1;
 struct EventFilter { std::vector<std::pair<std::string, std::vector<json>>> any_of; };  // validated; empty = match all
 EventFilter parse_event_filter(std::string_view event, const json& filter);  // throws ProtocolError(bad_request)
 bool filter_matches(const EventFilter&, std::string_view event, const json& data);
+inline constexpr std::size_t kEventFrameOverheadBytes = 96;  // added to each queued event's data length (byte budget)
 struct EventHubOptions {
-    std::function<std::uint32_t()> epoch;   // LifecycleState::epoch in the plugin; a counter in tests
-    std::function<bool()> loading;          // LifecycleState::loading in the plugin; a switch in tests
-    // Task 44 adds, only if its probe PASSes, one optional last member (so existing aggregate initializers stay valid):
+    std::function<std::uint32_t()> epoch;   // LifecycleState::epoch (life::Epoch) in the plugin; a counter in tests
+    std::function<bool()> loading;          // life::SaveLoadInProgress in the plugin (Task 39); a switch in tests
+    std::size_t max_queued_bytes_per_consumer = kMaxQueuedEventBytesPerConsumer;  // R61; tests lower it
+    // Task 44 adds, only if its probe PASSes, one optional last member (initializers that set it are designated):
     // std::function<void(std::string_view event, bool wanted)> on_wanted;  // called outside the hub's lock when an
     //                                                                      // event's subscriber count goes 0->1 or 1->0
 };
@@ -56,7 +59,7 @@ class EventHub {
     std::uint64_t SuppressedTotal() const;
 };
 ```
-  Behaviour details later tasks rely on: an empty `EventHubOptions::epoch` stamps 0 and an empty `loading` means "never loading"; `Subscribe` on consumer 0, an unknown or a closed consumer is `bad_request` whose message starts `no event consumer` (the Dispatcher answers consumer 0 itself with exactly `no event consumer`, Task 35); `filter` absent or `null` means no filter; `Unsubscribe` of an unknown sub and of another consumer's sub are both `not_found` with the same message; `Next` on an unknown or closed consumer returns empty at once; `Next` with `max_events == 0` returns empty; frame texts are `{"type":"event","event","sub","seq","epoch","data"}` plus `dropped`/`suppressed` when non-zero, made with `dump_json`.
+  Behaviour details later tasks rely on: an empty `EventHubOptions::epoch` stamps 0 and an empty `loading` means "never loading"; a consumer's 257th subscription is `busy` with the message `consumer <n> has 256 subscriptions (max_subscriptions_per_consumer)` and the 1025th of all consumers `busy` `too many event subscriptions (1024)`; the byte budget drops as described above; `Subscribe` on consumer 0, an unknown or a closed consumer is `bad_request` whose message starts `no event consumer` (the Dispatcher answers consumer 0 itself with exactly `no event consumer`, Task 35); `filter` absent or `null` means no filter; `Unsubscribe` of an unknown sub and of another consumer's sub are both `not_found` with the same message; `Next` on an unknown or closed consumer returns empty at once; `Next` with `max_events == 0` returns empty; frame texts are `{"type":"event","event","sub","seq","epoch","data"}` plus `dropped`/`suppressed` when non-zero, made with `dump_json`.
 
 ---
 
@@ -424,17 +427,79 @@ TEST_CASE("EventHub: Next returns push order across a consumer's subscriptions, 
 TEST_CASE("EventHub: max_subscriptions counts every consumer; beyond it Subscribe is busy")
 {
     spy::EventHub hub({});
+    static_assert(spy::kMaxSubscriptions % spy::kMaxSubscriptionsPerConsumer == 0);
+    constexpr std::size_t kFull = spy::kMaxSubscriptions / spy::kMaxSubscriptionsPerConsumer;  // consumers, each at its cap
+    std::vector<spy::ConsumerId> cs;
+    std::vector<spy::SubId> first;
+    for (std::size_t k = 0; k < kFull; ++k) {
+        cs.push_back(hub.OpenConsumer());
+        for (std::size_t i = 0; i < spy::kMaxSubscriptionsPerConsumer; ++i) {
+            const auto s = subscribe(hub, cs.back(), "death");
+            if (i == 0) first.push_back(s);
+        }
+    }
+    CHECK(hub.Subscriptions() == spy::kMaxSubscriptions);
+    const auto extra = hub.OpenConsumer();
+    const auto t = thrown([&] { hub.Subscribe(extra, {{"event", "death"}}); });
+    CHECK(t.code == spy::ErrorCode::busy);
+    CHECK(t.message == "too many event subscriptions (" + std::to_string(spy::kMaxSubscriptions) + ")");
+    hub.Unsubscribe(cs[0], first[0]);
+    CHECK_NOTHROW(hub.Subscribe(extra, {{"event", "death"}}));
+    hub.CloseConsumer(cs[0]);
+    CHECK(hub.Subscriptions() == spy::kMaxSubscriptions - spy::kMaxSubscriptionsPerConsumer + 1);
+}
+
+TEST_CASE("EventHub: one consumer holds at most max_subscriptions_per_consumer; other consumers still subscribe (R61)")
+{
+    spy::EventHub hub({});
     const auto c1 = hub.OpenConsumer();
     const auto c2 = hub.OpenConsumer();
     std::vector<spy::SubId> mine;
-    for (std::size_t i = 0; i < spy::kMaxSubscriptions - 24; ++i) mine.push_back(subscribe(hub, c1, "death"));
-    for (int i = 0; i < 24; ++i) subscribe(hub, c2, "death");
-    CHECK(hub.Subscriptions() == spy::kMaxSubscriptions);
-    CHECK(thrown([&] { hub.Subscribe(c2, {{"event", "death"}}); }).code == spy::ErrorCode::busy);
-    hub.Unsubscribe(c1, mine.back());
+    for (std::size_t i = 0; i < spy::kMaxSubscriptionsPerConsumer; ++i) mine.push_back(subscribe(hub, c1, "death"));
+    const auto t = thrown([&] { hub.Subscribe(c1, {{"event", "death"}}); });
+    CHECK(t.code == spy::ErrorCode::busy);
+    CHECK(t.message == "consumer " + std::to_string(c1) + " has " + std::to_string(spy::kMaxSubscriptionsPerConsumer) +
+                           " subscriptions (max_subscriptions_per_consumer)");
     CHECK_NOTHROW(hub.Subscribe(c2, {{"event", "death"}}));
-    hub.CloseConsumer(c1);
-    CHECK(hub.Subscriptions() == 25u);
+    hub.Unsubscribe(c1, mine.back());
+    CHECK_NOTHROW(hub.Subscribe(c1, {{"event", "death"}}));
+    CHECK(hub.Subscriptions() == spy::kMaxSubscriptionsPerConsumer + 1);
+}
+
+TEST_CASE("EventHub: a consumer's queued bytes stay within its budget; the pushed subscription's oldest go first (R61)")
+{
+    const json big_a = channel("a", std::string(1000, 'x'));
+    const json big_b = channel("b", std::string(1000, 'x'));
+    const std::size_t frame = spy::dump_json(big_a).size() + spy::kEventFrameOverheadBytes;
+    REQUIRE(frame == spy::dump_json(big_b).size() + spy::kEventFrameOverheadBytes);
+    spy::EventHub hub(spy::EventHubOptions{.epoch = {}, .loading = {}, .max_queued_bytes_per_consumer = 3 * frame + frame / 2});
+    const auto c = hub.OpenConsumer();
+    const auto a = subscribe(hub, c, "channel", {{"channel", json::array({"a"})}}, 1000);
+    for (int i = 0; i < 10; ++i) hub.Push("channel", big_a);
+    auto got = next(hub, c);
+    REQUIRE(got.size() == 3);  // max_queue 1000 never bound it: the budget did
+    CHECK((got[0]["sub"] == a && got[0]["seq"] == 8 && got[0]["dropped"] == 7));
+    CHECK(hub.DroppedTotal() == 7u);
+
+    // Another subscription's bytes count too: when the pushed subscription has nothing older, the new event goes.
+    const auto b = subscribe(hub, c, "channel", {{"channel", json::array({"b"})}}, 1000);
+    for (int i = 0; i < 3; ++i) hub.Push("channel", big_b);  // b fills the budget
+    hub.Push("channel", big_a);                              // a has nothing older: this event itself is dropped
+    got = next(hub, c);
+    REQUIRE(got.size() == 3);
+    for (const auto& e : got) CHECK(e["sub"] == b);
+    hub.Push("channel", big_a);
+    got = next(hub, c);
+    REQUIRE(got.size() == 1);
+    CHECK((got[0]["sub"] == a && got[0]["seq"] == 12 && got[0]["dropped"] == 1));  // seq 11 was the dropped one
+    CHECK(hub.DroppedTotal() == 8u);
+
+    // A second consumer has its own budget.
+    const auto d = hub.OpenConsumer();
+    subscribe(hub, d, "channel", {{"channel", json::array({"a"})}}, 1000);
+    for (int i = 0; i < 3; ++i) hub.Push("channel", big_b);
+    for (int i = 0; i < 3; ++i) hub.Push("channel", big_a);
+    CHECK(next(hub, d).size() == 3);
 }
 
 TEST_CASE("EventHub: Next waits for an event, times out empty, returns at once for an unknown consumer, and CloseConsumer wakes it")
@@ -587,6 +652,7 @@ Expected: `fatal error: spy/events.h: No such file or directory`.
 #include <map>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -605,18 +671,25 @@ EventFilter parse_event_filter(std::string_view event, const json& filter);  // 
 // AND across fields, OR within one; a missing or null event field never matches; strings ignore ASCII case.
 bool filter_matches(const EventFilter&, std::string_view event, const json& data);
 
+// Each queued event counts dump_json(data).size() + this many bytes against its consumer's byte budget.
+inline constexpr std::size_t kEventFrameOverheadBytes = 96;
+
 struct EventHubOptions
 {
-    std::function<std::uint32_t()> epoch;   // LifecycleState::epoch in the plugin; a counter in tests (empty: 0)
-    std::function<bool()> loading;          // LifecycleState::loading in the plugin; a switch in tests (empty: false)
-    // No other member in this task. Task 44 appends `on_wanted` (optional, last) only if its sink-detach probe passes.
+    std::function<std::uint32_t()> epoch;   // LifecycleState::epoch (life::Epoch) in the plugin; a counter in tests (empty: 0)
+    std::function<bool()> loading;          // life::SaveLoadInProgress in the plugin (Task 39); a switch in tests (empty: false)
+    std::size_t max_queued_bytes_per_consumer = kMaxQueuedEventBytesPerConsumer;  // R61; tests lower it
+    // No other member in this task. Task 44 appends `on_wanted` (optional, last) only if its sink-detach probe passes;
+    // an initializer that sets it uses designated initializers (.epoch = ..., .loading = ..., .on_wanted = ...).
 };
 
 // Event consumers, subscriptions and their bounded queues (spec 4.6). Pure C++: no game, no Python. Thread-safe.
-// Locking: one hub mutex for every queue and table plus one condition variable shared by all consumers; and one
-// drain mutex per consumer, held by Next while it takes events and builds their frames, and taken by Unsubscribe and
-// CloseConsumer before they purge (lock order: drain, then hub). Push reads epoch() and loading() once, outside the
-// hub mutex, and holds the hub mutex only to filter, stamp and queue.
+// Locking: one hub mutex for every queue and table plus one condition variable per consumer (notified after the hub
+// mutex is released); and one drain mutex per consumer, held by Next while it takes events and builds their frames,
+// and taken by Unsubscribe and CloseConsumer before they purge (lock order: drain, then hub). Push reads epoch() and
+// loading() and measures the event's bytes once, outside the hub mutex, and holds the hub mutex only to filter, stamp
+// and queue. Bounds: max_queue per subscription, max_subscriptions_per_consumer and max_subscriptions, and
+// max_queued_bytes_per_consumer (the oldest events of the pushed subscription are dropped to stay under it).
 class EventHub
 {
 public:
@@ -639,7 +712,7 @@ public:
     std::uint64_t SuppressedTotal() const;
 
 private:
-    struct Queued { std::uint64_t order; std::uint64_t seq; std::uint32_t epoch; std::shared_ptr<const json> data; };
+    struct Queued { std::uint64_t order; std::uint64_t seq; std::uint32_t epoch; std::size_t bytes; std::shared_ptr<const json> data; };
     struct Sub
     {
         SubId id = 0;
@@ -656,13 +729,15 @@ private:
     {
         std::vector<SubId> subs;
         std::size_t queued = 0;  // events in all of its subscriptions' queues
+        std::size_t bytes = 0;   // their byte-budget sizes (Queued::bytes)
         std::shared_ptr<std::mutex> drain = std::make_shared<std::mutex>();
+        std::shared_ptr<std::condition_variable> cv = std::make_shared<std::condition_variable>();  // Next waits here
     };
-    void RemoveSubLocked(SubId id);  // hub mutex held
+    void RemoveSubLocked(SubId id);             // hub mutex held
+    void DropOldestLocked(Sub& s, Consumer& c);  // hub mutex held; s.queue not empty
 
     EventHubOptions options_;
     mutable std::mutex mx_;
-    std::condition_variable cv_;
     std::map<ConsumerId, Consumer> consumers_;
     std::map<SubId, Sub> subs_;
     std::array<std::vector<SubId>, kEvents.size()> by_event_;
@@ -836,24 +911,36 @@ void EventHub::RemoveSubLocked(SubId id)
     Sub& s = it->second;
     auto& list = by_event_[s.event_index];
     list.erase(std::remove(list.begin(), list.end(), id), list.end());
-    wanted_[s.event_index].fetch_sub(1, std::memory_order_relaxed);
+    wanted_[s.event_index].fetch_sub(1, std::memory_order_release);
     const auto c = consumers_.find(s.consumer);
     if (c != consumers_.end()) {
         c->second.queued -= s.queue.size();
+        for (const auto& q : s.queue) c->second.bytes -= q.bytes;
         auto& owned = c->second.subs;
         owned.erase(std::remove(owned.begin(), owned.end(), id), owned.end());
     }
     subs_.erase(it);
 }
 
+void EventHub::DropOldestLocked(Sub& s, Consumer& c)
+{
+    c.bytes -= s.queue.front().bytes;
+    s.queue.pop_front();
+    ++s.dropped;
+    ++dropped_total_;
+    --c.queued;
+}
+
 void EventHub::CloseConsumer(ConsumerId consumer)
 {
     std::shared_ptr<std::mutex> drain;
+    std::shared_ptr<std::condition_variable> cv;
     {
         std::lock_guard lk(mx_);
         const auto c = consumers_.find(consumer);
         if (c == consumers_.end()) return;
         drain = c->second.drain;
+        cv = c->second.cv;  // kept alive past the erase: a waiting Next holds it too
     }
     {
         std::lock_guard dl(*drain);  // a Next of this consumer finishes building its frames first
@@ -864,7 +951,7 @@ void EventHub::CloseConsumer(ConsumerId consumer)
         for (SubId id : owned) RemoveSubLocked(id);
         consumers_.erase(consumer);
     }
-    cv_.notify_all();  // a Next waiting for this consumer returns empty
+    cv->notify_all();  // a Next waiting for this consumer returns empty
 }
 
 json EventHub::Subscribe(ConsumerId consumer, const json& args)
@@ -887,6 +974,9 @@ json EventHub::Subscribe(ConsumerId consumer, const json& args)
     std::lock_guard lk(mx_);
     const auto c = consumers_.find(consumer);
     if (c == consumers_.end()) bad("no event consumer " + std::to_string(consumer) + " (never opened, or closed)");
+    if (c->second.subs.size() >= kMaxSubscriptionsPerConsumer)
+        throw ProtocolError(ErrorCode::busy, "consumer " + std::to_string(consumer) + " has " +
+                                                 std::to_string(kMaxSubscriptionsPerConsumer) + " subscriptions (max_subscriptions_per_consumer)");
     if (subs_.size() >= kMaxSubscriptions)
         throw ProtocolError(ErrorCode::busy, "too many event subscriptions (" + std::to_string(kMaxSubscriptions) + ")");
     const SubId id = next_sub_++;
@@ -899,7 +989,7 @@ json EventHub::Subscribe(ConsumerId consumer, const json& args)
     subs_.emplace(id, std::move(s));
     by_event_[index].push_back(id);
     c->second.subs.push_back(id);
-    wanted_[index].fetch_add(1, std::memory_order_relaxed);
+    wanted_[index].fetch_add(1, std::memory_order_release);
     return {{"sub", id}, {"event", event}, {"max_queue", max_queue}};
 }
 
@@ -924,7 +1014,7 @@ void EventHub::Unsubscribe(ConsumerId consumer, SubId sub)
 bool EventHub::Wants(std::string_view event) const
 {
     const EventSpec* s = find_event(event);
-    return s != nullptr && wanted_[index_of(*s)].load(std::memory_order_relaxed) > 0;
+    return s != nullptr && wanted_[index_of(*s)].load(std::memory_order_acquire) > 0;
 }
 
 void EventHub::Push(std::string_view event, json data)
@@ -933,12 +1023,13 @@ void EventHub::Push(std::string_view event, json data)
         const EventSpec* spec = find_event(event);
         if (spec == nullptr) return;
         const std::size_t index = index_of(*spec);
-        if (wanted_[index].load(std::memory_order_relaxed) == 0) return;
+        if (wanted_[index].load(std::memory_order_acquire) == 0) return;
         // Read once, outside the hub mutex: in the plugin both take the lifecycle's own lock.
         const bool suppress = !spec->deliver_while_loading && options_.loading && options_.loading();
         const std::uint32_t epoch = options_.epoch ? options_.epoch() : 0;
+        const std::size_t bytes = dump_json(data).size() + kEventFrameOverheadBytes;  // the byte budget's measure
         const auto shared = std::make_shared<const json>(std::move(data));
-        bool queued = false;
+        std::vector<std::shared_ptr<std::condition_variable>> wake;  // consumers that got an event
         {
             std::lock_guard lk(mx_);
             const std::uint64_t order = ++order_;
@@ -954,18 +1045,17 @@ void EventHub::Push(std::string_view event, json data)
                 }
                 Consumer& c = consumers_.at(s.consumer);
                 ++s.seq;
-                if (s.queue.size() >= s.max_queue) {  // drop-oldest
-                    s.queue.pop_front();
-                    ++s.dropped;
-                    ++dropped_total_;
-                    --c.queued;
-                }
-                s.queue.push_back({order, s.seq, epoch, shared});
+                if (s.queue.size() >= s.max_queue) DropOldestLocked(s, c);  // drop-oldest
+                s.queue.push_back({order, s.seq, epoch, bytes, shared});
                 ++c.queued;
-                queued = true;
+                c.bytes += bytes;
+                // R61: the consumer's byte budget. The pushed subscription's oldest go first; when it has nothing
+                // older, the new event itself goes (its seq is taken, so the gap still equals dropped).
+                while (c.bytes > options_.max_queued_bytes_per_consumer && !s.queue.empty()) DropOldestLocked(s, c);
+                if (!s.queue.empty() && std::find(wake.begin(), wake.end(), c.cv) == wake.end()) wake.push_back(c.cv);
             }
         }
-        if (queued) cv_.notify_all();
+        for (const auto& cv : wake) cv->notify_all();  // after the hub mutex: a woken Next never waits for it
     } catch (...) {
         // Never throws: a sink calls this on a game thread. An allocation failure loses this one event.
     }
@@ -987,8 +1077,10 @@ std::vector<std::string> EventHub::Next(ConsumerId consumer, std::chrono::millis
     std::shared_ptr<std::mutex> drain;
     {
         std::unique_lock lk(mx_);
-        if (consumers_.find(consumer) == consumers_.end()) return {};
-        cv_.wait_for(lk, max_wait, [&] {
+        const auto found = consumers_.find(consumer);
+        if (found == consumers_.end()) return {};
+        const std::shared_ptr<std::condition_variable> cv = found->second.cv;  // outlives an erase by CloseConsumer
+        cv->wait_for(lk, max_wait, [&] {
             const auto c = consumers_.find(consumer);
             return c == consumers_.end() || c->second.queued > 0;
         });
@@ -1003,20 +1095,25 @@ std::vector<std::string> EventHub::Next(ConsumerId consumer, std::chrono::millis
         std::lock_guard lk(mx_);
         const auto c = consumers_.find(consumer);
         if (c == consumers_.end()) return frames;
-        while (items.size() < max_events && c->second.queued > 0) {
-            Sub* oldest = nullptr;  // the subscription whose front event was pushed first
-            for (SubId id : c->second.subs) {
-                const auto it = subs_.find(id);
-                if (it == subs_.end() || it->second.queue.empty()) continue;
-                if (oldest == nullptr || it->second.queue.front().order < oldest->queue.front().order) oldest = &it->second;
-            }
-            if (oldest == nullptr) break;
+        // A min-heap of (push order of the front event, subscription): k events cost O(subs + k log subs).
+        using Head = std::pair<std::uint64_t, Sub*>;
+        const auto later = [](const Head& a, const Head& b) { return a.first > b.first; };  // orders are unique
+        std::priority_queue<Head, std::vector<Head>, decltype(later)> heads(later);
+        for (SubId id : c->second.subs) {
+            const auto it = subs_.find(id);
+            if (it != subs_.end() && !it->second.queue.empty()) heads.emplace(it->second.queue.front().order, &it->second);
+        }
+        while (items.size() < max_events && !heads.empty()) {
+            Sub* oldest = heads.top().second;  // the subscription whose front event was pushed first
+            heads.pop();
             Queued q = std::move(oldest->queue.front());
             oldest->queue.pop_front();
             --c->second.queued;
+            c->second.bytes -= q.bytes;
             items.push_back({oldest->id, oldest->event_index, q.seq, q.epoch, oldest->dropped, oldest->suppressed, std::move(q.data)});
             oldest->dropped = 0;
             oldest->suppressed = 0;
+            if (!oldest->queue.empty()) heads.emplace(oldest->queue.front().order, oldest);
         }
     }
     frames.reserve(items.size());
@@ -1070,7 +1167,7 @@ Run: `cmake -S core -B core/build/asan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAG
 Expected: `0`, then `[doctest] Status: SUCCESS!`.
 
 Run: `cmake -S core -B core/build/tsan -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_FLAGS="-fsanitize=thread -include $PWD/core/tests/support/tsan_gcc11.h" >/dev/null && cmake --build core/build/tsan -j >/dev/null && setarch "$(uname -m)" -R core/build/tsan/spy_core_tests -tc="*EventHub*" 2>&1 | grep -E "WARNING|test cases"`
-Expected: no `WARNING: ThreadSanitizer` line, and `[doctest] test cases:  14 |  14 passed | 0 failed | ...` (the count of other skipped cases varies). Under TSan the whole run takes about half a minute; that is expected.
+Expected: no `WARNING: ThreadSanitizer` line, and `[doctest] test cases:  16 |  16 passed | 0 failed | ...` (the count of other skipped cases varies). Under TSan the whole run takes about half a minute; that is expected.
 
 - [ ] **Step 7: Commit**
 

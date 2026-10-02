@@ -1,6 +1,6 @@
 # Task 53: Live event tests on the test ESP: fragment `Send`, overflow, unsubscribe, ESP NPC across a load
 
-The M2 event path end to end on our own plugin: a quest stage fragment's `Skython.Send` reaches a remote subscriber and an in-process one; a mod event sent from Papyrus carries an ESP form as sender; a slow callback overflows its queue while the game and the other subscriptions carry on, through the bridge (the client-side bound of `RemoteEventStream`) and in-process (the hub's bound) (Review Focus 2); unsubscribing mid-stream stops delivery; and the ESP's persistent NPC survives a save and reload, and its death after the reload (in alias 0) carries the new epoch, the player as `killer`, and the death rule's `stage_100` (Review Focus 5).
+The M2 event path end to end on our own plugin: a quest stage fragment's `Skython.Send` reaches a remote subscriber and an in-process one; a mod event raised through `Form.SendModEvent` (the SKSE native, called through the bridge) carries an ESP form as sender; a slow callback overflows its queue while the game and the other subscriptions carry on, through the bridge and in-process (Review Focus 2), with every drop reported in `dropped`, whether it was made in the hub (each subscription's `max_queue` bounds the hub queue too) or in the client's `RemoteEventStream`; a `quest_stage` subscription on the ESP quest sees the death rule's stage 100; unsubscribing mid-stream stops delivery; and the ESP's persistent NPC survives a save and reload, and its death after the reload (in alias 0) carries the new epoch, the player as `killer`, and the death rule's `stage_100` (Review Focus 5).
 
 > Part of the [Skython M1.5/M2 plan](README.md). Read the index's **Global Constraints** (Saves), **Contracts** (event frame, `seq`/`dropped`, Python `skython.events` including `RemoteEventStream`, Test ESP) and **Review Focus** 2 and 5 first. Steps use checkbox (`- [ ]`) syntax.
 
@@ -18,7 +18,8 @@ The M2 event path end to end on our own plugin: a quest stage fragment's `Skytho
 **Interfaces:**
 - Consumes:
   - Task 36 (`skython.events` / `Game`): `Event(name, sub, seq, epoch, data, dropped=0, suppressed=0)`; `Game.on(event, filter, fn, *, max_queue)`, `on_death(actor, fn)`, `on_mod_event(name, fn)`, `on_channel(channel, fn)`, `on_game_loaded(fn)` → `Subscription` (`close()`, `closed`); one dispatch thread per `Game`, callbacks in event order.
-  - Task 41: `Game.save(name) -> str`, `Game.load(name, *, wait=True) -> dict` (new `epoch`).
+  - Task 41: `Game.save(name) -> str` (answers once the engine **started** the save; the `.ess` can appear a moment later), `Game.load(name, *, wait=True) -> dict` (new `epoch`); `livetest/support.py` `new_save_name(tag) -> str` (checks `box_saves.sh count` is 0, records the name in `livetest/results/new_saves.txt`) and `wait_save_file(name, timeout=30.0)`.
+  - Task 36: `on_quest_stage(quest, fn, *, stage=None)`.
   - Task 46: `Skython.Send(string channel, string payload)` callable as `game.call("Skython", "Send", channel, payload)`; `channel` event data `{"channel", "payload", "truncated"}`.
   - Task 39: `mod_event` data `{"name", "str_arg", "num_arg", "sender"}`; `death` data `{"victim", "killer"}` with `killer` filled from `TESDeathEvent::actorKiller` (index Contracts: `Actor.Kill(player)` gives the player's form reference, form id `0x14`); Task 40: `game_loaded` data `{"new_game"}`.
   - Task 37: remote `Game`s deliver through `RemoteEventStream`, bounded per subscription by its `max_queue` (drop-oldest, client drops added to the next delivered event's `dropped`, so `seq` gaps equal `dropped` sums).
@@ -27,7 +28,7 @@ The M2 event path end to end on our own plugin: a quest stage fragment's `Skytho
   - v1: `support.diagnostics(session)["max_task_drain_ms"]`, `support.box_pull`, `support.fresh`, `support.BOX`, `smoke.py_dir()`.
 - Produces:
   - `livetest/scripts/livetest_events/__init__.py`: `MOD_EVENT = "skython_esp_live"`, `SLOW_CHANNEL = "skython_test_slow"`, `FILE = "livetest_events.json"`; at setup it subscribes (own `Game`) to `channel` (`CHANNEL`), `mod_event` (`MOD_EVENT`), `game_loaded`, and a slow `channel` subscription on `SLOW_CHANNEL` (`max_queue` 4, a 2 s sleep per event), and rewrites `livetest_events.json` (next to `python.log`) after every event: `{"status": "subscribed"|"failed", "events": [{"name", "sub", "seq", "epoch", "dropped", "suppressed", "data", "t"}], "slow": [same shape], "errors": [...]}`, last 500 events each. Importable on Linux (it imports `_skython` only inside functions). Task 56 extends it.
-  - `livetest/test_m2_events_esp.py`; one new throwaway save `skython_t53_<timestamp>`.
+  - `livetest/test_m2_events_esp.py`; one new throwaway save from `new_save_name("t53")`; the RESULTS line naming where each of the 20 v1 events is checked live.
 
 Limits used below (from recorded numbers, RESULTS Task 31): `DRAIN_LIMIT_MS = 4.5` (twice the measured `max_task_drain_ms` 2.2454 for a 904-task burst); a bridge call during the burst must return within 1 s (Task 31 remote p99: 100.28 ms).
 
@@ -134,12 +135,13 @@ Expected: `skython_esp_live livetest_events.json`.
 Create `livetest/test_m2_events_esp.py`:
 ```python
 """M2 events on SkythonTest.esp (Task 53): a stage fragment's Skython.Send reaches a remote and an in-process
-subscriber, a Papyrus mod event with an ESP sender, overflow under a slow callback (remote: RemoteEventStream's
-client-side bound; in-process: the hub's bound), unsubscribe mid-stream, and the ESP NPC across a save and reload
-(its death in alias 0: killer = the player, stage_100 from the death rule). Needs skythonbase (fresh_save) and livetest/scripts deployed (livetest_events).
-The last test leaves one new save, skython_t53_<timestamp> (owner's removal list). Run with -s."""
+subscriber, a mod event raised through Form.SendModEvent with an ESP sender, overflow under a slow callback (drops
+reported in `dropped`, whether made in the hub or in the client's RemoteEventStream), unsubscribe mid-stream, and the
+ESP NPC across a save and reload (its death in alias 0: killer = the player, quest_stage 100 and stage_100 from the
+death rule). Needs skythonbase (fresh_save), livetest/scripts deployed (livetest_events) and a fresh launch (the
+in-process overflow test expects the script's slow subscription to start at seq 1). The last test leaves one new
+save from new_save_name("t53") (recorded in livetest/results/new_saves.txt for the owner's removal list). Run -s."""
 import json
-import subprocess
 import threading
 import time
 
@@ -148,11 +150,10 @@ import pytest
 import _testesp as t
 from livetest_events import FILE, MOD_EVENT, SLOW_CHANNEL, SLOW_QUEUE
 from smoke import py_dir
-from support import BOX, REPO, box_pull, diagnostics, fresh
+from support import BOX, box_pull, diagnostics, fresh, new_save_name, wait_save_file
 
 pytestmark = pytest.mark.usefixtures("fresh_save")
 DRAIN_LIMIT_MS = 4.5   # 2 x Task 31's max_task_drain_ms (2.2454 ms, 904 tasks in one drain)
-SAVE = f"skython_t53_{time.strftime('%Y%m%d%H%M%S')}"
 
 
 class Recorder:
@@ -201,11 +202,12 @@ def wait_inproc(pred, timeout: float, why: str, key: str = "events"):
     raise AssertionError(f"in-process livetest_events: {why} within {timeout} s; last file: {inproc()!r}")
 
 
-def save_count(name: str) -> int:
-    r = subprocess.run([str(REPO / "tools" / "box" / "box_saves.sh"), "count", name],
-                       capture_output=True, text=True, timeout=120)
-    assert r.returncode == 0, r.stdout + r.stderr
-    return int(r.stdout.strip())
+def inproc_last_seq(name: str) -> int:
+    """The highest seq the in-process script has recorded for `name` so far (0 when none or no file yet). Events
+    newer than a step have a higher seq on the same subscription; seq is used instead of the file's "t" stamps because
+    those come from the box's clock, not this machine's."""
+    d = inproc()
+    return max((e["seq"] for e in (d or {}).get("events", []) if e["name"] == name), default=0)
 
 
 @pytest.fixture(scope="module")
@@ -219,9 +221,8 @@ def mgame(session, fresh_save):
 
 @pytest.fixture(scope="module")
 def esp(mgame):
-    h = t.discover(mgame)
-    t.ensure_running(mgame, h.quest)
-    return h
+    t.ensure_running(mgame, t.quest(mgame))  # first: alias scripts may bind only once the quest runs (discover uses them)
+    return t.discover(mgame)
 
 
 def test_inprocess_script_is_subscribed():
@@ -236,29 +237,33 @@ def test_stage_fragment_send_reaches_remote_and_inprocess(game, esp):
     rec = Recorder()
     sub = game.on_channel(t.CHANNEL, rec)
     try:
+        seq0 = inproc_last_seq("channel")      # only in-process events recorded after this point count
         game.call_method(esp.quest, "Quest", "SetStage", 10)
         want = t.stage_payload(10)
         ev = rec.wait(lambda evs: next((e for e in evs if e.data["payload"].lower() == want), None), 20,
                       f"no {want} on {t.CHANNEL}")
         assert ev.name == "channel" and ev.data["channel"].lower() == t.CHANNEL and ev.data["truncated"] is False
         assert ev.epoch == game.state()["epoch"] and ev.dropped == 0
-        mine = wait_inproc(lambda evs: [e for e in evs if e["name"] == "channel"
-                                        and e["data"]["payload"].lower() == want], 30, f"no {want}")
+        mine = wait_inproc(lambda evs: [e for e in evs if e["name"] == "channel" and e["seq"] > seq0
+                                        and e["data"]["payload"].lower() == want], 30, f"no new {want}")
         assert mine[-1]["epoch"] == ev.epoch
     finally:
         sub.close()
 
 
-def test_papyrus_mod_event_with_an_esp_sender(game, esp):
+def test_mod_event_via_form_sendmodevent_with_an_esp_sender(game, esp):
+    # The SKSE native Form.SendModEvent called through the bridge on the ESP quest (not a Papyrus script of ours).
     rec = Recorder()
     sub = game.on_mod_event(MOD_EVENT, rec)
     try:
+        seq0 = inproc_last_seq("mod_event")
         game.call_method(esp.quest, "Form", "SendModEvent", MOD_EVENT, "esp", 2.5)
         ev = rec.wait(lambda evs: evs[0] if evs else None, 20, f"no mod_event {MOD_EVENT}")
         d = ev.data
         assert d["name"].lower() == MOD_EVENT and d["str_arg"].lower() == "esp" and d["num_arg"] == 2.5, d
         assert d["sender"].form_id == esp.quest.form_id and t.same_key(d["sender"], t.QUEST_KEY), d
-        wait_inproc(lambda evs: [e for e in evs if e["name"] == "mod_event"], 30, f"no mod_event {MOD_EVENT}")
+        wait_inproc(lambda evs: [e for e in evs if e["name"] == "mod_event" and e["seq"] > seq0], 30,
+                    f"no new mod_event {MOD_EVENT}")
     finally:
         sub.close()
 
@@ -275,8 +280,9 @@ def check_drop_accounting(seq_dropped: list, total: int) -> None:
 
 
 def test_slow_callback_overflows_while_the_game_and_other_subscriptions_carry_on(session, game, esp):
-    """Remote: the bridge's pump drains the hub at once, so the drops happen in this client's RemoteEventStream,
-    bounded by the subscription's max_queue 4, and arrive in `dropped` exactly as the hub's would."""
+    """Remote: the subscription's max_queue 4 bounds both the hub queue and this client's RemoteEventStream queue,
+    so drops may be made in the hub (if the bridge's pump falls behind) or in the client; either way they are reported
+    in `dropped` on the next delivered event, and seq gaps equal the dropped sums."""
     slow_events = []
 
     def slow(event):
@@ -328,7 +334,9 @@ def test_slow_callback_overflows_while_the_game_and_other_subscriptions_carry_on
 
 def test_slow_callback_overflows_in_process(session, game, esp):
     """In-process: livetest_events' slow SLOW_CHANNEL subscription (max_queue 4, 2 s per event) on its own Game;
-    the hub drops oldest while the callback sleeps. Only this test sends on SLOW_CHANNEL, so its seq starts at 1."""
+    the hub drops oldest while the callback sleeps. Only this test sends on SLOW_CHANNEL and the script subscribes at
+    launch, so its seq starts at 1: this assumes a fresh launch (a second run in the same launch sees seq continue
+    and fails here; relaunch instead of relaxing the check)."""
     burst = [f"slow_{i}" for i in range(20)]
     drain_before = diagnostics(session)["max_task_drain_ms"]
     b = game.batch()
@@ -370,16 +378,17 @@ def test_unsubscribe_mid_stream(game, esp):
 
 
 def test_esp_npc_survives_save_and_reload_and_its_death_has_the_new_epoch(game, esp):
-    assert save_count(SAVE) == 0, f"a save named {SAVE}* already exists on the box: STOP, never save over it"
-    deaths, loaded, stages = Recorder(), Recorder(), Recorder()
+    save = new_save_name("t53")              # checks box_saves.sh count is 0; records it for the removal list
+    deaths, loaded, stages, quest_stages = Recorder(), Recorder(), Recorder(), Recorder()
     s_death = game.on_death(esp.npc, deaths)
     s_loaded = game.on_game_loaded(loaded)
     s_stage = game.on_channel(t.CHANNEL, stages)
+    s_qstage = game.on_quest_stage(esp.quest, quest_stages, stage=100)   # the ESP quest's own quest_stage event
     try:
         epoch0 = game.state()["epoch"]
-        assert game.save(SAVE) == SAVE
-        assert save_count(SAVE) == 1, f"{SAVE}.ess was not written"
-        epoch1 = game.load(SAVE, wait=True)["epoch"]
+        assert game.save(save) == save           # the engine started the save
+        wait_save_file(save)                     # the .ess can appear a moment after game.save answers
+        epoch1 = game.load(save, wait=True)["epoch"]
         assert epoch1 > epoch0
         ev = loaded.wait(lambda evs: next((e for e in evs if e.epoch == epoch1), None), 30, "no game_loaded")
         assert ev.data["new_game"] is False
@@ -396,13 +405,16 @@ def test_esp_npc_survives_save_and_reload_and_its_death_has_the_new_epoch(game, 
         hit = stages.wait(lambda evs: next((e for e in evs if e.data["payload"].lower() == want), None), 20,
                           f"no {want} after the alias 0 actor died (the death rule: STOP)")
         assert hit.epoch == epoch1, hit
+        qs = quest_stages.wait(lambda evs: evs[0] if evs else None, 20, "no quest_stage 100 on the ESP quest")
+        assert qs.data["quest"].form_id == esp.quest.form_id and qs.data["stage"] == 100 and qs.epoch == epoch1, qs
         wait_inproc(lambda evs: [e for e in evs if e["name"] == "game_loaded" and e["epoch"] == epoch1], 30,
                     f"no game_loaded with epoch {epoch1}")
     finally:
         s_death.close()
         s_loaded.close()
         s_stage.close()
-    print(f"\nsave {SAVE}: epoch {epoch0} -> {epoch1}; death {death!r}")
+        s_qstage.close()
+    print(f"\nsave {save}: epoch {epoch0} -> {epoch1}; death {death!r}")
 ```
 
 Collect without a game:
@@ -421,21 +433,23 @@ tools/box/box_plugins.sh add
 tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log 'python host: running' 600
 tools/box/box_session.sh up && source out/box-live.env && source livetest/s4test.env
+tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600   # fresh_save's game.load is refused while "starting"
 export SKYTHON_LIVE=1 SKYTHON_BOX=1
 uv run --project python pytest livetest/test_m2_events_esp.py -q -rs -s
 tools/box/box_files.sh pull skse64.log Skython.log Skython/python.log
 grep -E "loaded correctly|no version data|disabled" out/box-skse/skse64.log
 grep -E "livetest_events|skython.events" out/box-skse/Skython/python.log | tail -20
 tools/box/box_stop.sh
+tools/box/box_session.sh down
 tools/box/box_plugins.sh show
 ```
-Expected: `7 passed`, no skips; the remote overflow test prints the slow subscription's `(seq, dropped, payload)` triples (several with `dropped > 0`) and the fast list with all 23 payloads; the in-process overflow test prints the script's slow list (last seq 20, several `dropped > 0`); `python.log` has no traceback from `livetest_events` or `skython.events`; `show` prints the backup with no `SkythonTest.esp` line. Note the save name printed by the last test.
+Expected: `7 passed`, no skips; the remote overflow test prints the slow subscription's `(seq, dropped, payload)` triples (several with `dropped > 0`) and the fast list with all 23 payloads; the in-process overflow test prints the script's slow list (last seq 20, several `dropped > 0`); `python.log` has no traceback from `livetest_events` or `skython.events`; `show` prints the backup with no `SkythonTest.esp` line. Note the save name printed by the last test (also the last line of `livetest/results/new_saves.txt`).
 
 - [ ] **Step 4: Record in RESULTS**
 
 Append to "Plugin findings" in `spikes/RESULTS.md` (filled, no bracket left) and add the save to the removal list:
 ```markdown
-- **Task 53, events on the test ESP (box, Windows-native, <date and time>, Skyrim 1.6.1170.0, skythonbase then <save>; 1 launch, SKSE plugins: <list>):** `test_m2_events_esp.py` 7 passed. Stage 10's fragment `Skython.Send` reached a remote `on_channel` and the in-process `livetest_events` script with the same epoch <n>. `SendModEvent` from the ESP quest: sender `SkythonTest.esp|0x000800`. Overflow through the bridge (`max_queue` 4, 2 s callback, 23 events: 3 stage fragments + 20 `Send` in a batch; drops in the client's `RemoteEventStream`): slow subscription delivered <k> events with dropped <list> (seq gaps equal drops, last seq 23); the fast subscription on the same Game got all 23 with no drops. Overflow in-process (`livetest_events` slow subscription on `skython_test_slow`, `max_queue` 4, 20 `Send`; drops in the hub): delivered <k> with dropped <list>, last seq 20; bridge call latency max <ms> ms during the burst; `max_task_drain_ms` <before> -> <after>. Unsubscribe mid-stream: nothing after `close()`. ESP NPC across `<save>`: epoch <e0> -> <e1>, still valid; after `ForceRefTo` into alias 0 and `Kill(player)` its `death` carried epoch <e1> and `killer` = the player, and the death rule's `stage_100` arrived; `game_loaded` reached the in-process script. New save: `<save>` (removal list).
+- **Task 53, events on the test ESP (box, Windows-native, <date and time>, Skyrim 1.6.1170.0, skythonbase then <save>; 1 launch, SKSE plugins: <list>):** `test_m2_events_esp.py` 7 passed. Stage 10's fragment `Skython.Send` reached a remote `on_channel` and the in-process `livetest_events` script with the same epoch <n>. `Form.SendModEvent` (SKSE native, through the bridge) on the ESP quest: sender `SkythonTest.esp|0x000800`. Overflow through the bridge (`max_queue` 4, 2 s callback, 23 events: 3 stage fragments + 20 `Send` in a batch; drops reported in `dropped`, whether made in the hub or in the client's `RemoteEventStream`): slow subscription delivered <k> events with dropped <list> (seq gaps equal drops, last seq 23); the fast subscription on the same Game got all 23 with no drops. Overflow in-process (`livetest_events` slow subscription on `skython_test_slow`, `max_queue` 4, 20 `Send`; drops in the hub): delivered <k> with dropped <list>, last seq 20; bridge call latency max <ms> ms during the burst; `max_task_drain_ms` <before> -> <after>. Unsubscribe mid-stream: nothing after `close()`. ESP NPC across `<save>`: epoch <e0> -> <e1>, still valid; after `ForceRefTo` into alias 0 and `Kill(player)` its `death` carried epoch <e1> and `killer` = the player, and the death rule's `quest_stage` 100 (ESP quest) and `stage_100` arrived; `game_loaded` reached the in-process script. New save: `<save>` (removal list). **Live event coverage (all 20 v1 events):** `death`, `dying` (incl. `killer`) Task 39 `test_death_and_dying_with_victim_filter`/`test_death_killer_is_null_for_kill_none`, `death` again here on the ESP NPC; `quest_stage`, `quest_start`, `quest_stop` Task 39 `test_quest_start_stage_stop` (vanilla quest), `quest_stage` again here (ESP quest, stage 100); `mod_event` Task 39 `test_mod_event_fields_and_case_insensitive_name_filter` and here; `channel` Task 46 `test_send_reaches_a_channel_subscriber` and here; `hit`, `equip`, `unequip`, `container_changed`, `activate`, `menu_open`, `menu_close`, `cell_attach`, `cell_detach`, `player_location` Task 40 (`test_m2_events_batch2.py`); `game_loaded` Tasks 40, 41 (`test_load_from_gameplay_raises_epoch_and_game_loaded`), 42 and here; `game_saved` Task 41 (with a throwaway save); `new_game` Task 49 Step 5 (main-menu `coc`: <seen | Task 40 defect recorded>); `suppressed` during a save load Task 42. <Any event whose named check did not pass in its task's RESULTS entry: listed here as a gap for the owner | none>.
 ```
 Removal list line: `- <save>.ess (Task 53)`; and under box files: `- Data\SKSE\Plugins\Skython\scripts\livetest_events\ and scripts\_testesp.py (Tasks 50, 53; run on every launch)`.
 

@@ -15,7 +15,7 @@ The spec's M1.5 milestone (section 9) names three engine probes, all run through
 - **Rendered text, method A (screenshot):** `Quest.SetObjectiveDisplayed(idx, False, False)` then `SetObjectiveDisplayed(idx, True, True)` (force) makes the HUD show the objective banner for a few seconds; `tools/box/box_shot.sh <png>` is started at once. Up to 3 tries per probe; the worker opens each PNG and records whether the banner is visible and what it says.
 - **Rendered text, method B (console):** `tools/box/box_console.sh "sqo SkythonTestQuest"` (ShowQuestObjectives); the reply is recorded verbatim. Whether `sqo` prints resolved names or raw tags is itself recorded, not assumed.
 - **State:** `Quest.IsObjectiveDisplayed(idx)`, aliases 0 and 1's `ReferenceAlias.GetReference()` with each filled reference's `ObjectReference.GetDisplayName()` (SKSE), and alias 3's `LocationAlias.GetLocation()` with the location's `Form.GetName()` (SKSE), through the bridge.
-- **Verdict per probe:** PASS when method A or B shows every tag replaced by the filled alias's name (the reference's display name for aliases 0 and 1, the location's name for alias 3); FAIL when either shows a raw `<Alias=...>` tag or an empty name where a filled alias should appear; INCONCLUSIVE otherwise (STOP).
+- **Verdict per probe (method A decides, method B only supports):** the rendered HUD banner (method A) is what a player sees, so it decides. **PASS** when a screenshot shows every tag replaced by the filled alias's name (the reference's display name for aliases 0 and 1, the location's name for alias 3). **FAIL** when a screenshot shows a raw `<Alias=...>` tag or an empty name where a filled alias should appear. When no screenshot captured the banner: method B (`sqo`) can give **PASS** only if its reply shows the resolved names; if `sqo` shows raw tags (or nothing) and method A captured nothing, the verdict is **INCONCLUSIVE**, never FAIL (`sqo` may print the stored text without resolving tags; that is recorded as a fact about `sqo`, not about the objective). A method-B result that disagrees with a captured method-A result is recorded; method A's verdict stands.
 
 **Files:**
 - Create: `livetest/test_m15_probes.py`
@@ -27,10 +27,10 @@ The spec's M1.5 milestone (section 9) names three engine probes, all run through
 - Consumes:
   - Task 48 (index Contracts, **Test ESP**): objective 10 with the text `Skython test: <Alias=SkythonTarget>, <Alias=SkythonItem>, <Alias=SkythonPlace>`, i.e. reference aliases 0 and 1 and location alias 3 (`SkythonTestLocationAlias`); `SkythonTestNPC` `SkythonTest.esp|0x000804`; `SkythonTestLocation` `|0x000801`.
   - Task 50: `_testesp.discover(game) -> Esp` (`quest`, `ref_aliases`, `location_alias`, `alias_names`, `npc`, `objective`), `ensure_running`, `location(game)`, `PLAYER`, `IRON_SWORD`, `TARGET_ALIAS`, `ITEM_ALIAS`, `PLACE_ALIAS`, `ALIAS_NAMES`, `OBJECTIVE`.
-  - Task 41: `Game.save(name, *, timeout=60.0) -> str`, `Game.load(name, *, timeout=120.0, wait=True) -> dict` (returns the interactive state with the new `epoch`).
+  - Task 41: `Game.save(name, *, timeout=60.0) -> str` (answers once the engine **started** the save; the `.ess` can appear a moment later), `Game.load(name, *, timeout=120.0, wait=True) -> dict` (returns the interactive state with the new `epoch`); `livetest/support.py` `new_save_name(tag) -> str` (checks `box_saves.sh count` is 0, records the name in `livetest/results/new_saves.txt`) and `wait_save_file(name, timeout=30.0)` (bounded poll until the `.ess` exists).
   - Task 49: `fresh_save`. Box tools: `box_console.sh`, `box_shot.sh [LOCAL_PNG]`, `box_saves.sh count NAME`.
   - Natives: `Quest.SetActive(bool)`, `Quest.SetObjectiveDisplayed(int, bool, bool)`, `Quest.IsObjectiveDisplayed(int)`, `ReferenceAlias.ForceRefTo(ObjectReference)`, `ReferenceAlias.GetReference()`, `LocationAlias.ForceLocationTo(Location)`, `LocationAlias.GetLocation()`, `ObjectReference.GetDisplayName()` (SKSE), `Form.GetName()` (SKSE), `ObjectReference.PlaceAtMe(Form, int, bool, bool)`, `PO3_SKSEFunctions.SetObjectiveText(Quest, string, int)`.
-- Produces: `docs/probes/*.md` (method, raw results, verdict per probe); `out/probes/probes.json` and `out/probes/*.png` (raw, not committed; the PNGs a verdict rests on are copied to `docs/probes/img/`); one new throwaway save `skython_t52_<timestamp>` on the owner's removal list.
+- Produces: `docs/probes/*.md` (method, raw results, verdict per probe); `out/probes/probes.json` and `out/probes/*.png` (raw, not committed; the PNGs a verdict rests on are copied to `docs/probes/img/`); one new throwaway save from `new_save_name("t52")` (a second one only if Step 4 re-runs probe 3), on the owner's removal list.
 
 - [ ] **Step 1: Write the probe test**
 
@@ -39,8 +39,9 @@ Create `livetest/test_m15_probes.py`:
 """Spec section 9's three engine probes on SkythonTest.esp (Task 52). The tests check the mechanics (fills, display
 state, save/load) and collect the evidence for the rendered text: HUD screenshots (box_shot.sh) and the `sqo`
 console reply (box_console.sh). The verdict on the rendered text is the worker's, from that evidence (task file,
-Method). Writes out/probes/probes.json and out/probes/*.png. Run the three in order, with -s; probe 3 leaves one new
-save (skython_t52_<timestamp>, on the owner's removal list)."""
+Method). Writes out/probes/probes.json and out/probes/*.png. Each probe can run alone (-k probe2): the module fixture
+`filled` makes the shared fills. Run with -s; probe 3 leaves one new save (new_save_name("t52"), recorded in
+livetest/results/new_saves.txt for the owner's removal list)."""
 import json
 import subprocess
 import time
@@ -48,13 +49,12 @@ import time
 import pytest
 
 import _testesp as t
-from support import REPO
+from support import REPO, new_save_name, wait_save_file
 
 pytestmark = pytest.mark.usefixtures("fresh_save")
 OUT = REPO / "out" / "probes"
-SAVE = f"skython_t52_{time.strftime('%Y%m%d%H%M%S')}"
 SHOT_TRIES = 3
-RAW: dict = {"save": SAVE}
+RAW: dict = {}
 
 
 def _tool(script: str, *args: str) -> str:
@@ -65,10 +65,6 @@ def _tool(script: str, *args: str) -> str:
 
 def sqo() -> str:
     return _tool("box_console.sh", "sqo SkythonTestQuest")
-
-
-def save_count(name: str) -> int:
-    return int(_tool("box_saves.sh", "count", name).strip())
 
 
 @pytest.fixture(scope="module")
@@ -84,10 +80,24 @@ def mgame(session, fresh_save):
 
 @pytest.fixture(scope="module")
 def esp(mgame):
+    t.ensure_running(mgame, t.quest(mgame))  # first: alias scripts may bind only once the quest runs (discover uses them)
     h = t.discover(mgame)
-    t.ensure_running(mgame, h.quest)
     mgame.call_method(h.quest, "Quest", "SetActive", True)
     return h
+
+
+@pytest.fixture(scope="module")
+def filled(mgame, esp):
+    """The fills every probe uses, made once per module (so `-k probe2` or `-k probe3` alone starts from them):
+    alias 0 <- SkythonTestNPC, alias 1 <- an iron sword placed at the player, alias 3 <- SkythonTestLocation, and
+    objective 10 displayed. Alias 2 stays empty."""
+    sword = mgame.call_method(t.PLAYER, "ObjectReference", "PlaceAtMe", mgame.form(t.IRON_SWORD), 1, True, False)
+    place = t.location(mgame)
+    mgame.call_method(esp.ref_aliases[t.TARGET_ALIAS], "ReferenceAlias", "ForceRefTo", esp.npc)
+    mgame.call_method(esp.ref_aliases[t.ITEM_ALIAS], "ReferenceAlias", "ForceRefTo", sword)
+    mgame.call_method(esp.location_alias, "LocationAlias", "ForceLocationTo", place)
+    mgame.call_method(esp.quest, "Quest", "SetObjectiveDisplayed", esp.objective, True, True)
+    return {"sword": sword, "place": place}
 
 
 def show_and_shoot(game, esp, tag: str) -> list:
@@ -120,12 +130,8 @@ def fills(game, esp) -> list:
     return out
 
 
-def test_probe1_three_alias_tags_in_one_objective(game, esp):
-    sword = game.call_method(t.PLAYER, "ObjectReference", "PlaceAtMe", game.form(t.IRON_SWORD), 1, True, False)
-    place = t.location(game)
-    game.call_method(esp.ref_aliases[t.TARGET_ALIAS], "ReferenceAlias", "ForceRefTo", esp.npc)
-    game.call_method(esp.ref_aliases[t.ITEM_ALIAS], "ReferenceAlias", "ForceRefTo", sword)
-    game.call_method(esp.location_alias, "LocationAlias", "ForceLocationTo", place)
+def test_probe1_three_alias_tags_in_one_objective(game, esp, filled):
+    sword, place = filled["sword"], filled["place"]
     got = fills(game, esp)
     assert [f["ref"]["form_id"] if f["ref"] else None for f in got] == [esp.npc.form_id, sword.form_id,
                                                                         place.form_id], got
@@ -136,7 +142,7 @@ def test_probe1_three_alias_tags_in_one_objective(game, esp):
     print(json.dumps(RAW["probe1"], indent=2))
 
 
-def test_probe2_po3_set_objective_text_with_alias_tags(game, esp):
+def test_probe2_po3_set_objective_text_with_alias_tags(game, esp, filled):
     names = [t.ALIAS_NAMES[i] for i in (t.TARGET_ALIAS, t.ITEM_ALIAS, t.PLACE_ALIAS)]
     text = "Probe two: " + " / ".join(f"<Alias={n}>" for n in names)
     game.call("PO3_SKSEFunctions", "SetObjectiveText", esp.quest, text, esp.objective)
@@ -146,13 +152,14 @@ def test_probe2_po3_set_objective_text_with_alias_tags(game, esp):
     print(json.dumps(RAW["probe2"], indent=2))
 
 
-def test_probe3_objective_and_fills_survive_save_and_reload(game, esp):
-    assert save_count(SAVE) == 0, f"a save named {SAVE}* already exists on the box: STOP, never save over it"
+def test_probe3_objective_and_fills_survive_save_and_reload(game, esp, filled):
+    save = new_save_name("t52")              # checks box_saves.sh count is 0; records it for the removal list
+    RAW.setdefault("saves", []).append(save)
     before = fills(game, esp)
     epoch = game.state()["epoch"]
-    assert game.save(SAVE) == SAVE
-    assert save_count(SAVE) == 1, f"{SAVE}.ess was not written"
-    st = game.load(SAVE, wait=True)
+    assert game.save(save) == save           # the engine started the save
+    wait_save_file(save)                     # the .ess can appear a moment after game.save answers
+    st = game.load(save, wait=True)
     assert st["epoch"] > epoch, (epoch, st)
     after = fills(game, esp)
     displayed = game.call_method(esp.quest, "Quest", "IsObjectiveDisplayed", esp.objective)
@@ -181,16 +188,18 @@ tools/box/box_plugins.sh add
 tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log 'python host: running' 600
 tools/box/box_session.sh up && source out/box-live.env && source livetest/s4test.env
+tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600   # fresh_save's game.load is refused while "starting"
 export SKYTHON_LIVE=1 SKYTHON_BOX=1
 tools/box/box_console.sh --list > out/probes-devbench-tools.json    # recorded in the write-up (which tools exist)
 uv run --project python pytest livetest/test_m15_probes.py -q -rs -s
 tools/box/box_files.sh pull skse64.log Skython.log
 grep -E "loaded correctly|no version data|disabled" out/box-skse/skse64.log
 tools/box/box_stop.sh
+tools/box/box_session.sh down
 tools/box/box_plugins.sh show
 ls -la out/probes/
 ```
-Expected: `3 passed`; `out/probes/probes.json` and nine PNGs (`probe1_try1..3`, `probe2_...`, `probe3_...`); the plugin list shows `po3_PapyrusExtender` loaded correctly; `show` prints the backup with no `SkythonTest.esp` line. Record the save name printed in `probes.json` (`"save"`).
+Expected: `3 passed`; `out/probes/probes.json` and nine PNGs (`probe1_try1..3`, `probe2_...`, `probe3_...`); the plugin list shows `po3_PapyrusExtender` loaded correctly; `show` prints the backup with no `SkythonTest.esp` line. Record the save name printed in `probes.json` (`"saves"`; also the last line of `livetest/results/new_saves.txt`).
 
 - [ ] **Step 3: Read the evidence and decide each verdict**
 
@@ -198,10 +207,19 @@ Open every PNG (the Read tool shows images) and `out/probes/probes.json`. For ea
 
 - [ ] **Step 4: If a verdict is INCONCLUSIVE, try once more, then STOP**
 
-Re-run only that probe with a fresh game (probes 1 and 2 need no save; probe 3 would make a second save, so re-run it only with a new timestamp, which the module name gives automatically):
+Re-run only that probe in a fresh launch (the module fixture `filled` remakes the fills, so each probe runs alone; probes 1 and 2 need no save; a probe-3 rerun makes a second save under a new `new_save_name("t52")` name, which also goes on the removal list):
 ```bash
 cp out/probes/probes.json out/probes/probes-run1.json        # the rerun rewrites probes.json with that probe only
+tools/box/box_plugins.sh add
+tools/box/box_launch.sh
+tools/box/box_wait_log.sh Skython.log 'python host: running' 600
+tools/box/box_session.sh up && source out/box-live.env && source livetest/s4test.env
+tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600
+export SKYTHON_LIVE=1 SKYTHON_BOX=1
 uv run --project python pytest livetest/test_m15_probes.py -q -rs -s -k probe1     # or probe2 / probe3
+tools/box/box_stop.sh
+tools/box/box_session.sh down
+tools/box/box_plugins.sh show
 ```
 Still INCONCLUSIVE: STOP and ask the owner (report what each method showed; options are the owner looking at the in-game Journal once, or a DevBench tool from `out/probes-devbench-tools.json` that can close a menu).
 
@@ -251,9 +269,9 @@ Expected: `probes filled`, then `generic`.
 
 Append to "Plugin findings" in `spikes/RESULTS.md` (filled, no bracket left), and add the save to the removal list section (Task 41 created it; add the line under it):
 ```markdown
-- **Task 52, the three engine probes (box, Windows-native, <date and time>, Skyrim 1.6.1170.0, skythonbase then <save>; 1 launch, SKSE plugins: <list>):** `test_m15_probes.py` 3 passed. Probe 1 (three alias tags in one objective) <verdict>: <one line of evidence>. Probe 2 (PO3 `SetObjectiveText` with alias tags) <verdict>: <evidence>. Probe 3 (save and reload) fills and display <kept/lost>, text after reload <ESP text / runtime text>, tags <resolved/raw>. `sqo` prints <resolved names / raw tags>. Write-ups: `docs/probes/`. New save: `<save>` (removal list).
+- **Task 52, the three engine probes (box, Windows-native, <date and time>, Skyrim 1.6.1170.0, skythonbase then <save>; 1 launch, SKSE plugins: <list>):** `test_m15_probes.py` 3 passed. Probe 1 (three alias tags in one objective) <verdict>: <one line of evidence>. Probe 2 (PO3 `SetObjectiveText` with alias tags) <verdict>: <evidence>. Probe 3 (save and reload) fills and display <kept/lost>, text after reload <ESP text / runtime text>, tags <resolved/raw>. `sqo` prints <resolved names / raw tags>. Write-ups: `docs/probes/`. New save(s): `<save>` (and `<second save>` if Step 4 re-ran probe 3) (removal list).
 ```
-Removal list line: `- <save>.ess (Task 52, probe 3)`.
+Removal list line(s): `- <save>.ess (Task 52, probe 3)` (and `- <second save>.ess (Task 52, probe 3 rerun)` if made).
 
 Check:
 ```bash

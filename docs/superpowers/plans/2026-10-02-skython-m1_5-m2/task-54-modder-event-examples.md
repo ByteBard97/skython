@@ -143,8 +143,6 @@ Needs: Skython M2 (events). Standard library only.
 """
 import collections
 import threading
-import time
-
 PLAYER_ID = 0x14          # the player's form id, the same in every game
 SUMMARY_EVERY_S = 300
 
@@ -182,22 +180,24 @@ class KillTracker:
 
 
 _tracker = None
+_stop = threading.Event()
 
 
 def _summaries():
-    while True:
-        time.sleep(SUMMARY_EVERY_S)
+    while not _stop.wait(SUMMARY_EVERY_S):   # returns True (and the loop ends) once teardown sets _stop
         print(_tracker.summary())
 
 
 def setup(game):
     global _tracker
     _tracker = KillTracker(game)
-    game.on_death(None, _tracker.on_death)     # None: every actor; the filter is applied inside the game
-    threading.Thread(target=_summaries, daemon=True).start()
+    _stop.clear()
+    game.on_death(None, _tracker.on_death)     # None: every actor (no filter); on_death keeps the player's kills
+    threading.Thread(target=_summaries, name="kill_tracker-summary", daemon=True).start()
 
 
 def teardown():
+    _stop.set()                                # a reload must not leave the old summary thread running
     if _tracker:
         print(_tracker.summary())
 ```
@@ -266,7 +266,7 @@ Needs: Skython M2 (events). Standard library only.
 """
 import threading
 
-from skython.errors import NotFound, NotReady
+from skython.errors import ConnectionLost, NotFound, NotReady
 
 QUESTS = ["MQ101", "MQ102", "MQ103"]   # editor ids: Unbound, Before the Storm, Bleak Falls Barrow
 
@@ -303,12 +303,16 @@ def run(game):
             break
         except NotReady:
             continue
+        except ConnectionLost:            # the game (or the bridge) went away: nothing to watch
+            return
     _notifier = Notifier(game)
     for editor_id in QUESTS:
         try:
             _notifier.watch(editor_id)
         except NotFound:
             print(f"quest_stage_notifier: no quest with editor id {editor_id!r}")
+        except Exception as e:            # any other failure skips this quest, never the rest
+            print(f"quest_stage_notifier: cannot watch {editor_id!r} ({type(e).__name__}: {e})")
     print(f"quest_stage_notifier: watching {', '.join(_notifier.watched.values()) or 'nothing'}")
 
 
@@ -337,13 +341,14 @@ After the "The API in five lines" section, add:
 ## Events in four lines
 
 ```python
+# after game.wait_ready(): resolve and form need a loaded save; on_death/on_channel do not
 game.on_death(None, lambda e: print(e.data["victim"], "killed by", e.data["killer"]))   # every death
 game.on_quest_stage(game.resolve(editor_id="MQ101"), lambda e: print("stage", e.data["stage"]))
 game.on_channel("my_mod", lambda e: print(e.data["payload"]))      # Skython.Send("my_mod", ...) from Papyrus
 game.on("hit", {"target": [game.form("Skyrim.esm|0x14")]}, lambda e: print("hit by", e.data["aggressor"]))
 ```
 
-Callbacks run in order on one Skython thread per script, and may make game calls. If a callback is slower than its events, the oldest waiting events are dropped and the next one says how many (`event.dropped`); events raised during a loading screen are not queued (`event.suppressed`).
+Callbacks run in order on one Skython thread per script, and may make game calls. If a callback is slower than its events, the oldest waiting events are dropped and the next one says how many (`event.dropped`); events raised while a save loads are not queued (`event.suppressed`).
 ````
 Replace the Status paragraph with:
 ```markdown
@@ -445,6 +450,7 @@ tools/box/box_deploy.sh --scripts livetest/scripts
 tools/box/box_plugins.sh add
 tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log 'python host: running' 600
+tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600   # fresh_save's game.load is refused while "starting"
 tools/box/box_session.sh up && source out/box-live.env && source livetest/s4test.env
 export SKYTHON_LIVE=1 SKYTHON_BOX=1
 uv run --project python pytest livetest/test_m2_examples.py -q -rs -s
@@ -452,6 +458,7 @@ tools/box/box_files.sh pull skse64.log Skython/python.log
 grep -E "loaded correctly|no version data|disabled" out/box-skse/skse64.log
 grep -E "kill_tracker|papyrus_to_python|quest_stage_notifier" out/box-skse/Skython/python.log
 tools/box/box_stop.sh
+tools/box/box_session.sh down
 tools/box/box_plugins.sh show
 ```
 Expected: `3 passed`; `python.log` shows the three scripts `ok` at load, `kill_tracker: kill #1: Mudcrab`, `papyrus_to_python: chest_opened|Livetest` (any case), `quest_stage_notifier: watching Unbound, Before the Storm, Bleak Falls Barrow` and no traceback; `show` prints the backup. If a call fails with an argument-count or unknown-function error, fix the example and rerun Steps 2 and 4.

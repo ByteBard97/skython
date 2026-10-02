@@ -16,7 +16,7 @@ Carry-forward from v1 Task 30: the property route (ruling R57: reads through the
 
 **Interfaces:**
 - Consumes:
-  - Task 48 (index Contracts, **Test ESP**): `SkythonTestQuestBase` (extends `Quest`; auto properties `BaseCounter` Int = `3`, `BaseLabel` String = `"base label"`); `SkythonTestQuest` (extends it; auto properties `Counter` Int = `7`, `Ratio` Float = `0.5`, `Flag` Bool = `True`, `Label` String = `"initial label"`, `Target` Actor = `SkythonTestNPC` `SkythonTest.esp|0x000804` (VMAD); full property `Computed`; `Int GetCounter()` returns `Counter`, `Int GetBaseCounter()` returns `BaseCounter`); `SkythonTestAlias` on aliases 0-2 (extends `ReferenceAlias`; `Tag` Int = `5`); `SkythonTestLocationAlias` on alias 3 (extends `LocationAlias`; `Tag` Int = `6`). `skythonbase` holds these initial values (Task 49 saves before any write) and `fresh_save` reloads it for this module, so the tests assert them exactly.
+  - Task 48 (index Contracts, **Test ESP**): `SkythonTestQuestBase` (extends `Quest`; auto properties `BaseCounter` Int = `3`, `BaseLabel` String = `"base label"`); `SkythonTestQuest` (extends it; auto properties `Counter` Int = `7`, `Ratio` Float = `0.5`, `Flag` Bool = `True`, `Label` String = `"initial label"`, `Target` Actor = `SkythonTestNPC` `SkythonTest.esp|0x000804` (VMAD); full property `Computed`; `Int GetCounter()` returns `Counter`, `Int GetBaseCounter()` returns `BaseCounter`, `Float GetRatio()` returns `Ratio`, `Bool GetFlag()` returns `Flag`, `Int AliasTag(SkythonTestAlias akAlias)` returns that alias script's `Tag`); `SkythonTestAlias` on aliases 0-2 (extends `ReferenceAlias`; `Tag` Int = `5`); `SkythonTestLocationAlias` on alias 3 (extends `LocationAlias`; `Tag` Int = `6`). `skythonbase` holds these initial values (Task 49 saves before any write) and `fresh_save` reloads it for this module, so the tests assert them exactly.
   - Task 50: `_testesp.discover(game) -> Esp` (`quest`, `ref_aliases`, `location_alias`, `npc`), `ensure_running(game, quest)`, constants `QUEST_SCRIPT`, `BASE_SCRIPT`, `ALIAS_SCRIPT`, `LOCATION_ALIAS_SCRIPT`, `NPC_KEY`, `INITIAL`, `TARGET_ALIAS`, `ITEM_ALIAS`, `same_key(form, key)`.
   - Task 49: `fresh_save`. v1 Task 30: `Game.get_property(obj, script, prop)`, `Game.set_property(obj, script, prop, value)`; errors `Unsupported` with the message `v1 writes only Int, Float and Bool`.
 - Produces: `livetest/test_m15_properties.py`; the RESULTS entry that closes Task 30's "parent-variable offset not discriminated live".
@@ -51,9 +51,8 @@ def mgame(session, fresh_save):
 
 @pytest.fixture(scope="module")
 def esp(mgame):
-    h = t.discover(mgame)
-    t.ensure_running(mgame, h.quest)
-    return h
+    t.ensure_running(mgame, t.quest(mgame))  # first: alias scripts may bind only once the quest runs (discover uses them)
+    return t.discover(mgame)
 
 
 def counters(game, quest):
@@ -107,16 +106,28 @@ def test_inherited_int_write_lands_in_the_parent_slot(game, esp):
     assert counters(game, esp.quest) == (7, 3)
 
 
+def ratio_flag(game, quest):
+    """(Ratio, Flag) as Papyrus bytecode sees them (GetRatio/GetFlag), not through get_property, which reads the
+    same variable index set_property wrote and so could not see a write to the wrong slot."""
+    return (game.call_method(quest, t.QUEST_SCRIPT, "GetRatio"),
+            game.call_method(quest, t.QUEST_SCRIPT, "GetFlag"))
+
+
 def test_float_and_bool_writes_read_back(game, esp):
+    assert ratio_flag(game, esp.quest) == (CHILD["Ratio"], CHILD["Flag"])  # (0.5, True)
     try:
         game.set_property(esp.quest, t.QUEST_SCRIPT, "Ratio", 0.25)    # exact in binary: no rounding noise
         game.set_property(esp.quest, t.QUEST_SCRIPT, "Flag", False)
         assert game.get_property(esp.quest, t.QUEST_SCRIPT, "Ratio") == 0.25
         assert game.get_property(esp.quest, t.QUEST_SCRIPT, "Flag") is False
+        got = ratio_flag(game, esp.quest)                              # Papyrus sees the writes in their own slots
+        assert got[0] == 0.25 and got[1] is False, got
         assert counters(game, esp.quest) == (7, 3)                     # neighbouring Int slots untouched
     finally:
         game.set_property(esp.quest, t.QUEST_SCRIPT, "Ratio", CHILD["Ratio"])
         game.set_property(esp.quest, t.QUEST_SCRIPT, "Flag", CHILD["Flag"])
+    got = ratio_flag(game, esp.quest)
+    assert got[0] == 0.5 and got[1] is True, got
     assert game.get_property(esp.quest, t.QUEST_SCRIPT, "Ratio") == 0.5
     assert game.get_property(esp.quest, t.QUEST_SCRIPT, "Flag") is True
 
@@ -142,13 +153,17 @@ def test_alias_script_int_property_read_and_write(game, esp):
     alias, other = esp.ref_aliases[t.TARGET_ALIAS], esp.ref_aliases[t.ITEM_ALIAS]
     assert game.get_property(alias, t.ALIAS_SCRIPT, "Tag") == t.INITIAL[t.ALIAS_SCRIPT]["Tag"]  # 5
     assert game.get_property(other, t.ALIAS_SCRIPT, "Tag") == 5
+    assert game.call_method(esp.quest, t.QUEST_SCRIPT, "AliasTag", alias) == 5       # Papyrus agrees
     try:
         game.set_property(alias, t.ALIAS_SCRIPT, "Tag", 16)
         assert game.get_property(alias, t.ALIAS_SCRIPT, "Tag") == 16
+        assert game.call_method(esp.quest, t.QUEST_SCRIPT, "AliasTag", alias) == 16  # Papyrus sees the write
         assert game.get_property(other, t.ALIAS_SCRIPT, "Tag") == 5     # each alias has its own script object
+        assert game.call_method(esp.quest, t.QUEST_SCRIPT, "AliasTag", other) == 5
     finally:
         game.set_property(alias, t.ALIAS_SCRIPT, "Tag", 5)
     assert game.get_property(alias, t.ALIAS_SCRIPT, "Tag") == 5
+    assert game.call_method(esp.quest, t.QUEST_SCRIPT, "AliasTag", alias) == 5
 
 
 def test_location_alias_script_int_property_read_and_write(game, esp):
@@ -177,12 +192,14 @@ tools/box/box_plugins.sh add
 tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log 'python host: running' 600
 tools/box/box_session.sh up && source out/box-live.env && source livetest/s4test.env
+tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600   # fresh_save's game.load is refused while "starting"
 export SKYTHON_LIVE=1 SKYTHON_BOX=1
 uv run --project python pytest livetest/test_m15_properties.py -q -rs -s
 tools/box/box_files.sh pull skse64.log Skython.log
 grep -E "loaded correctly|no version data|disabled" out/box-skse/skse64.log
 grep -E "ops: property|values:" out/box-skse/Skython.log | head -20
 tools/box/box_stop.sh
+tools/box/box_session.sh down
 tools/box/box_plugins.sh show
 ```
 Expected: `10 passed`, no skips; the `-s` output lists every property's value read (equal to the index's initial values); the `ops: property` lines (if the build still logs them) show the slot indexes used; `box_stop.sh` reports the game gone; `show` prints the backup with no `SkythonTest.esp` line. No save written.
@@ -193,7 +210,7 @@ If `test_child_int_write_lands_in_the_child_slot` fails with `GetBaseCounter` ch
 
 Append to "Plugin findings" in `spikes/RESULTS.md`, filled from Step 2 (no bracket left):
 ```markdown
-- **Task 51, property happy paths and the parent-variable offset (box, Windows-native, <date and time>, Skyrim 1.6.1170.0, skythonbase, never saved; 1 launch, SKSE plugins: <list>):** `test_m15_properties.py` 10 passed. Every initial value read exactly as the ESP fixes it: `Counter` 7, `Ratio` 0.5, `Flag` True, `Label` "initial label", `Target` SkythonTestNPC, `BaseCounter` 3, `BaseLabel` "base label", `SkythonTestAlias.Tag` 5, `SkythonTestLocationAlias.Tag` 6. **Parent offset discriminated (closes Task 30's open point):** writing `SkythonTestQuest.Counter` changed `GetCounter()` only and writing the inherited `BaseCounter` changed `GetBaseCounter()` only, so the absolute index includes `SkythonTestQuestBase`'s variable count; inherited properties read the same through the child and parent script names. Float (0.25) and Bool writes read back; String and Actor writes and the full property `Computed` `unsupported` (R57/R58 unchanged); alias script `Tag` read/write is per alias, on reference and location aliases.
+- **Task 51, property happy paths and the parent-variable offset (box, Windows-native, <date and time>, Skyrim 1.6.1170.0, skythonbase, never saved; 1 launch, SKSE plugins: <list>):** `test_m15_properties.py` 10 passed. Every initial value read exactly as the ESP fixes it: `Counter` 7, `Ratio` 0.5, `Flag` True, `Label` "initial label", `Target` SkythonTestNPC, `BaseCounter` 3, `BaseLabel` "base label", `SkythonTestAlias.Tag` 5, `SkythonTestLocationAlias.Tag` 6. **Parent offset discriminated (closes Task 30's open point):** writing `SkythonTestQuest.Counter` changed `GetCounter()` only and writing the inherited `BaseCounter` changed `GetBaseCounter()` only, so the absolute index includes `SkythonTestQuestBase`'s variable count; inherited properties read the same through the child and parent script names. Float (0.25) and Bool (False) writes read back through Papyrus's own `GetRatio`/`GetFlag` (not only through `get_property`), and the restore to 0.5/True likewise; alias `Tag` writes seen by Papyrus through `AliasTag`; String and Actor writes and the full property `Computed` `unsupported` (R57/R58 unchanged); alias script `Tag` read/write is per alias, on reference and location aliases.
 ```
 Check:
 ```bash

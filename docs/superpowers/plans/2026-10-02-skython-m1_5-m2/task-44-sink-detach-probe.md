@@ -16,12 +16,13 @@
 - Part 3 (always): Create `livetest/test_m2_sink_detach.py`; Modify `spikes/RESULTS.md`, `docs/superpowers/plans/2026-10-02-skython-m1_5-m2/API-VERIFICATION.md`
 
 **Interfaces:**
-- Consumes: Task 39/40 sinks (`EventSinks.cpp`: `RegisterBatch1`; `EventSinksWorld.cpp`: `RegisterWorldSinks`; their static sink objects), `events::Hub()`, `EventHub::Wants`; Task 34 `EventHubOptions{epoch, loading}`, the hub's per-event atomic subscriber count; Task 33 `Config::trace_timing`; Task 38 `plugin/config/variants/trace-timing.ini`; Task 35 `ModuleHost` (named fields); Task 40 `livetest/support.py` `PLAYER`, the `activate` event; v1 `ops::InTask`, `ops::Measured`, the smoke command loop and `smoke.command`, `support.log_text`.
-- Produces: `_skython._probe_sink_cycles(n: int) -> str` (game build only, defined only when `trace_timing` is on; JSON `{cycles, registered, delivered, errors}`; `n > 0`: n register/unregister cycles, each step inside its own SKSE task, then the spare sink is left registered with its counter reset; `n == 0`: reports `delivered` since then and unregisters it); the smoke command `probe_sink_cycles`; on PASS: `EventHubOptions::on_wanted` (`std::function<void(std::string_view event, bool wanted)>`, called outside the hub's lock on a per-event subscriber count change 0→1 or 1→0), `spy::events::OnWanted(std::string_view, bool)`, log lines `events: sinks attach on demand`, `events: sink attached <sink>`, `events: sink detached <sink>`; the RESULTS verdict.
+- Consumes: Task 39/40 sinks (`EventSinks.cpp`: `RegisterBatch1`; `EventSinksWorld.cpp`: `RegisterWorldSinks`; their static sink objects), `events::Hub()`, `EventHub::Wants`; Task 34 `EventHubOptions{epoch, loading, max_queued_bytes_per_consumer}` (Task 39 sets `loading` to `life::SaveLoadInProgress`), the hub's per-event atomic subscriber count; Task 33 `Config::trace_timing`; Task 38 `plugin/config/variants/trace-timing.ini`; Task 35 `ModuleHost` (named fields); Task 40 `livetest/support.py` `PLAYER`, `box_menu(action, name)` (DevBench menu tool), the `activate` event and the batch-2 `menu` sink; v1 `ops::InTask`, `ops::Measured`, the smoke command loop and `smoke.command`, `support.log_text`.
+- Produces: `_skython._probe_sink_cycles(n: int) -> str` (game build only, defined only when `trace_timing` is on; returns a JSON summary `{mode, cycles, registered, delivered, delivered_any, menu_delivered, events_outside_tasks, overlaps, errors}`). Three modes: **`n > 0`** runs n cycles; each cycle is one SKSE task that registers both spare sinks (a `TESActivateEvent` sink on `ScriptEventSourceHolder` and a `MenuOpenCloseEvent` sink on `RE::UI`) and a second SKSE task that unregisters both; the probe **ends with both unregistered**; the counters are zeroed when the run starts. **`n == -1` (arm):** one SKSE task registers the spare activate sink and zeroes its counters; from then on every player activation must reach it exactly once. **`n == 0` (finish):** reports the counters since the arm and unregisters the spare activate sink (one SKSE task). Any other `n` → `errors: 1`. Counters: `delivered` counts only activations whose `actionRef` is the player (pointer compare with `RE::PlayerCharacter::GetSingleton()`), `delivered_any` every `TESActivateEvent` (NPC doors too; for the record), `menu_delivered` the menu sink's events, `events_outside_tasks` spare-sink events delivered on a thread that is not inside one of our SKSE tasks (`ops::t_inTask == false`), `overlaps` how often an add or remove call saw a spare sink's `ProcessEvent` running at that moment (`in_process > 0`). The smoke command `probe_sink_cycles`; on PASS: `EventHubOptions::on_wanted` (`std::function<void(std::string_view event, bool wanted)>`, called outside the hub's lock on a per-event subscriber count change 0→1 or 1→0), `spy::events::OnWanted(std::string_view, bool)`, log lines `events: sinks attach on demand`, `events: sink attached <sink>`, `events: sink detached <sink>`; the RESULTS verdict.
 
 Rules:
 - A sink is only ever registered or unregistered **inside an SKSE task** (`ops::InTask`, `ops::Measured`), never on a Python thread, a VM thread or inside a sink. A task never re-queues itself; the probe's Python thread queues one task per step and waits for it (bounded, 5 s).
-- On PASS, a sink is attached while any event it serves has a subscriber, detached otherwise. A count change queues one task that **reconciles** (reads `Wants` for the sink's events at that moment, then adds or removes), so callbacks that arrive out of order still end in the right state. **Events are never dropped silently**: an event raised before the attach task ran (at most one frame after `events.subscribe` answered) is not seen, which is documented; an event's form reference may name something gone by the time it is used, and its next use raises `NotFound` (or `StaleReference`), as everywhere else.
+- **What the probe can and cannot prove.** Every add and remove runs inside one of our serialized SKSE tasks, so registering is only exercised against events that arrive *concurrently* if some events are delivered outside our tasks. The probe therefore counts `events_outside_tasks` and `overlaps`. A run whose spare sinks saw **no** event outside our tasks (`events_outside_tasks == 0`) proves nothing about concurrent registration: its verdict is **INCONCLUSIVE, not adopted** (Part 2 is skipped, as on FAIL). The probe cycles a second spare sink on `RE::UI`'s `MenuOpenCloseEvent` source while the test opens and closes a menu, because Part 2 also detaches the UI menu sink and the SKSE mod-event source; the mod-event source (`SKSE::GetModCallbackEventSource()`) is not cycled by the probe, which RESULTS states.
+- On PASS, a sink is attached while any event it serves has a subscriber, detached otherwise. A count change queues one task that **reconciles** (reads `Wants` for the sink's events at that moment, then adds or removes), so callbacks that arrive out of order still end in the right state. **Events are never dropped silently**, with one documented exception: an event raised between the `events.subscribe` answer and the attach task (about one frame) is never seen by the engine sink, so it is neither queued nor counted in `dropped`/`suppressed`. This is a protocol fact, not a bug: Step 9 records it in RESULTS and Task 57 states it in PROTOCOL.md and README (only when Part 2 is in). `events.subscribe` never waits for the attach; an event's form reference may name something gone by the time it is used, and its next use raises `NotFound` (or `StaleReference`), as everywhere else.
 
 ## Part 1: the probe
 
@@ -33,8 +34,10 @@ Rules:
 #include <string>
 
 namespace spy::probe {
-// Task 44 (dev only, trace_timing): n cycles of registering and unregistering a spare TESActivateEvent sink, each step
-// inside its own SKSE task. Called on a Python thread with the GIL released; blocks that thread only.
+// Task 44 (dev only, trace_timing). n > 0: n cycles of registering and unregistering the spare TESActivateEvent and
+// MenuOpenCloseEvent sinks, each step inside its own SKSE task; ends with both unregistered. n == -1: register the spare
+// activate sink and zero its counters (arm). n == 0: report the counters since the arm and unregister it (finish).
+// Called on a Python thread with the GIL released; blocks that thread only.
 std::string SinkCycles(int n);
 }
 ```
@@ -57,16 +60,51 @@ namespace spy::probe {
 namespace {
 using namespace std::chrono_literals;
 
+std::atomic<int> g_inProcess{ 0 };               // spare-sink ProcessEvent calls running right now (any thread)
+std::atomic<std::uint64_t> g_overlaps{ 0 };      // add/remove calls that saw g_inProcess > 0
+std::atomic<std::uint64_t> g_outside{ 0 };       // spare-sink events delivered outside our SKSE tasks
+
+struct InProcess
+{
+    InProcess()
+    {
+        g_inProcess.fetch_add(1);
+        if (!ops::t_inTask) g_outside.fetch_add(1);  // R52 flag, never a thread-id test (R49)
+    }
+    ~InProcess() { g_inProcess.fetch_sub(1); }
+    InProcess(const InProcess&) = delete;
+    InProcess& operator=(const InProcess&) = delete;
+};
+
 struct SpareSink final : RE::BSTEventSink<RE::TESActivateEvent>
 {
-    std::atomic<std::uint64_t> delivered{ 0 };
-    RE::BSEventNotifyControl ProcessEvent(const RE::TESActivateEvent*, RE::BSTEventSource<RE::TESActivateEvent>*) override
+    std::atomic<std::uint64_t> delivered{ 0 };      // activations by the player only (the hub's filter in the test)
+    std::atomic<std::uint64_t> delivered_any{ 0 };  // every TESActivateEvent, NPC doors too (for the record)
+    RE::BSEventNotifyControl ProcessEvent(const RE::TESActivateEvent* a_event,
+                                          RE::BSTEventSource<RE::TESActivateEvent>*) override
     {
-        delivered.fetch_add(1);  // nothing else: no engine call, no allocation
+        InProcess in;  // nothing else: no engine call beyond the pointer compare, no allocation
+        delivered_any.fetch_add(1);
+        if (a_event && a_event->actionRef.get() == RE::PlayerCharacter::GetSingleton()) delivered.fetch_add(1);
         return RE::BSEventNotifyControl::kContinue;
     }
 };
-SpareSink* Spare() { static auto* s = new SpareSink(); return s; }  // immortal: the source may hold it after we return
+struct SpareMenuSink final : RE::BSTEventSink<RE::MenuOpenCloseEvent>
+{
+    std::atomic<std::uint64_t> delivered{ 0 };
+    RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent*,
+                                          RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
+    {
+        InProcess in;
+        delivered.fetch_add(1);
+        return RE::BSEventNotifyControl::kContinue;
+    }
+};
+// Immortal: a source may still hold or call a sink after we return.
+SpareSink* Spare() { static auto* s = new SpareSink(); return s; }
+SpareMenuSink* SpareMenu() { static auto* s = new SpareMenuSink(); return s; }
+
+void NoteOverlap() { if (g_inProcess.load() > 0) g_overlaps.fetch_add(1); }  // called right before each add/remove
 
 struct Wait
 {
@@ -91,45 +129,86 @@ bool RunInTask(std::function<void()> fn)
     std::unique_lock lk(w->mx);
     return w->cv.wait_for(lk, 5s, [&] { return w->done; }) && !w->failed;
 }
+
+json Summary(const char* mode, int cycles, bool registered, int errors)
+{
+    return json{ { "mode", mode }, { "cycles", cycles }, { "registered", registered },
+                 { "delivered", Spare()->delivered.load() }, { "delivered_any", Spare()->delivered_any.load() },
+                 { "menu_delivered", SpareMenu()->delivered.load() }, { "events_outside_tasks", g_outside.load() },
+                 { "overlaps", g_overlaps.load() }, { "errors", errors } };
+}
+
+void ZeroCounters()
+{
+    Spare()->delivered.store(0);
+    Spare()->delivered_any.store(0);
+    SpareMenu()->delivered.store(0);
+    g_outside.store(0);
+    g_overlaps.store(0);
+}
 }
 
 std::string SinkCycles(int n)
 {
-    json out{ { "cycles", 0 }, { "registered", false }, { "delivered", 0 }, { "errors", 0 } };
     auto* holder = RE::ScriptEventSourceHolder::GetSingleton();
+    auto* ui = RE::UI::GetSingleton();
     SpareSink* s = Spare();
-    if (!holder) {
-        out["errors"] = 1;
+    SpareMenuSink* m = SpareMenu();
+    if (!holder || !ui || n < -1) {
+        const auto out = Summary("refused", 0, false, 1);
+        log::Info("probe: " + dump_json(out));
         return dump_json(out);
     }
-    if (n <= 0) {  // finish: what arrived since the last run left the spare sink registered, then remove it
-        const bool ok = RunInTask([holder, s] { holder->RemoveEventSink<RE::TESActivateEvent>(s); });
-        out["delivered"] = s->delivered.load();
+    if (n == -1) {  // arm: from here on every player activation must arrive exactly once
+        const bool ok = RunInTask([holder, s] {
+            NoteOverlap();
+            holder->AddEventSink<RE::TESActivateEvent>(s);
+            ZeroCounters();
+        });
+        const auto out = Summary("arm", 0, ok, ok ? 0 : 1);
+        log::Info("probe: " + dump_json(out));
+        return dump_json(out);
+    }
+    if (n == 0) {  // finish: report what arrived since the arm, then remove the spare activate sink
+        const auto out_before = Summary("finish", 0, false, 0);
+        const bool ok = RunInTask([holder, s] {
+            NoteOverlap();
+            holder->RemoveEventSink<RE::TESActivateEvent>(s);
+        });
+        auto out = out_before;
         out["errors"] = ok ? 0 : 1;
-        log::Info("probe: spare sink removed, " + std::to_string(s->delivered.load()) + " events since the last register");
+        log::Info("probe: " + dump_json(out));
         return dump_json(out);
     }
+    ZeroCounters();
     int cycles = 0, errors = 0;
     for (int i = 0; i < n && errors == 0; ++i) {
-        if (!RunInTask([holder, s] { holder->AddEventSink<RE::TESActivateEvent>(s); })) { ++errors; break; }
-        if (!RunInTask([holder, s] { holder->RemoveEventSink<RE::TESActivateEvent>(s); })) { ++errors; break; }
+        if (!RunInTask([holder, ui, s, m] {
+                NoteOverlap();
+                holder->AddEventSink<RE::TESActivateEvent>(s);
+                NoteOverlap();
+                ui->AddEventSink<RE::MenuOpenCloseEvent>(m);
+            })) { ++errors; break; }
+        if (!RunInTask([holder, ui, s, m] {
+                NoteOverlap();
+                holder->RemoveEventSink<RE::TESActivateEvent>(s);
+                NoteOverlap();
+                ui->RemoveEventSink<RE::MenuOpenCloseEvent>(m);
+            })) { ++errors; break; }
         ++cycles;
     }
-    const auto during = s->delivered.load();
-    const bool registered = errors == 0 && RunInTask([holder, s] {
-        holder->AddEventSink<RE::TESActivateEvent>(s);
-        s->delivered.store(0);  // from here on every activation must arrive exactly once
+    // A failed step may have left a sink registered: one more task removes both (removing an absent sink is a no-op).
+    if (errors) RunInTask([holder, ui, s, m] {
+        holder->RemoveEventSink<RE::TESActivateEvent>(s);
+        ui->RemoveEventSink<RE::MenuOpenCloseEvent>(m);
     });
-    out["cycles"] = cycles;
-    out["registered"] = registered;
-    out["delivered"] = during;
-    out["errors"] = errors + (registered || errors ? 0 : 1);
+    const auto out = Summary("cycles", cycles, false, errors);
     log::Info("probe: " + dump_json(out));
     return dump_json(out);
 }
 }
 ```
-Verify `RemoveEventSink` at the pin (`grep -n "inline void RemoveEventSink" plugin/extern/CommonLibSSE-NG/include/RE/S/ScriptEventSourceHolder.h`; `grep -n "pendingUnregisters" plugin/extern/CommonLibSSE-NG/include/RE/B/BSTEvent.h`) and append the row to `API-VERIFICATION.md` (task 44): `RemoveEventSink` takes the same spin lock and defers to `pendingUnregisters` while the source is notifying.
+Verify at the pin and append the rows to `API-VERIFICATION.md` (task 44): `RemoveEventSink` (`grep -n "inline void RemoveEventSink" plugin/extern/CommonLibSSE-NG/include/RE/S/ScriptEventSourceHolder.h`; `grep -n "pendingUnregisters" plugin/extern/CommonLibSSE-NG/include/RE/B/BSTEvent.h`: it takes the same spin lock and defers to `pendingUnregisters` while the source is notifying); `UI::AddEventSink`/`RemoveEventSink` for `MenuOpenCloseEvent` (`grep -n "EventSink" plugin/extern/CommonLibSSE-NG/include/RE/U/UI.h`); `TESActivateEvent::actionRef` is a `NiPointer<TESObjectREFR>` (`grep -n "actionRef" plugin/extern/CommonLibSSE-NG/include/RE/T/TESActivateEvent.h`). Comparing `actionRef.get()` with `RE::PlayerCharacter::GetSingleton()` is a pointer compare (no engine call).
 
 - [ ] **Step 2: Expose it to Python (dev only) and add the smoke command**
 
@@ -164,9 +243,11 @@ The variant ini is Task 38's (never recreated here): `grep -c '^trace_timing = t
 
 `livetest/test_m2_sink_detach.py`:
 ```python
-"""Task 44: the sink register/unregister probe, then either attach-on-demand (probe PASS) or skip-only (FAIL).
-Mode is read from the plugin log: 'events: sinks attach on demand' means Part 2 is in. s4test, never saved."""
+"""Task 44: the sink register/unregister probe, then either attach-on-demand (probe PASS) or skip-only (FAIL or
+INCONCLUSIVE). Mode is read from the plugin log: 'events: sinks attach on demand' means Part 2 is in. s4test, never
+saved."""
 import queue
+import re
 import threading
 import time
 
@@ -174,19 +255,31 @@ import pytest
 
 from skython import errors
 from smoke import command
-from support import PLAYER, log_text
+from support import PLAYER, box_menu, log_text
 
 IRON_SWORD = "Skyrim.esm|0x012EB7"
+MENU = "InventoryMenu"
 
 
 def pick_up(game, n: int, stop: threading.Event | None = None) -> int:
-    """Place a sword and pick it up, n times (or until stop): one TESActivateEvent each. Returns how many."""
+    """Place a sword and pick it up, n times (or until stop): one player TESActivateEvent each. Returns how many."""
     sword, done = game.form(IRON_SWORD), 0
     while done < n and not (stop and stop.is_set()):
         ref = game.call_method(PLAYER, "ObjectReference", "PlaceAtMe", sword, 1, False, False)
         game.call_method(ref, "ObjectReference", "Activate", PLAYER, False)
         done += 1
     return done
+
+
+def toggle_menu(stop: threading.Event, counter: dict) -> None:
+    """Open and close a menu through DevBench until stop (menu_open/menu_close for the spare UI sink). Short open
+    time, so a task that waits for the menu to close still finishes well inside the probe's 5 s step bound."""
+    while not stop.is_set():
+        box_menu("open", MENU)
+        time.sleep(0.3)
+        box_menu("close", MENU)
+        counter["toggles"] += 1
+        time.sleep(1.0)
 
 
 def remove_swords(game) -> None:
@@ -200,25 +293,41 @@ def detach_mode() -> bool:
     return "events: sinks attach on demand" in log_text()
 
 
+def drain(q: queue.Queue) -> int:
+    n = 0
+    while not q.empty():
+        q.get_nowait()
+        n += 1
+    return n
+
+
 def test_probe_register_unregister_cycles(game):
     hub_seen: queue.Queue = queue.Queue()
     stop = threading.Event()
     raised = {"during": 0}
+    toggles = {"toggles": 0}
     with game.on("activate", {"activator": [PLAYER]}, hub_seen.put, max_queue=65536):
         t = threading.Thread(target=lambda: raised.__setitem__("during", pick_up(game, 10**6, stop)), daemon=True)
+        mt = threading.Thread(target=toggle_menu, args=(stop, toggles), daemon=True)
         t.start()
+        mt.start()
         try:
-            r = command("probe_sink_cycles", n=1000, timeout=600.0)  # about 2000 frames
+            r = command("probe_sink_cycles", n=1000, timeout=600.0)  # about 2000 frames; ends unregistered
         finally:
             stop.set()
             t.join(30)
-        print(f"probe: {r}; activations raised during the cycles: {raised['during']}")
-        assert r["cycles"] == 1000 and r["errors"] == 0 and r["registered"] is True, r
-        drained = 0
-        while not hub_seen.empty():
-            hub_seen.get_nowait()
-            drained += 1
-        k = pick_up(game, 20)                                # after the last register
+            mt.join(30)
+            box_menu("close", MENU)  # never leave the menu open
+        print(f"probe: {r}; activations raised during the cycles: {raised['during']}; menu toggles: "
+              f"{toggles['toggles']}")
+        assert r["cycles"] == 1000 and r["errors"] == 0 and r["registered"] is False, r
+        # INCONCLUSIVE (not a test failure): the verdict in Step 4 reads events_outside_tasks from the log line.
+        print(f"events outside our tasks: {r['events_outside_tasks']} (0 = INCONCLUSIVE), overlaps: {r['overlaps']}")
+        time.sleep(2.0)                                       # late activations of the cycling phase land first
+        drained = drain(hub_seen)
+        armed = command("probe_sink_cycles", n=-1)            # one task: register the spare sink, zero its counters
+        assert armed["registered"] is True and armed["errors"] == 0, armed
+        k = pick_up(game, 20)                                 # every one of these must reach both sinks once
         got = 0
         deadline = time.monotonic() + 15
         while got < k and time.monotonic() < deadline:
@@ -227,17 +336,19 @@ def test_probe_register_unregister_cycles(game):
                 got += 1
             except queue.Empty:
                 pass
-        final = command("probe_sink_cycles", n=0)
+        final = command("probe_sink_cycles", n=0)             # report, then unregister
     remove_swords(game)
-    print(f"after: raised {k}, spare sink {final['delivered']}, hub {got}")
-    assert final["delivered"] == k, "every activation after the last register must reach the spare sink exactly once"
+    print(f"after: drained {drained}, raised {k}, spare sink {final['delivered']} "
+          f"(any actor: {final['delivered_any']}), hub {got}")
+    assert final["errors"] == 0, final
+    assert final["delivered"] == k, "every player activation after the arm must reach the spare sink exactly once"
     assert got == k, "the product's own activate sink must keep delivering"
 
 
 def test_mode_specific_behaviour(game):
     q: queue.Queue = queue.Queue()
     if not detach_mode():
-        # Skip-only (probe FAIL or not adopted): sinks stay registered; nothing is queued without subscribers.
+        # Skip-only (probe FAIL, INCONCLUSIVE or not adopted): sinks stay registered; nothing queued without subscribers.
         assert "events: sink detached" not in log_text()
         before = game.state()["diagnostics"]["events_dropped_total"]
         pick_up(game, 3)
@@ -261,8 +372,25 @@ def test_mode_specific_behaviour(game):
     with pytest.raises((errors.NotFound, errors.StaleReference)):
         game.call_method(target, "ObjectReference", "GetBaseObject")
     remove_swords(game)
+
+
+def test_rapid_subscribe_close_ends_attached(game):
+    """200 rapid subscribe/close cycles queue out-of-order reconcile tasks; one final subscription must leave the
+    activate sink attached and delivering (attach-on-demand mode only)."""
+    if not detach_mode():
+        pytest.skip("skip-only mode: sinks never detach")
+    for _ in range(200):
+        game.on("activate", {"activator": [PLAYER]}, lambda ev: None).close()
+    q: queue.Queue = queue.Queue()
+    with game.on("activate", {"activator": [PLAYER]}, q.put):
+        time.sleep(2.0)                                      # every queued reconcile task has run
+        lines = re.findall(r"events: sink (attached|detached) activate", log_text())
+        assert lines and lines[-1] == "attached", lines[-5:]
+        assert pick_up(game, 1) == 1
+        q.get(timeout=10.0)
+    remove_swords(game)
 ```
-`SKYTHON_LIVE= uv run --project python pytest livetest/test_m2_sink_detach.py -q` → `2 skipped`.
+`SKYTHON_LIVE= uv run --project python pytest livetest/test_m2_sink_detach.py -q` → `3 skipped`.
 
 - [ ] **Step 4: Build and run the probe**
 
@@ -276,16 +404,19 @@ tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
 tools/box/box_session.sh up && source out/box-live.env
 tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600
+tools/box/box_console.sh --list | grep -q '"menu"' || echo "STOP: no DevBench menu tool"
 tools/box/box_console.sh "load s4test" && tools/box/box_wait_log.sh Skython.log "events: game_loaded epoch 1" 300
 source livetest/s4test.env
 SKYTHON_LIVE=1 SKYTHON_BOX=1 uv run --project python pytest livetest/test_m2_sink_detach.py -q -s -rs
 tools/box/box_files.sh pull Skython.log >/dev/null
 grep "probe: " "$SKSE_LOG_DIR/Skython.log"
 tools/box/box_stop.sh     # NO_NEW_CRASH_LOG expected
+tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini   # back to the dev ini (both verdicts)
 ```
-**Verdict.** PASS = `test_probe_register_unregister_cycles` passed (1000 cycles, 0 errors, no crash, no hang, the spare sink got exactly the 20 later activations, the product's sink kept delivering) and `box_stop.sh` reports `NO_NEW_CRASH_LOG`. Anything else = FAIL: a crash (relaunch once and rerun to tell a fluke from a pattern; a second crash is the STOP above), a step that timed out (`errors` 1, a hang), or a count other than 20. `test_mode_specific_behaviour` runs in skip-only mode here and passes.
+(If the menu-tool check printed `STOP`, stop there and ask the owner: the UI half of the probe cannot run without it. `test_rapid_subscribe_close_ends_attached` skips in this run: Part 2 is not in yet.)
+**Verdict.** PASS = `test_probe_register_unregister_cycles` passed (1000 cycles, 0 errors, no crash, no hang, ended unregistered; after the arm the spare sink got exactly the 20 player activations, the product's sink kept delivering), `box_stop.sh` reports `NO_NEW_CRASH_LOG`, **and** the cycling run's `probe:` line has `events_outside_tasks > 0` (events really arrived outside our serialized tasks while sinks were added and removed). `events_outside_tasks == 0` with everything else passing = **INCONCLUSIVE, not adopted** (treated like FAIL for Part 2). Anything else = FAIL: a crash (relaunch once and rerun to tell a fluke from a pattern; a second crash is the STOP above), a step that timed out (`errors` 1, a hang), or a count other than 20. Record `overlaps`, `menu_delivered` and `delivered_any` whatever the verdict. `test_mode_specific_behaviour` runs in skip-only mode here and passes.
 
-Record the verdict now (Step 9's entry, first half). **On FAIL, skip to Step 9.**
+Record the verdict now (Step 9's entry, first half). **On FAIL or INCONCLUSIVE, skip to Step 9.**
 
 ## Part 2: attach on demand (only on PASS)
 
@@ -297,8 +428,8 @@ TEST_CASE("event hub: on_wanted reports 0->1 and 1->0 per event, outside the loc
 {
     std::vector<std::pair<std::string, bool>> calls;
     spy::EventHub* self = nullptr;
-    spy::EventHubOptions opts{ [] { return 1u; }, [] { return false; },
-                               [&](std::string_view e, bool w) {
+    spy::EventHubOptions opts{ .epoch = [] { return 1u; }, .loading = [] { return false; },
+                               .on_wanted = [&](std::string_view e, bool w) {
                                    (void)self->Wants(e);  // re-entering the hub here must not deadlock
                                    calls.emplace_back(std::string(e), w);
                                } };
@@ -317,9 +448,9 @@ TEST_CASE("event hub: on_wanted reports 0->1 and 1->0 per event, outside the loc
     CHECK(calls.back() == std::pair<std::string, bool>{ "death", false });
 }
 ```
-Run `cmake --build core/build -j && ./core/build/spy_core_tests -tc="event hub: on_wanted*"` → FAIL (no third member in `EventHubOptions`).
+Run `cmake --build core/build -j && ./core/build/spy_core_tests -tc="event hub: on_wanted*"` → FAIL (no member `on_wanted` in `EventHubOptions`).
 
-Then in `core/include/spy/events.h` add, as the **optional last** member of `EventHubOptions` (index Contracts: existing aggregate initializers `{epoch, loading}` stay valid; an empty `on_wanted` is never called):
+Then in `core/include/spy/events.h` add, as the **optional last** member of `EventHubOptions`, after Task 34's `max_queued_bytes_per_consumer` (index Contracts: initializers that set only `epoch`/`loading` stay valid; every initializer that sets `on_wanted` names its members with designated initializers, as above, because the third member is the byte budget; an empty `on_wanted` is never called):
 ```cpp
     std::function<void(std::string_view event, bool wanted)> on_wanted;  // Task 44: subscriber count 0->1 (true) / 1->0 (false); optional
 ```
@@ -349,11 +480,12 @@ struct SinkEntry
 std::vector<SinkEntry>& Sinks();
 void OnWanted(std::string_view event, bool wanted);
 ```
-`plugin/src/Events.cpp`: the hub gets the callback as its third option:
+`plugin/src/Events.cpp`: the hub gets the callback as its `on_wanted` option (designated initializers; the loading source stays Task 39's `life::SaveLoadInProgress`, and `max_queued_bytes_per_consumer` keeps its default):
 ```cpp
     static spy::EventHub* hub = new spy::EventHub(spy::EventHubOptions{
-        [] { return life::Epoch(); }, [] { return life::Loading(); },
-        [](std::string_view e, bool w) { OnWanted(e, w); } });
+        .epoch = [] { return life::Epoch(); },
+        .loading = [] { return life::SaveLoadInProgress(); },
+        .on_wanted = [](std::string_view e, bool w) { OnWanted(e, w); } });
 ```
 and add:
 ```cpp
@@ -417,14 +549,14 @@ source livetest/s4test.env
 SKYTHON_LIVE=1 SKYTHON_BOX=1 uv run --project python pytest livetest/test_m2_sink_detach.py livetest/test_m2_events_batch1.py -q -s -rs
 tools/box/box_stop.sh
 ```
-Expected: all pass (detach test in attach-on-demand mode; batch 1's 8 tests show the first-event window does not bite our own call order). Then one more launch on `s4test` for batch 2 (it moves the player indoors at the end):
+Expected: all pass (detach test in attach-on-demand mode, including `test_rapid_subscribe_close_ends_attached`; batch 1's 9 tests show the first-event window does not bite our own call order). Then one more launch on `s4test` for batch 2 (it moves the player indoors at the end):
 ```bash
 tools/box/box_launch.sh && tools/box/box_wait_log.sh Skython.log "events: sinks attach on demand" 600
 tools/box/box_session.sh up && source out/box-live.env && tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600
 tools/box/box_console.sh "load s4test" && tools/box/box_wait_log.sh Skython.log "events: game_loaded epoch 1" 300
 SKYTHON_LIVE=1 SKYTHON_BOX=1 uv run --project python pytest livetest/test_m2_events_batch2.py -q -s -rs
 tools/box/box_stop.sh
-tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini   # back to the dev ini
+tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini   # back to the dev ini (both verdicts)
 ```
 Expected: 9 passed. `game_loaded` is raised by `Lifecycle.cpp` without a sink, so Task 42's lifecycle test is unaffected.
 
@@ -440,7 +572,7 @@ git commit -m "feat(plugin): attach event sinks only while something is subscrib
 
 - [ ] **Step 9: RESULTS and commit**
 
-Append to `spikes/RESULTS.md`: `**Task 44, sink register/unregister probe (box, Windows-native, <date/time>, Skyrim 1.6.1170.0, s4test, never saved; <n> launches; SKSE plugins: <list>):** PASS|FAIL` with the probe JSON and the `probe:` log lines verbatim, the activations raised during the cycles, the after-register count (spare sink vs hub, must both be 20), the exit result, and the decision: "sinks attach on demand (Part 2 in), first-event window at most one frame after `events.subscribe` answers" or "probe FAIL: sinks stay registered and skip when nothing is subscribed (skip-only, the Task 39 behaviour); not adopted". Then:
+Append to `spikes/RESULTS.md`: `**Task 44, sink register/unregister probe (box, Windows-native, <date/time>, Skyrim 1.6.1170.0, s4test, never saved; <n> launches; SKSE plugins: <list>):** PASS|FAIL` with the probe JSON and the `probe:` log lines verbatim, the activations raised during the cycles, the after-arm count (spare sink vs hub, must both be 20), `events_outside_tasks`, `overlaps`, `menu_delivered`, `delivered_any`, that the SKSE mod-event source was not cycled by the probe, the exit result, and the decision: "sinks attach on demand (Part 2 in). **Protocol fact (Task 57 copies it into PROTOCOL.md and README):** an event raised between the `events.subscribe` answer and the attach task (about one frame) is not delivered and not counted in `dropped` or `suppressed`; a subscriber that must not miss the first event subscribes before triggering it and waits about one frame", or "probe FAIL: sinks stay registered and skip when nothing is subscribed (skip-only, the Task 39 behaviour); not adopted", or "probe INCONCLUSIVE (no spare-sink event arrived outside our tasks): skip-only; not adopted". Then:
 ```bash
 git add plugin/src/SinkProbe.h plugin/src/SinkProbe.cpp pyglue/include/spy/pymodule.h pyglue/src/pymodule.cpp \
   plugin/src/PythonHost.cpp plugin/CMakeLists.txt \

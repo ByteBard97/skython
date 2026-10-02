@@ -7,12 +7,12 @@
 **What this task builds.** The Python side of events for a `Game` in either mode. `skython/events.py` holds the `Event` value, the `EventStream` protocol and its in-process implementation over one `_skython` consumer, `Subscription`, and `EventDispatcher`: one daemon thread per `Game`, named `skython-events`, that pulls event objects from the `Game`'s stream and runs each subscription's callback in event order. `Game` gains `on(...)` and six helpers, `wait_for`, `save` and `load`, and `Game` callers for the four new ops replace Task 33's `PENDING_OPS` in `test_game.py`. `tests/test_events.py` runs each behaviour test against Task 36a's fake **and** against the real Linux `_skython` when `SKYTHON_REAL_MODULE_DIR` names its build folder. The `EventStream` protocol carries `track(sub, max_queue)` / `untrack(sub)`: the dispatcher tells the stream each subscription's bound and when it ends; the in-process stream ignores both (the hub bounds each subscription), Task 37's remote stream uses them for its client-side bounded queues. Task 37 adds the remote stream and reuses `EventDispatcher` unchanged.
 
 **The two locking rules that carry Review Focus 4 and the "no lost first event" rule** (index Contracts, `events.py`):
-1. `Game.on()` holds the dispatcher's `threading.RLock` across the `events.subscribe` request, `stream.track(sub, max_queue)` **and** the `sub -> Subscription` registration. The dispatch thread takes the same lock before it looks up each event's `sub`. An event that the hub queued between its `Subscribe` and our registration therefore waits for the lock instead of being dropped as "unknown sub". No deadlock: the subscribe response arrives synchronously (in-process) or on the reader thread (remote), never on the dispatch thread; and it is an `RLock`, so `on()` from inside a callback works.
+1. `Game.on()` holds the dispatcher's `threading.RLock` across the `events.subscribe` request, `stream.track(sub, max_queue)` **and** the `sub -> Subscription` registration. The dispatch thread takes the same lock before it looks up each event's `sub`. An event that the hub queued between its `Subscribe` and our registration therefore waits for the lock instead of being dropped as "unknown sub". No deadlock: the subscribe response arrives synchronously (in-process) or on the reader thread (remote), never on the dispatch thread; and it is an `RLock`, so `on()` from inside a callback works. The price, documented in `Game.on`'s docstring: for the length of one subscribe round trip (about 90 ms remotely, two frame drains) the Game's callbacks wait. `subscribe()` checks the dispatcher's stop flag under the lock first, so an `on()` that races `Game.close()` raises `ConnectionLost` instead of registering into a closed dispatcher (Review A#10).
 2. A callback runs **without** the lock. `Subscription.close()` sets `closed` under the lock (so no later callback of it starts: the dispatch thread checks `closed` under the same lock right before it calls) and calls `stream.untrack(sub)`, sends `events.unsubscribe`, then, unless it runs on the dispatch thread itself, waits on a `Condition` over the same lock until that subscription's running callback (if any) has returned. From inside its own callback it returns at once.
 
 **Files:**
 - Create: `python/src/skython/events.py`, `python/tests/test_events.py`
-- Modify: `python/src/skython/game.py` (Transport gains `events()`; `Game.on`, helpers, `wait_for`, `save`, `load`, `close`), `python/src/skython/inprocess.py` (`InProcessTransport.events()`, consumer passed to `_skython.call`, `close()` closes the stream), `python/src/skython/errors.py` (`WaitTimeout`), `python/src/skython/__init__.py` (exports `Event`, `Subscription`)
+- Modify: `python/src/skython/game.py` (Transport gains `events()`; `Game.on` (refused with `Unsupported` when the welcome's `capabilities` lack `events.subscribe`, i.e. a protocol 1.0 server), helpers, `wait_for`, `save`, `load`, `close`), `python/src/skython/inprocess.py` (`InProcessTransport.events()` (a module without `open_consumer`, or whose `open_consumer` raises `RuntimeError` because it has no event hub, is `Unsupported`), consumer passed to `_skython.call`, `close()` closes the stream), `python/src/skython/errors.py` (`WaitTimeout`), `python/src/skython/__init__.py` (exports `Event`, `Subscription`)
 - Modify: `python/tests/test_host.py` (one test: `reload` drops the old script's subscriptions), `python/tests/test_game.py` (`CALLERS` gains the four new ops; Task 33's `PENDING_OPS` set and its two uses are deleted)
 - Not changed here: `python/tests/fake_skython.py` and `python/tests/test_fixtures.py` (Task 36a)
 - Unchanged: `python/src/skython/_host.py`. `reload()` already closes a script's previous `Game`; with this task `Game.close()` closes that `Game`'s subscriptions, stream and dispatch thread, so the index's "`_host` drops a script's subscriptions" needs no host code, only the test below.
@@ -25,8 +25,8 @@
   - v1: `Game._request`, `_timeout_ms`, `_positive_seconds`, `_expect_dict` (`game.py`), `values.to_wire` / `from_wire`, `errors.*`, `tests/support.wait_until`, the `fake` fixture, `test_host.py`'s `host` fixture and `script()` helper.
 - Produces (index Contracts, `skython` package):
   - `skython.events`: `Event` (frozen dataclass `name, sub, seq, epoch, data, dropped=0, suppressed=0`; `Event.from_wire(raw) -> Event`, `data` values decoded with `from_wire`, a malformed object is `ProtocolViolation`); `EventStream` (Protocol: `consumer: int | None`, `next(timeout) -> list[dict]`, `close()`, `track(sub, max_queue)`, `untrack(sub)`); `InProcessEventStream(module)` (`track`/`untrack` are no-ops); `Subscription` (`sub`, `event`, `filter`, `closed`, `close()`, context manager); `EventDispatcher(stream, game)` (`lock`, `subscribe(send, event, filter, fn, max_queue) -> Subscription` (calls `stream.track(sub, result["max_queue"])` under the lock before registering), `start()`, `close()`). Task 37 reuses `EventDispatcher` and the `EventStream` protocol as they are.
-  - `skython.game.Transport` gains `events() -> EventStream` (one per transport, made on first use). `Game.on(event, filter, fn, *, max_queue=DEFAULT_EVENT_QUEUE) -> Subscription`; `on_death(actor, fn)`, `on_dying(actor, fn)`, `on_mod_event(name, fn)`, `on_channel(channel, fn)`, `on_quest_stage(quest, fn, *, stage=None)`, `on_game_loaded(fn)`; `wait_for(predicate, timeout, *, interval=0.25)`; `save(name, *, timeout=60.0) -> str`; `load(name, *, timeout=120.0, wait=True) -> dict`; `close()` closes every subscription, joins the dispatch thread (at most 2 s, never from the dispatch thread itself) and closes the stream. A transport without `events()` makes `on()` raise `Unsupported`.
-  - `skython.inprocess.InProcessTransport.events() -> InProcessEventStream`; `request()` passes the stream's consumer to `_skython.call` (as a third argument only when a stream exists, so v1 stubs with `call(text, timeout)` keep working).
+  - `skython.game.Transport` gains `events() -> EventStream` (one per transport, made on first use). `Game.on(event, filter, fn, *, max_queue=DEFAULT_EVENT_QUEUE) -> Subscription`; `on_death(actor, fn)`, `on_dying(actor, fn)`, `on_mod_event(name, fn)`, `on_channel(channel, fn)`, `on_quest_stage(quest, fn, *, stage=None)`, `on_game_loaded(fn)`; `wait_for(predicate, timeout, *, interval=0.25)`; `save(name, *, timeout=60.0) -> str`; `load(name, *, timeout=120.0, wait=True) -> dict`; `close()` closes every subscription, joins the dispatch thread (at most 2 s, never from the dispatch thread itself) and closes the stream. A transport without `events()`, a welcome whose `capabilities` list lacks `events.subscribe` (a protocol 1.0 server), or an in-process module with no event hub makes `on()` raise `Unsupported`; `on()` racing `Game.close()` raises `ConnectionLost`.
+  - `skython.inprocess.InProcessTransport.events() -> InProcessEventStream` (`errors.Unsupported` when the module has no `open_consumer` or it raises `RuntimeError`: no event hub, Review A#1); `request()` passes the stream's consumer to `_skython.call` (as a third argument only when a stream exists, so v1 stubs with `call(text, timeout)` keep working).
   - `skython.errors.WaitTimeout(SkythonError)`.
   - `Game` callers for `events.subscribe`, `events.unsubscribe`, `game.save`, `game.load` in `python/tests/test_game.py` (`set(CALLERS) == set(g.OPS)` again); `Game.load(..., wait=False)` sends no `game.state` first.
 
@@ -307,24 +307,41 @@ def test_game_close_with_8_subscriptions_frees_the_consumer(module, fake):
 
 
 # -- no lost first event -----------------------------------------------------------------------------------
-def test_1000_subscribe_then_immediate_push_lose_no_first_event(game, module):
-    # The push happens after the hub accepted the subscription and before Game.on() registered it: exactly the window
-    # the dispatcher's lock closes. Without the lock the event would be dropped as belonging to an unknown sub.
+def test_subscribe_then_immediate_push_loses_no_first_event(game, module):
+    # The push happens after the hub accepted the subscription and before Game.on() registered it, and the patched
+    # request() returns only once the dispatch thread has FETCHED that event, i.e. while on() still holds the
+    # dispatcher's lock: exactly the window the lock closes. Without the lock (send() outside it) the dispatch thread
+    # would look the sub up, find nothing and drop the event, and this test fails at once. Review A#4.
+    stream = game.transport.events()
+    fetched = threading.Event()
+    real_next = stream.next
+
+    def next_(timeout):
+        batch = real_next(timeout)
+        if batch:
+            fetched.set()
+        return batch
+
+    stream.next = next_  # patched before the dispatch thread exists, so every fetch goes through it
+    warm = game.on_channel("warm-up", lambda e: None)  # starts the dispatch thread before the first iteration
     real_request = game.transport.request
 
     def request(op, args, wait_s):
         resp = real_request(op, args, wait_s)
         if op == g.OP_EVENTS_SUBSCRIBE and resp.get("ok"):
+            fetched.clear()
             push(module, "channel", chan(args["filter"]["channel"][0], "first"))
+            assert fetched.wait(5), "the dispatch thread never fetched the first event"
         return resp
 
     game.transport.request = request
-    for i in range(1000):
+    for i in range(50):
         seen = []
         sub = game.on_channel(f"race{i}", seen.append)
         wait_until(lambda: seen, what=f"the first event of subscription {i}")
         assert seen[0].seq == 1 and seen[0].sub == sub.sub and seen[0].data["payload"] == "first"
         sub.close()
+    warm.close()
 
 
 def test_on_from_inside_a_callback(game, module):
@@ -427,6 +444,40 @@ def test_on_after_close_is_connection_lost(fake):
     gm.close()
     with pytest.raises(errors.ConnectionLost):
         gm.on_channel("x", lambda e: None)
+    # An on() that got the dispatcher just before Game.close() stopped it (Review A#10): refused, nothing sent.
+    gm2 = connect_in_process(module=fake)
+    d = gm2._event_dispatcher()
+    d.close()
+    with pytest.raises(errors.ConnectionLost):
+        d.subscribe(lambda: pytest.fail("nothing may be sent"), "channel", None, lambda e: None, 16)
+    gm2.close()
+
+
+def test_a_server_without_the_events_ops_is_unsupported():
+    # A protocol 1.0 server (Review A#12): its welcome lists no events.subscribe, so on() refuses before sending.
+    class OldServer:
+        welcome, closed = {"epoch": 0, "protocol": [1, 0], "capabilities": ["game.state"]}, False
+
+        def request(self, op, args, wait_s):
+            raise AssertionError("nothing may be sent")
+
+        def events(self):
+            raise AssertionError("no stream may be made")
+
+        def close(self):
+            self.closed = True
+
+    with pytest.raises(errors.Unsupported, match="events.subscribe"):
+        Game(OldServer()).on_channel("x", lambda e: None)
+
+
+def test_a_module_without_an_event_hub_is_unsupported(fake):
+    # The game build before Task 39 fills ModuleHost.events: open_consumer raises RuntimeError (Review A#1).
+    fake.hub = None
+    with connect_in_process(module=fake) as gm:
+        with pytest.raises(errors.Unsupported, match="no event hub"):
+            gm.on_channel("x", lambda e: None)
+        assert gm.call("Fake", "Echo", 3) == 3  # everything else still works
 
 
 def test_the_dispatcher_tracks_and_untracks_each_subscription(fake_game):
@@ -653,6 +704,8 @@ class EventDispatcher:
         happen under self.lock, so an event the hub queues in between waits for the registration instead of being
         dropped. The result's max_queue (what the hub granted) wins over the requested one."""
         with self.lock:
+            if self._stop.is_set():  # Game.close() won the race: never register into a closed dispatcher
+                raise errors.ConnectionLost("the Game is closed")
             result = send()
             sub_id = result.get("sub")
             if type(sub_id) is not int:
@@ -776,6 +829,10 @@ Replace `Game.close` with the block below, and insert the event methods before i
             if self._closing or self.closed:
                 raise errors.ConnectionLost("the Game is closed")
             if self._dispatcher is None:
+                caps = self.welcome.get("capabilities")
+                if isinstance(caps, list) and _g.OP_EVENTS_SUBSCRIBE not in caps:  # a protocol 1.0 server
+                    raise errors.Unsupported(_g.CODE_UNSUPPORTED, f"the server does not offer {_g.OP_EVENTS_SUBSCRIBE} "
+                                             f"(protocol {self.welcome.get('protocol')})")
                 events = getattr(self.transport, "events", None)
                 if events is None:
                     raise errors.Unsupported(_g.CODE_UNSUPPORTED, f"{type(self.transport).__name__} has no event stream")
@@ -789,7 +846,11 @@ Replace `Game.close` with the block below, and insert the event methods before i
         `filter` maps a field of the event's filter_fields to the values to accept (a list, or one value): every
         listed field must match one of its values. Forms must carry form_id (resolve them first); strings match
         ignoring ASCII case. At most `max_queue` events wait per subscription; beyond that the oldest are dropped
-        and the next delivered Event's `dropped` says how many."""
+        and the next delivered Event's `dropped` says how many.
+
+        on() holds the Game's dispatcher lock across the subscribe round trip (about 90 ms through the bridge), so
+        this Game's callbacks wait that long; that is what guarantees the first event is never lost. Raises
+        Unsupported when the server or module has no events, ConnectionLost once the Game is closed."""
         if not callable(fn):
             raise TypeError(f"fn must be callable, not {type(fn).__name__}")
         args: dict[str, Any] = {"event": event, "max_queue": max_queue}
@@ -842,7 +903,8 @@ Replace `Game.close` with the block below, and insert the event methods before i
     # -- save and load ----------------------------------------------------------------------------------
     def save(self, name: str, *, timeout: float = 60.0) -> str:
         """Save the game as `name` (letters, digits, _; at most 64). Never overwrites: an existing save is BadRequest
-        with detail reason "save_exists". Returns once the game reports the save written."""
+        with detail reason "save_exists". Returns once the engine has started the save: the file can appear a
+        moment later, and a load of it meanwhile is NotReady with detail reason "saving" (retry briefly)."""
         result = _expect_dict(self._request(_g.OP_GAME_SAVE, {"name": name, "timeout_ms": _timeout_ms(timeout)}, timeout),
                               "game.save result")
         return result.get("name", name)
@@ -879,7 +941,7 @@ Replace `Game.close` with the block below, and insert the event methods before i
 
 - [ ] **Step 5: `InProcessTransport.events()`**
 
-In `python/src/skython/inprocess.py`: add `from .events import InProcessEventStream` after the `.game` import. At the end of `__init__` add:
+In `python/src/skython/inprocess.py`: add `from .events import InProcessEventStream` after the `.game` import (`_g` and `errors` are imported there since v1). At the end of `__init__` add:
 ```python
         self._stream: InProcessEventStream | None = None
         self._stream_lock = threading.Lock()
@@ -892,7 +954,12 @@ Add the method and replace `request`'s `call` line and `close`:
             if self.closed:
                 raise errors.ConnectionLost("the in-process transport is closed")
             if self._stream is None:
-                self._stream = InProcessEventStream(self._m)
+                if not hasattr(self._m, "open_consumer"):
+                    raise errors.Unsupported(_g.CODE_UNSUPPORTED, "this _skython module has no event API")
+                try:
+                    self._stream = InProcessEventStream(self._m)
+                except RuntimeError as e:  # ModuleHost.events is null: the game build before Task 39 (Review A#1)
+                    raise errors.Unsupported(_g.CODE_UNSUPPORTED, f"no event hub: {e}") from None
             return self._stream
 ```
 In `request`, replace `resp = _object(self._m.call(text, wait_s), f"the response to {op}")` with:
@@ -915,19 +982,19 @@ In `request`, replace `resp = _object(self._m.call(text, wait_s), f"the response
 - [ ] **Step 6: Run the new tests**
 
 Run: `cd python && uv run --managed-python --python 3.12 pytest -q tests/test_events.py tests/test_host.py tests/test_game.py 2>&1 | tail -2`
-Expected: `NN passed, 12 skipped` where NN is the existing `test_host.py` and `test_game.py` counts plus 22 (17 in `test_events.py`, 1 in `test_host.py`, 4 more fixture replays in `test_game.py` now that `PENDING_OPS` is gone); the 12 skips are the `real` parameters (`SKYTHON_REAL_MODULE_DIR not set`). The run takes about 10 s (the slow-callback test sleeps 2 s; the 1000-iteration test takes about 2 s).
+Expected: `NN passed, 12 skipped` where NN is the existing `test_host.py` and `test_game.py` counts plus 24 (19 in `test_events.py`, 1 in `test_host.py`, 4 more fixture replays in `test_game.py` now that `PENDING_OPS` is gone); the 12 skips are the `real` parameters (`SKYTHON_REAL_MODULE_DIR not set`). The run takes a few seconds (the slow-callback test sleeps 2 s; the 50-iteration race test well under 1 s).
 
 Against the real module (Task 35 built it; the real module is built for 3.14):
 Run: `cmake --build pyglue/build -j 2>&1 | tail -1 && cd python && SKYTHON_REAL_MODULE_DIR="$(cd ../pyglue/build && pwd)" uv run --managed-python --python 3.14 pytest -q tests/test_events.py tests/test_real_module.py 2>&1 | tail -2`
-Expected: `NN passed` with no skips: the 29 cases of `test_events.py` (12 behaviour tests on both backends, 5 fake-only) plus `test_real_module.py`'s. A case that passes on the fake and fails on the real module means Task 36a's fake drifted from core (its own `test_fake_hub.py` should have caught it): fix the fake, never the assertion.
+Expected: `NN passed` with no skips: the 31 cases of `test_events.py` (12 behaviour tests on both backends, 7 fake-only) plus `test_real_module.py`'s. A case that passes on the fake and fails on the real module means Task 36a's fake drifted from core (its own `test_fake_hub.py` should have caught it): fix the fake, never the assertion.
 
 - [ ] **Step 7: Run the whole suite on both Pythons, then the races on one CPU**
 
 Run: `cd python && uv run --managed-python --python 3.12 pytest -q 2>&1 | tail -1 && uv run --managed-python --python 3.14 pytest -q 2>&1 | tail -1`
-Expected twice: Task 36a's total plus 22 passed, plus Task 36a's skips plus 12; no failures (the v1 tests that stub `call(text, timeout)` are unchanged by Step 5: the consumer is passed only once a stream exists).
+Expected twice: Task 36a's total plus 24 passed, plus Task 36a's skips plus 12; no failures (the v1 tests that stub `call(text, timeout)` are unchanged by Step 5: the consumer is passed only once a stream exists).
 
 Run: `cd python && for i in 1 2 3; do uv run --managed-python --python 3.14 pytest -q tests/test_events.py 2>&1 | tail -1; done; taskset -c 0 uv run --managed-python --python 3.12 pytest -q tests/test_events.py 2>&1 | tail -1`
-Expected: `17 passed, 12 skipped` four times. Every wait is `wait_until` or a fence with a deadline; the one negative wait (`closed.wait(0.3)`) only checks that `close()` is still blocked.
+Expected: `19 passed, 12 skipped` four times. Every wait is `wait_until` or a fence with a deadline; the one negative wait (`closed.wait(0.3)`) only checks that `close()` is still blocked.
 
 Run: `python3 tools/gen_protocol.py --check`
 Expected: the generated files are up to date (this task edits none of them).

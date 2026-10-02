@@ -6,14 +6,15 @@
 >
 > **Gate 0:** Steps 1-9 do not need it (README Gates: "the offline parts of 45-48 do not" wait). Step 10 is the gate (README **Owner decisions** table, decision 7: a STOP gate, never assumed): until `OWNER-DECISIONS-2026-10-02.md` decision 7 is recorded as accepted, no step writes `Data\SkythonTest.esp`, any new `Data\Scripts\*.pex`, `plugins.txt`, or even installs the new box scripts. If it is not accepted, commit Steps 1-9 and STOP.
 >
-> **STOP and ask the owner (do not improvise) if:** decision 7 is not accepted, or accepted with a list other than the one below; the verified `plugins.txt` path (Step 2) is not `C:\Users\geoff\AppData\Local\Skyrim Special Edition\plugins.txt`, or more than one `plugins.txt` could be the one the loader reads; `box_plugins.sh backup` prints `BACKUP_DIFFERS` (the owner changed the load order after the backup was taken: the owner may approve replacing the backup with the current file; only with that sign-off run `source tools/box/box_env.sh; bssh "Copy-Item -LiteralPath 'C:\Users\geoff\AppData\Local\Skyrim Special Edition\plugins.txt' -Destination 'C:\dev\skyrim-python-box\plugins.txt.bak' -Force"` once, then `box_plugins.sh backup` must print `BACKUP_SAME`; nothing is deleted); `plugins.txt` is ever neither the backup nor the backup plus our line (exit 3); the restored file is not byte-identical to the backup; the build box does not answer ssh within 10 s.
+> **STOP and ask the owner (do not improvise) if:** decision 7 is not accepted, or accepted with a list other than the one below; the verified `plugins.txt` path (Step 2) is not `C:\Users\geoff\AppData\Local\Skyrim Special Edition\plugins.txt`, or more than one `plugins.txt` could be the one the loader reads; `box_plugins.sh backup` prints `BACKUP_DIFFERS` (the owner changed the load order after the backup was taken: the owner may approve replacing the backup with the current file; only with that sign-off run `source tools/box/box_env.sh; bssh "Copy-Item -LiteralPath 'C:\Users\geoff\AppData\Local\Skyrim Special Edition\plugins.txt' -Destination 'C:\dev\skyrim-python-box\plugins.txt.bak' -Force"` once, then `box_plugins.sh backup` must print `BACKUP_SAME`; nothing is deleted); `plugins.txt` is ever neither the backup nor the backup plus our line (exit 3); the restored file is not byte-identical to the backup; `tools/box/box_plugins.sh show` reports `state: OTHER` after any launch (the game or a launcher rewrote `plugins.txt` while it ran; never restore it by hand: ask the owner); the build box does not answer ssh within 10 s.
 
 **Why.** M1.5 needs a test plugin and its scripts in the game. Until now our tools could write only under `Data\SKSE\Plugins` plus `Data\Scripts\SkyrimPython.pex`. Owner decision 7 allows exactly: `Data\SkythonTest.esp`; six named `Data\Scripts\*.pex` (`Skython.pex`, `SkythonTestQuestBase.pex`, `SkythonTestQuest.pex`, `SkythonTestAlias.pex`, `SkythonTestLocationAlias.pex`, `QF_SkythonTestQuest_01000800.pex`); one added line `*SkythonTest.esp` in the box's `plugins.txt`, with a backup taken before the first change and restored at the end of every box session that added it. This task teaches `box_deploy.sh`/`place.ps1` that list and nothing more, and adds `box_plugins.sh` + `win/plugins.ps1` for `plugins.txt`. Offline tests pin every refusal; one live check (no game) proves backup → add → restore is byte-exact on the box.
 
 **Files:**
-- Modify: `tools/box/box_deploy.sh` (`--esp`, `--test-pex`), `tools/box/win/place.ps1` (single-file allow-list), `tools/box/box_quit.sh`, `tools/box/box_stop.sh` (restore after the game ends), `tools/box/test_box_tools.sh` (block 6j and two updated pinned strings)
+- Modify: `tools/box/box_deploy.sh` (`--esp`, `--test-pex`), `tools/box/box_env.sh` (`BOX_GATE0_FILE`, `need_gate0`), `tools/box/win/place.ps1` (single-file allow-list), `tools/box/box_quit.sh`, `tools/box/box_stop.sh` (restore after the game ends), `tools/box/test_box_tools.sh` (block 6j and two updated pinned strings)
 - Create: `tools/box/box_plugins.sh`, `tools/box/win/plugins.ps1`
 - Modify: `spikes/RESULTS.md` (Task 45 entry)
+- Local, gitignored (written in Step 10, only after decision 7 is accepted): `out/gate0-accepted`
 - On the box only (after Gate 0): `C:\dev\skyrim-python-box\plugins.txt.bak` (the backup, kept; on the owner's removal list), the re-installed `C:\dev\skyrim-python-box\*.ps1`.
 
 **Interfaces:**
@@ -23,6 +24,8 @@
   - `tools/box/box_deploy.sh --test-pex FILE.pex...` → `...\Data\Scripts\<basename>` for basenames in exactly `Skython.pex`, `SkythonTestQuestBase.pex`, `SkythonTestQuest.pex`, `SkythonTestAlias.pex`, `SkythonTestLocationAlias.pex`, `QF_SkythonTestQuest_01000800.pex` (case-sensitive; a name twice is refused). Both go through `put_file`: placed only if absent or already in `out/box-deployed.txt`, so a later task's rebuild overwrites our own earlier copy (Task 48 over Task 47's spike files) and never anyone else's.
   - `tools/box/box_plugins.sh backup | show | add | restore | restore-if-added` and the offline `compose BAK_FILE` / `classify CUR_FILE BAK_FILE` (`BACKUP` | `ADDED` | `OTHER`). `add` and `restore` refuse while the game runs; anything but `BACKUP`/`ADDED` is exit 3 (STOP). State in `$SKYTHON_STATE/box-plugins.state` (`added ...` / `restored ...`).
   - `box_quit.sh` (after `EXITED`) and `box_stop.sh` (after the game is gone) run `box_plugins.sh restore-if-added`; a failed restore makes them exit 3.
+  - `out/gate0-accepted` (gitignored; the owner's words and date) and `need_gate0` in `box_env.sh`: `box_deploy.sh --esp`/`--test-pex` and `box_plugins.sh backup`/`add` refuse without the file (`Gate 0 is not recorded ...`); `restore`, `restore-if-added` and `show` never need it.
+  - `GameRunning` (plugins.ps1) treats `SkyrimSE`, `skse64_loader`, `SkyrimSELauncher` and `ModOrganizer` as "the game is running".
   - **Box session rule for later tasks (README Global Constraints, "`plugins.txt` around launches"):** `tools/box/box_plugins.sh add` before every `tools/box/box_launch.sh` that loads `skythonbase` or otherwise needs the ESP; the quit/stop tools put the backup back. A save made with the ESP (`skythonbase`, Task 49) must only be loaded with the line added.
 
 - [ ] **Step 1: Read the owner's answer to decision 7 (record it; do not act on it yet)**
@@ -89,7 +92,7 @@ git apply <<'PATCH'
 +  && echo "$pre" | grep -qF "if (\$dest -match '\.\.' -or -not (\$fullDest.StartsWith(\$root) -or (\$Singles -ccontains \$fullDest))) { \"REFUSED" \
    && ok "place.ps1 checks GetFullPath(Dest) and '..' before the mode switch (all modes)" || bad "place.ps1 does not normalise Dest for every mode"
  
-@@ -283,4 +285,113 @@
+@@ -283,4 +285,142 @@
    && bad "the old 'reads as UNCHANGED' caveat is still documented" || ok "no stale 'reads as UNCHANGED' caveat"
  
 +# 6j. Gate 0 (Task 45, owner decision 7): exactly Data\SkythonTest.esp, exactly six Data\Scripts\*.pex, and
@@ -120,6 +123,26 @@ git apply <<'PATCH'
 +  && ok "box_deploy.sh TEST_PEX_NAMES is exactly the six names" || bad "box_deploy.sh TEST_PEX_NAMES"
 +grep -qE 'put_file "\$ESP" "\$ESP_DEST"' "$B/box_deploy.sh" && grep -qE 'put_file "\$\{TPEX\[\$i\]\}" "\$\{TPEX_DEST\[\$i\]\}"' "$B/box_deploy.sh" \
 +  && ok "--esp and --test-pex go through put_file (absent or ours; recorded)" || bad "--esp/--test-pex do not use put_file"
++# Gate 0 file and the deploy record, against 6f3's stub (never print mode): without out/gate0-accepted nothing is
++# placed; with it, an existing Data\SkythonTest.esp or Data\Scripts\*.pex that is not ours is never overwritten.
++drec2="$gd/box-deployed.txt"; : > "$drec2"; g0="$gd/gate0-accepted"
++gdep() { : > "$STUBLOG"; STUB_EXISTS="$1" BOX_DEPLOYED="$drec2" BOX_GATE0_FILE="$g0" BOX_SSH_STUB="$STUB" "$B/box_deploy.sh" "${@:2}" 2>&1; }
++for m in "--esp $gd/SkythonTest.esp" "--test-pex $gd/Skython.pex"; do
++  # shellcheck disable=SC2086
++  t="$(gdep ABSENT $m)"; rc=$?
++  [ "$rc" != 0 ] && case "$t" in *"Gate 0 is not recorded"*) true ;; *) false ;; esac && ! grep -q 'place.ps1' "$STUBLOG" && [ ! -s "$drec2" ] \
++    && ok "${m%% *} refuses without out/gate0-accepted (no place.ps1 call, nothing recorded)" || bad "${m%% *} without Gate 0: rc=$rc '$t'"
++done
++echo 'owner decision 7 accepted on 2026-10-02: "offline test"' > "$g0"
++for m in "--esp $gd/SkythonTest.esp" "--test-pex $gd/Skython.pex"; do
++  # shellcheck disable=SC2086
++  t="$(gdep EXISTS $m)"; rc=$?
++  [ "$rc" != 0 ] && case "$t" in *"not in out/box-deployed.txt"*) true ;; *) false ;; esac \
++    && grep -q 'place.ps1 -Mode exists' "$STUBLOG" && ! grep -q 'place.ps1 -Mode place' "$STUBLOG" && [ ! -s "$drec2" ] \
++    && ok "${m%% *} never overwrites an existing target that is not ours (nothing placed, nothing recorded)" || bad "${m%% *} over an unrecorded target: rc=$rc '$t'"
++done
++[ "$(BOX_GATE0_FILE=/tmp/elsewhere bash -c 'source "$1/box_env.sh"; echo "$BOX_GATE0_FILE"' _ "$B")" = "$ROOT/out/gate0-accepted" ] \
++  && ok "BOX_GATE0_FILE override ignored without BOX_SSH_STUB" || bad "BOX_GATE0_FILE override honoured without a stub"
 +pl="$B/win/place.ps1"
 +grep -qF "\$EspDest = 'C:\ChronicleDev\Stock Game\Data\SkythonTest.esp'" "$pl" && ok "place.ps1 lists Data\\SkythonTest.esp" || bad "place.ps1 EspDest"
 +all6=1; for n in "${six[@]}"; do grep -qF "'C:\ChronicleDev\Stock Game\Data\Scripts\\$n'" "$pl" || all6=0; done
@@ -151,6 +174,8 @@ git apply <<'PATCH'
 +  && echo "$w" | grep -qF 'Copy-Item -LiteralPath $PluginsTxt -Destination $Backup' && echo "$w" | grep -qF 'Copy-Item -LiteralPath $Backup -Destination $PluginsTxt -Force' \
 +  && ok "plugins.ps1 writes only: the backup (once), plugins.txt (add), plugins.txt from the backup (restore)" || { bad "plugins.ps1 write operations:"; echo "$w"; }
 +[ "$(grep -cF "if (GameRunning) { Refuse 'the game is running' }" "$pp")" = 2 ] && ok "plugins.ps1 add and restore refuse while the game runs" || bad "plugins.ps1 game-running guard"
++grep -qF 'function GameRunning { return [bool](Get-Process -Name SkyrimSE,skse64_loader,SkyrimSELauncher,ModOrganizer -ErrorAction SilentlyContinue) }' "$pp" \
++  && ok "plugins.ps1 GameRunning covers the game, the loader, the launcher and MO2" || bad "plugins.ps1 GameRunning process list"
 +grep -qF 'if ((Sha $c) -ne (Sha (Compose $b))) { Refuse' "$pp" && grep -qF 'if ((Sha $c) -ne (Sha $b)) { Refuse' "$pp" && grep -qF 'if (Listed $b) { Refuse' "$pp" \
 +  && ok "plugins.ps1 re-checks on the box: add only from the backup, restore only from backup + line" || bad "plugins.ps1 box-side checks"
 +
@@ -172,8 +197,9 @@ git apply <<'PATCH'
 +chmod +x "$pst"
 +readf() { printf 'CUR %s %s\nBAK %s %s\nGAME %s\n' "$(sha256sum "$1" | cut -d' ' -f1)" "$(base64 -w0 < "$1")" \
 +          "$(sha256sum "$2" | cut -d' ' -f1)" "$(base64 -w0 < "$2")" "$3" > "$pd/read.txt"; }
++echo 'owner decision 7 accepted on 2026-10-02: "offline test"' > "$pd/gate0"
 +sbox() { : > "$PSTUBLOG"; PSTUB_READ="$pd/read.txt" PSTUB_BAKSHA="$(sha256sum "$pd/bak1" | cut -d' ' -f1)" \
-+         PSTUB_NEWSHA="$(sha256sum "$pd/want1" | cut -d' ' -f1)" BOX_SSH_STUB="$pst" "$@" 2>&1; }
++         PSTUB_NEWSHA="$(sha256sum "$pd/want1" | cut -d' ' -f1)" BOX_GATE0_FILE="$pd/gate0" BOX_SSH_STUB="$pst" "$@" 2>&1; }
 +mkdir -p "$SKYTHON_STATE"; echo "restored 2026-10-02T00:00:00" > "$SKYTHON_STATE/box-plugins.state"
 +t="$(sbox "$B/box_quit.sh")"; rc=$?
 +[ "$rc" = 0 ] && case "$t" in *"nothing to restore"*) true ;; *) false ;; esac && ! grep -q plugins.ps1 "$PSTUBLOG" \
@@ -199,6 +225,12 @@ git apply <<'PATCH'
 +readf "$pd/extra" "$pd/bak1" IDLE
 +t="$(sbox "$P_" add)"; rc=$?
 +[ "$rc" = 3 ] && ! grep -q 'plugins.ps1 -Mode add' "$PSTUBLOG" && ok "add: plugins.txt differs from the backup -> STOP, nothing written" || bad "add other: rc=$rc '$t'"
++readf "$pd/bak1" "$pd/bak1" IDLE
++for m in backup add; do
++  : > "$PSTUBLOG"; t="$(PSTUB_READ="$pd/read.txt" BOX_GATE0_FILE="$pd/no-gate0" BOX_SSH_STUB="$pst" "$P_" "$m" 2>&1)"; rc=$?
++  [ "$rc" != 0 ] && case "$t" in *"Gate 0 is not recorded"*) true ;; *) false ;; esac && ! grep -q plugins.ps1 "$PSTUBLOG" \
++    && ok "box_plugins.sh $m refuses without out/gate0-accepted (no plugins.ps1 call)" || bad "box_plugins.sh $m without Gate 0: rc=$rc '$t'"
++done
 +unset SKYTHON_STATE
 +
  # 7. nothing reached ssh or scp during the whole run
@@ -208,7 +240,7 @@ bash tools/box/test_box_tools.sh | grep -E '^FAIL|BOX TOOLS'
 ```
 
 If `git apply` reports a conflict because an earlier task (41-44) touched these lines, make the same edits by hand: the patch shows exactly what changes.
-Expected: `BOX TOOLS OFFLINE FAIL` with about 30 `FAIL` lines, among them `missing tools/box/box_plugins.sh`, `missing tools/box/win/plugins.ps1`, `place.ps1 allow-list`, `place.ps1 does not normalise Dest for every mode`, `--esp target: 'BOX_OFFLINE: refusing ssh ...'`, `box_deploy.sh TEST_PEX_NAMES`, `place.ps1 EspDest`, `compose case 1..3`, `plugins.ps1 paths`, `box_quit.sh restore: ...`. No `ssh/scp was called` line (the offline guard holds).
+Expected: `BOX TOOLS OFFLINE FAIL` with about 30 `FAIL` lines, among them `missing tools/box/box_plugins.sh`, `missing tools/box/win/plugins.ps1`, `place.ps1 allow-list`, `place.ps1 does not normalise Dest for every mode`, `--esp target: 'BOX_OFFLINE: refusing ssh ...'`, `box_deploy.sh TEST_PEX_NAMES`, `place.ps1 EspDest`, `compose case 1..3`, `plugins.ps1 paths`, `plugins.ps1 GameRunning process list`, `--esp without Gate 0: ...`, `box_quit.sh restore: ...`. No `ssh/scp was called` line (the offline guard holds).
 
 - [ ] **Step 4: `box_deploy.sh --esp` and `--test-pex`**
 
@@ -243,7 +275,7 @@ git apply <<'PATCH'
 +test_pex_ok() { local n; for n in "${TEST_PEX_NAMES[@]}"; do [ "$1" = "$n" ] && return 0; done; return 1; }
  plugins_rel() {  # plugins_rel <REL>: the Windows path under Plugins, or die
    local r="${1//\//\\}"
-@@ -97,4 +106,21 @@
+@@ -97,4 +106,23 @@
    PEX_DEST="$BOX_DATA\\Scripts\\SkyrimPython.pex"
    if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then echo "$PEX_DEST"; exit 0; fi
 +elif [ "$1" = --esp ]; then
@@ -252,6 +284,7 @@ git apply <<'PATCH'
 +  [ "$(basename "$ESP")" = SkythonTest.esp ] || box_die "--esp places only SkythonTest.esp (got $(basename "$ESP"))"
 +  ESP_DEST="$BOX_DATA\\SkythonTest.esp"
 +  if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then echo "$ESP_DEST"; exit 0; fi
++  need_gate0
 +elif [ "$1" = --test-pex ]; then
 +  [ $# -ge 2 ] || box_die "usage: box_deploy.sh --test-pex FILE.pex..."
 +  TPEX=(); TPEX_DEST=()
@@ -263,9 +296,10 @@ git apply <<'PATCH'
 +    TPEX+=("$f"); TPEX_DEST+=("$BOX_DATA\\Scripts\\$b")
 +  done
 +  if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then printf '%s\n' "${TPEX_DEST[@]}"; exit 0; fi
++  need_gate0
  elif [ "$1" = --move ]; then
    [ $# -eq 3 ] || box_die "usage: box_deploy.sh --move REL NEWREL (both relative to Plugins)"
-@@ -153,4 +179,10 @@
+@@ -153,4 +181,10 @@
      put_file "$PEX" "$PEX_DEST"
      ;;
 +  --esp)
@@ -278,7 +312,19 @@ git apply <<'PATCH'
      r="$(bps 60 place.ps1 -Mode move -SrcB64 "$(b64 "$MV_SRC")" -DestB64 "$(b64 "$MV_DEST")" | tr -d '\r')"
 PATCH
 ```
-The list lives in one array (`TEST_PEX_NAMES`); `--esp`/`--test-pex` resolve and print their targets before any ssh (print mode), and place through `put_file` after the game-running check like `--pex`.
+The list lives in one array (`TEST_PEX_NAMES`); `--esp`/`--test-pex` resolve and print their targets before any ssh (print mode), then refuse unless Gate 0 is recorded (`need_gate0`, below), and place through `put_file` after the game-running check like `--pex`.
+
+Gate 0 is also a file, so no tool can place the decision-7 files by mistake before the owner's answer: add to `tools/box/box_env.sh`, right after the line that sets `BOX_DEPLOYED` (the `if { [ "${BOX_DEPLOY_PRINT_TARGET:-0}" != 1 ] ...` line):
+```bash
+# Gate 0 (owner decision 7, Task 45): out/gate0-accepted holds the owner's words and date; Task 45 Step 10 writes it
+# only after decision 7 is accepted. --esp, --test-pex and box_plugins.sh backup/add refuse without it. An override
+# (BOX_GATE0_FILE=...) is honoured only under box_stubbed (offline tests).
+if ! box_stubbed || [ -z "${BOX_GATE0_FILE:-}" ]; then BOX_GATE0_FILE="$BOX_ROOT/out/gate0-accepted"; fi
+need_gate0() {
+  [ -s "$BOX_GATE0_FILE" ] || box_die "Gate 0 is not recorded ($BOX_GATE0_FILE is missing): owner decision 7 must be accepted first (Task 45 Step 10)"
+}
+```
+(`box_die` is defined further down in `box_env.sh`; `need_gate0` only calls it when run, after the whole file is sourced.)
 
 If `git apply` reports a conflict because an earlier task (41-44) touched these lines, make the same edits by hand: the patch shows exactly what changes.
 
@@ -354,7 +400,7 @@ $Line = [Text.Encoding]::ASCII.GetBytes("*SkythonTest.esp`r`n")
 function Sha([byte[]]$b) { ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b))).Replace('-', '').ToLower() }
 function Bytes([string]$p) { if (Test-Path -LiteralPath $p) { return ,[IO.File]::ReadAllBytes($p) } else { return $null } }
 function Refuse([string]$why) { "REFUSED $why"; exit 3 }
-function GameRunning { return [bool](Get-Process -Name SkyrimSE,skse64_loader -ErrorAction SilentlyContinue) }
+function GameRunning { return [bool](Get-Process -Name SkyrimSE,skse64_loader,SkyrimSELauncher,ModOrganizer -ErrorAction SilentlyContinue) }
 function Listed([byte[]]$b) {
   foreach ($l in ([Text.Encoding]::UTF8.GetString($b) -split "`r?`n")) { if ($l.Trim().TrimStart('*').ToLower() -eq 'skythontest.esp') { return $true } }
   return $false
@@ -420,6 +466,7 @@ Create `tools/box/box_plugins.sh` (then `chmod +x tools/box/box_plugins.sh`):
 # backup back. Only win/plugins.ps1 writes the file; this script sends SHA-256 values, never bytes, and the box re-checks.
 # Usage: box_plugins.sh backup | show | add | restore | restore-if-added
 #        box_plugins.sh compose BAK_FILE | classify CUR_FILE BAK_FILE     (local, offline; classify: BACKUP|ADDED|OTHER)
+# backup and add refuse unless Gate 0 is recorded (out/gate0-accepted, need_gate0 in box_env.sh); restore never needs it.
 # add/restore refuse while the game runs and record added/restored in $SKYTHON_STATE/box-plugins.state; box_quit.sh and
 # box_stop.sh run restore-if-added once the game has ended. A plugins.txt that is neither the backup nor the backup plus
 # our line is a STOP (exit 3, diff printed, nothing written).
@@ -477,6 +524,7 @@ case "${1:-}" in
   compose)  [ $# -eq 2 ] || box_die "usage: box_plugins.sh compose BAK_FILE"; compose "$2" ;;
   classify) [ $# -eq 3 ] || box_die "usage: box_plugins.sh classify CUR_FILE BAK_FILE"; classify "$2" "$3" ;;
   backup)
+    need_gate0
     r="$(bps 60 plugins.ps1 -Mode backup | tr -d '\r')" || true
     echo "$r"
     case "$r" in
@@ -489,6 +537,7 @@ case "${1:-}" in
     [ "$BAK_SHA" = NONE ] || echo "state: $(classify "$WORK/cur" "$WORK/bak")"
     tr -d '\r' < "$WORK/cur" ;;
   add)
+    need_gate0
     read_box; need_idle_and_backup
     case "$(classify "$WORK/cur" "$WORK/bak")" in
       ADDED)  mark added; echo "ALREADY: *SkythonTest.esp is already the one added line" ;;
@@ -562,19 +611,24 @@ exit "$rc"
 ```bash
 bash tools/box/test_box_tools.sh | grep -E '^FAIL|BOX TOOLS|6j|--esp|--test-pex|plugins|compose|classify|restore'
 ```
-Expected: no `FAIL`; the new lines include `ok   --esp target is Data\SkythonTest.esp`, `ok   --test-pex: the six names resolve to Data\Scripts\<name>`, `ok   --test-pex refuses: skython.pex`, `ok   place.ps1 TestPexDests: exactly the six Data\Scripts names`, `ok   compose case 2: backup + [CRLF] + *SkythonTest.esp CRLF`, `ok   classify reordered -> OTHER`, `ok   box_quit.sh after EXITED restores the backup (state -> restored)`, `ok   add: plugins.txt differs from the backup -> STOP, nothing written`; last lines `ok   no ssh/scp call reached PATH` and `BOX TOOLS OFFLINE PASS`. Also check the tests bite: change `SkythonTestAlias.pex` to `SkythonTestAliasX.pex` in `place.ps1`'s list, rerun, see `FAIL place.ps1 TestPexDests is not exactly the six names`, then undo the change (`git diff tools/box/win/place.ps1` shows only Step 5's patch again).
+Expected: no `FAIL`; the new lines include `ok   --esp target is Data\SkythonTest.esp`, `ok   --test-pex: the six names resolve to Data\Scripts\<name>`, `ok   --test-pex refuses: skython.pex`, `ok   place.ps1 TestPexDests: exactly the six Data\Scripts names`, `ok   compose case 2: backup + [CRLF] + *SkythonTest.esp CRLF`, `ok   classify reordered -> OTHER`, `ok   box_quit.sh after EXITED restores the backup (state -> restored)`, `ok   add: plugins.txt differs from the backup -> STOP, nothing written`, `ok   --esp refuses without out/gate0-accepted (no place.ps1 call, nothing recorded)`, `ok   --test-pex never overwrites an existing target that is not ours (nothing placed, nothing recorded)`, `ok   box_plugins.sh add refuses without out/gate0-accepted (no plugins.ps1 call)`; last lines `ok   no ssh/scp call reached PATH` and `BOX TOOLS OFFLINE PASS`. Also check the tests bite: change `SkythonTestAlias.pex` to `SkythonTestAliasX.pex` in `place.ps1`'s list, rerun, see `FAIL place.ps1 TestPexDests is not exactly the six names`, then undo the change (`git diff tools/box/win/place.ps1` shows only Step 5's patch again).
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add tools/box/box_deploy.sh tools/box/win/place.ps1 tools/box/win/plugins.ps1 tools/box/box_plugins.sh \
+git add tools/box/box_deploy.sh tools/box/box_env.sh tools/box/win/place.ps1 tools/box/win/plugins.ps1 tools/box/box_plugins.sh \
         tools/box/box_quit.sh tools/box/box_stop.sh tools/box/test_box_tools.sh
 git commit -m "feat(box): Gate 0 deploy list for the test ESP and plugins.txt backup/add/restore"
 ```
 
 - [ ] **Step 10: Gate 0 check — STOP here unless decision 7 is accepted**
 
-Re-read Step 1's answer. Not accepted (or accepted with another list) → report "Task 45 offline part committed; waiting for owner decision 7" and STOP. Accepted → go on. Nothing below runs before that.
+Re-read Step 1's answer. Not accepted (or accepted with another list) → report "Task 45 offline part committed; waiting for owner decision 7" and STOP. Accepted → record it in the gitignored gate file, quoting the owner exactly (no other text, never a credential), then go on. Nothing below runs before that.
+```bash
+printf 'owner decision 7 accepted on %s: "%s"\n' "<date of the owner's answer>" "<the owner's words>" > out/gate0-accepted
+cat out/gate0-accepted
+```
+Expected: the one line. From now on `box_deploy.sh --esp`/`--test-pex` and `box_plugins.sh backup`/`add` work; before this step they refused with `Gate 0 is not recorded`. Never write this file on the owner's behalf.
 
 - [ ] **Step 11: Install the new box scripts**
 

@@ -8,7 +8,7 @@
 >
 > **STOP and ask the owner (do not improvise) if:** a gate above is not met; `verify-esm` prints a `MISMATCH`; two builds differ, or `build.sh` reports a pin mismatch without a source change that explains it; the plugin does not load or `coc SkythonTestCell` does not reach the cell; the game crashes.
 
-**Design.** The builder from Task 47 gains `full` mode (`TestEsp.cs`) and `verify-esm`; the spike mode stays (its output is unchanged, `00a11e2e...`). All FormIDs are fixed, so rebuilds are byte-identical (measured while writing this plan on a draft without the location-alias script and the initial property values: the same SHA-256 twice; Step 6 measures and pins this build's values). Records (all `SkythonTest.esp|0x0008xx`): quest `SkythonTestQuest` 0x800 (AllowRepeatedStages); location `SkythonTestLocation` 0x801; interior cell `SkythonTestCell` 0x802 (DefaultLightingTemplate, location 0x801, a 4x-scaled `ImpFloorMid01` floor, a `COCMarkerHeading`); NPC base `SkythonTestNPCBase` 0x803 (templated on the neutral vanilla `WEFarmerMale`, so the game uses that NPC's face, stats, inventory and AI); persistent actor `SkythonTestNPC` 0x804; persistent `XMarker` `SkythonTestMarker` 0x805. Referencing Skyrim.esm makes it the one master (`MAST` is written from the FormLinks). Quest aliases 0 `SkythonTarget`, 1 `SkythonItem`, 2 `SkythonExtra` (reference aliases with `SkythonTestAlias`), 3 `SkythonPlace` (location alias with the script `SkythonTestLocationAlias`: R45 drives only aliases that carry a script, and Task 50 calls the native `LocationAlias` functions on it through that script); stages 10/20/100/200 each with one log entry and a fragment that sends `stage_<n>` on `skython_test`; objective 10 with three `<Alias=...>` tags (probe 1, Task 52). `SkythonTestAlias.OnDeath` sets stage 100, so killing the actor in alias 0 raises both `death` and a `channel` `stage_100` (Tasks 53, 55; aliases 1 and 2 carry the same script, tests use alias 0). Auto properties start at fixed values (Contracts: Int/Float/Bool/String by Papyrus initializers in the `.psc`; `SkythonTestQuest.Target` = `SkythonTestNPC` through a VMAD object property, since Papyrus has no Form initializer), so Task 51 asserts them exactly. The NPC inherits `WEFarmerMale`'s base data: not essential, not protected (Tasks 53 and 55 kill it; the smoke test checks `IsEssential` is false). All scripts use vanilla functions only (the compile imports vanilla sources, not SKSE's).
+**Design.** The builder from Task 47 gains `full` mode (`TestEsp.cs`) and `verify-esm`; the spike mode stays (its output is unchanged, `00a11e2e...`). All FormIDs are fixed, so rebuilds are byte-identical (measured while writing this plan on a draft without the location-alias script and the initial property values: the same SHA-256 twice; Step 6 measures and pins this build's values). Records (all `SkythonTest.esp|0x0008xx`): quest `SkythonTestQuest` 0x800 (AllowRepeatedStages); location `SkythonTestLocation` 0x801; interior cell `SkythonTestCell` 0x802 (DefaultLightingTemplate, location 0x801, a 4x-scaled `ImpFloorMid01` floor, a `COCMarkerHeading`); NPC base `SkythonTestNPCBase` 0x803 (templated on the neutral vanilla `WEFarmerMale`, so the game uses that NPC's face, stats, inventory and AI); persistent actor `SkythonTestNPC` 0x804; persistent `XMarker` `SkythonTestMarker` 0x805. Referencing Skyrim.esm makes it the one master (`MAST` is written from the FormLinks). Quest aliases 0 `SkythonTarget`, 1 `SkythonItem`, 2 `SkythonExtra` (reference aliases with `SkythonTestAlias`), 3 `SkythonPlace` (location alias with the script `SkythonTestLocationAlias`: R45 drives only aliases that carry a script, and Task 50 calls the native `LocationAlias` functions on it through that script); stages 10/20/100/200 each with one log entry and a fragment that sends `stage_<n>` on `skython_test`; objective 10 with three `<Alias=...>` tags (probe 1, Task 52). `SkythonTestAlias.OnDeath` sets stage 100, so killing the actor in alias 0 raises both `death` and a `channel` `stage_100` (Tasks 53, 55; aliases 1 and 2 carry the same script, tests use alias 0). Auto properties start at fixed values (Contracts: Int/Float/Bool/String by Papyrus initializers in the `.psc`; `SkythonTestQuest.Target` = `SkythonTestNPC` through a VMAD object property, since Papyrus has no Form initializer), so Task 51 asserts them exactly. The NPC inherits `WEFarmerMale`'s base data (`TemplateFlag.BaseData`): its **name**, essential and protected flags come from the template, not from `SkythonTestNPCBase`'s own `Name` field: not essential, not protected (Tasks 53 and 55 kill it; the smoke test checks `IsEssential` is false), and its in-game name is the template's. Tests and docs therefore never assert the NPC's name from this file: where a name matters (probe 1's objective text, Task 52) it is read at run time with `Actor.GetDisplayName` (the smoke test records it). The quest also writes `NextAliasID = 4` (ANAM, as vanilla quests do: the next free alias id after 0-3). All scripts use vanilla functions only (the compile imports vanilla sources, not SKSE's).
 
 **Files:**
 - Create: `testesp/papyrus/SkythonTestQuestBase.psc`, `SkythonTestQuest.psc`, `SkythonTestAlias.psc`, `SkythonTestLocationAlias.psc`, `QF_SkythonTestQuest_01000800.psc`; `testesp/compiled/*.pex` (committed; `.gitignore` negation from Task 46)
@@ -22,7 +22,7 @@
 - Produces (exactly the index Contracts' **Test ESP** section; Tasks 49-56 rely on these values):
   - Form keys: quest `SkythonTest.esp|0x000800`, location `|0x000801`, cell `|0x000802` (editor id `SkythonTestCell`, the `coc` target), NPC base `|0x000803`, actor `SkythonTestNPC` `|0x000804`, marker `SkythonTestMarker` `|0x000805`.
   - Alias ids (all optional): 0 `SkythonTarget`, 1 `SkythonItem`, 2 `SkythonExtra` (ReferenceAlias + `SkythonTestAlias`), 3 `SkythonPlace` (LocationAlias + `SkythonTestLocationAlias`). Objective index 10. Stages 10, 20, 100, 200 → `Skython.Send("skython_test", "stage_<n>")`. The actor in alias 0 dies → stage 100 (`SkythonTestAlias.OnDeath`, also on aliases 1-2). The NPC is not essential.
-  - `SkythonTestQuest`: auto properties `Counter` Int (`7`), `Ratio` Float (`0.5`), `Flag` Bool (`True`), `Label` String (`"initial label"`), `Target` Actor (`SkythonTestNPC`, VMAD); full property `Computed` Int (= `Counter * 2`); `SetupScenario(Actor, ObjectReference, Location, String)` (starts the quest if needed, fills aliases 0, 1 and 3, sets `Target`/`Label`, stage 10, displays objective 10); `Int GetCounter()`, `Int GetBaseCounter()`, `String DescribeAlias(ReferenceAlias)` (`"none"`, `"foreign"`, `"empty"` or `"filled"`), `Int BumpCounter(Int n)` (adds `n` to `Counter`, returns the new `Counter`). `SkythonTestQuestBase`: `BaseCounter` Int (`3`), `BaseLabel` String (`"base label"`). `SkythonTestAlias`: `Tag` Int (`5`), `OnDeath` → stage 100. `SkythonTestLocationAlias` (extends `LocationAlias`): `Tag` Int (`6`).
+  - `SkythonTestQuest`: auto properties `Counter` Int (`7`), `Ratio` Float (`0.5`), `Flag` Bool (`True`), `Label` String (`"initial label"`), `Target` Actor (`SkythonTestNPC`, VMAD); full property `Computed` Int (= `Counter * 2`); `SetupScenario(Actor, ObjectReference, Location, String)` (starts the quest if needed, fills aliases 0, 1 and 3, sets `Target`/`Label`, stage 10, displays objective 10); `Int GetCounter()`, `Int GetBaseCounter()`, `Float GetRatio()` (returns `Ratio`), `Bool GetFlag()` (returns `Flag`), `String DescribeAlias(ReferenceAlias)` (`"none"`, `"foreign"`, `"empty"` or `"filled"`), `String DescribeLocationAlias(LocationAlias)` (the same four answers, `"empty"` when `GetLocation()` is `None`), `Int AliasTag(SkythonTestAlias)` (returns the alias script's `Tag`), `Int BumpCounter(Int n)` (adds `n` to `Counter`, returns the new `Counter`). `SkythonTestQuestBase`: `BaseCounter` Int (`3`), `BaseLabel` String (`"base label"`). `SkythonTestAlias`: `Tag` Int (`5`), `OnDeath` → stage 100. `SkythonTestLocationAlias` (extends `LocationAlias`): `Tag` Int (`6`).
   - `testesp/build.sh [--check|--print-pins]`: exit 0 only when the ESP's sha256 and each `.pex`'s stable hash equal the `- pin <path> sha256|stable <hex>` lines in `docs/PINS.md` and the read-back equals `testesp/expected-dump.txt`.
 
 - [ ] **Step 1: Gates**
@@ -32,7 +32,7 @@ cd /home/geoff/projects/games/skyrim/skyrim-python
 grep -n 'Task 47, ESP/VMAD spike: PASS' spikes/RESULTS.md || echo "STOP: no Task 47 PASS"
 sed -n '/^\*\*8\. Acceptance test framing/,/^## /p' OWNER-DECISIONS-2026-10-02.md
 ```
-Expected: the Task 47 PASS line. Then find the owner's recorded answer to decision 8 (the owner's reply, the controller's brief, or `.superpowers/sdd/README/progress.md`; the recommendation in `OWNER-DECISIONS-2026-10-02.md` is not an answer). Accepted → the names below stand. Open → STOP before Step 3. Rejected → STOP and get the owner's names.
+Expected: the Task 47 PASS line. Then find the owner's recorded answer to decision 8 (the owner's reply, the controller's brief, or `.superpowers/sdd/README/progress.md`; the recommendation in `OWNER-DECISIONS-2026-10-02.md` is not an answer). Accepted → the names below stand. Open → STOP before Step 3. Rejected → STOP and get the owner's names. Write down the two names this build uses (the scenario function, default `SetupScenario`; the stage channel, default `skython_test`): Step 11's RESULTS entry records them, and Task 50's `livetest/scripts/_testesp.py` takes `SCENARIO_FUNCTION` and `CHANNEL` from that entry. If the owner's names differ, use them everywhere this file writes the defaults (`SkythonTestQuest.psc`, the four fragments in `QF_SkythonTestQuest_01000800.psc`, `CHANNEL` in `test_m15_esp_smoke.py`) and say so to the controller (Task 55 is re-planned).
 
 - [ ] **Step 2: The expected read-back (offline test) and see it fail**
 
@@ -137,6 +137,16 @@ Int Function GetBaseCounter()
 	Return BaseCounter
 EndFunction
 
+; Papyrus-side reads of the Float and Bool properties (Task 51 checks set_property through them, not only through
+; get_property, which reads the same variable index it wrote).
+Float Function GetRatio()
+	Return Ratio
+EndFunction
+
+Bool Function GetFlag()
+	Return Flag
+EndFunction
+
 ; Vanilla calls only (no SKSE script sources needed to compile): "none", "foreign", "empty" or "filled".
 String Function DescribeAlias(ReferenceAlias akAlias)
 	If akAlias == None
@@ -149,6 +159,25 @@ String Function DescribeAlias(ReferenceAlias akAlias)
 		Return "empty"
 	EndIf
 	Return "filled"
+EndFunction
+
+; The same four answers for a location alias argument (Task 50: the alias-argument path with a LocationAlias).
+String Function DescribeLocationAlias(LocationAlias akAlias)
+	If akAlias == None
+		Return "none"
+	EndIf
+	If akAlias.GetOwningQuest() != Self
+		Return "foreign"
+	EndIf
+	If akAlias.GetLocation() == None
+		Return "empty"
+	EndIf
+	Return "filled"
+EndFunction
+
+; An argument typed as our own alias script: returns its Tag (Task 50 reads 5 on alias 0; Task 51 reads a write back).
+Int Function AliasTag(SkythonTestAlias akAlias)
+	Return akAlias.Tag
 EndFunction
 
 Int Function BumpCounter(Int n)
@@ -351,6 +380,7 @@ namespace SkythonTestEsp
             {
                 EditorID = Names.QuestEditorId, Name = "Skython Test Quest", Flags = Quest.Flag.AllowRepeatedStages,
                 QuestFormVersion = 0,
+                NextAliasID = 4,   // ANAM: the next free alias id after 0-3, as vanilla quests write it
             };
             var refFlags = QuestAlias.Flag.Optional | QuestAlias.Flag.AllowDisabled | QuestAlias.Flag.AllowReserved
                            | QuestAlias.Flag.AllowDead | QuestAlias.Flag.AllowCleared;
@@ -498,14 +528,19 @@ testesp/build.sh --print-pins | grep '^- pin' > out/t48-pins-2.txt
 diff out/t48-pins-1.txt out/t48-pins-2.txt && echo PINS_STABLE
 cat out/t48-pins-1.txt
 ```
-Expected: `PINS_STABLE`, then exactly six lines in this order: `- pin testesp/SkythonTest.esp sha256 <hex>`, then `- pin testesp/compiled/<name>.pex stable <hex>` for `SkythonTestQuestBase`, `SkythonTestQuest`, `SkythonTestAlias`, `SkythonTestLocationAlias`, `QF_SkythonTestQuest_01000800`. One value is known in advance because its source is the one this plan's draft measured unchanged: `- pin testesp/compiled/QF_SkythonTestQuest_01000800.pex stable a7df67748249d5e59e1c163922aab79db4d7406321edf2a4a91959039bbf0de5` (a different value means the compiler, flags file, machine or account differs from the draft's: STOP). The other five are this build's first measurement (the draft's values predate the location-alias script and the initial property values, so they are not comparable); the two runs agreeing is the reproducibility check.
+Expected: `PINS_STABLE`, then exactly six lines in this order: `- pin testesp/SkythonTest.esp sha256 <hex>`, then `- pin testesp/compiled/<name>.pex stable <hex>` for `SkythonTestQuestBase`, `SkythonTestQuest`, `SkythonTestAlias`, `SkythonTestLocationAlias`, `QF_SkythonTestQuest_01000800`. One value can be compared with the draft: the draft measured `- pin testesp/compiled/QF_SkythonTestQuest_01000800.pex stable a7df67748249d5e59e1c163922aab79db4d7406321edf2a4a91959039bbf0de5` from the fragment source above with the default channel `skython_test`. A different value is a STOP only when `QF_SkythonTestQuest_01000800.psc` is byte-identical to the block above **and** the compiler path is the one in the index's Fixed paths (built as `geoff` on this machine); otherwise (the owner's decision-8 channel changed the source, or another compiler copy was used) record both values and the reason in Step 11's RESULTS entry and pin this build's value. The other five values (and the ESP's SHA-256) are this build's first measurement: the draft's values predate the location-alias script, the initial property values, `GetRatio`/`GetFlag`/`DescribeLocationAlias`/`AliasTag` and `NextAliasID`, so they are not comparable; the two runs agreeing is the reproducibility check.
 Append those six lines to `docs/PINS.md` under the "Test ESP (Tasks 47-48)" section from Task 47, after one line `- Full plugin and scripts (Task 48), checked by testesp/build.sh:`. Then:
 ```bash
 testesp/build.sh | grep -E '^(ok|FAIL)|TEST ESP'
 testesp/build.sh --check | tail -1
 git status --short testesp/
 ```
-Expected: `ok   dump equals testesp/expected-dump.txt`, six `ok   <path> ...` lines, `TEST ESP BUILD MATCHES PINS` (both runs); `git status` shows the new `testesp/SkythonTest.esp`, `testesp/compiled/*.pex`, sources, `build.sh`, `expected-dump.txt`, and no `bin/`/`obj/`. Rebuild once more and confirm the spike is unchanged: `timeout 60 ~/.dotnet/dotnet testesp/builder/bin/Release/net8.0/SkythonTestEspBuilder.dll spike out/t48-spike && sha256sum out/t48-spike/SkythonTest.esp` → `00a11e2e3481e87d02f38d8ff23d0b8a42ce9df6fbd6bde0aca66c288479cbce`.
+Expected: `ok   dump equals testesp/expected-dump.txt`, six `ok   <path> ...` lines, `TEST ESP BUILD MATCHES PINS` (both runs); `git status` shows the new `testesp/SkythonTest.esp`, `testesp/compiled/*.pex`, sources, `build.sh`, `expected-dump.txt`, and no `bin/`/`obj/`. Rebuild once more and confirm the spike is unchanged, both its bytes and the new `Dump.cs`'s read-back of it:
+```bash
+timeout 60 ~/.dotnet/dotnet testesp/builder/bin/Release/net8.0/SkythonTestEspBuilder.dll spike out/t48-spike && sha256sum out/t48-spike/SkythonTest.esp
+timeout 60 ~/.dotnet/dotnet testesp/builder/bin/Release/net8.0/SkythonTestEspBuilder.dll dump testesp/spike/SkythonTest.esp | diff - testesp/spike/expected-dump.txt && echo SPIKE_DUMP_SAME
+```
+Expected: `00a11e2e3481e87d02f38d8ff23d0b8a42ce9df6fbd6bde0aca66c288479cbce  out/t48-spike/SkythonTest.esp` and `SPIKE_DUMP_SAME` (a diff means the `Dump.cs` change altered the spike's read-back: fix `Dump.cs`, never `testesp/spike/expected-dump.txt`).
 
 - [ ] **Step 7: Live smoke test file**
 
@@ -524,6 +559,7 @@ from skython import errors
 from support import REPO
 
 ESP = "SkythonTest.esp"
+CHANNEL = "skython_test"  # owner decision 8's channel (Step 1): replace with the owner's name if it differs
 QUEST, LOCATION, CELL = f"{ESP}|0x000800", f"{ESP}|0x000801", f"{ESP}|0x000802"
 NPC, MARKER = f"{ESP}|0x000804", f"{ESP}|0x000805"
 PLAYER_ID = 0x14
@@ -555,15 +591,18 @@ def test_quest_scripts_are_attached(game, quest):
     # The fixed initial values (index Contracts, Test ESP) prove both scripts are attached and initialised.
     assert game.call_method(quest, "SkythonTestQuest", "GetCounter") == 7
     assert game.call_method(quest, "SkythonTestQuest", "GetBaseCounter") == 3
+    assert game.call_method(quest, "SkythonTestQuest", "GetRatio") == 0.5
+    assert game.call_method(quest, "SkythonTestQuest", "GetFlag") is True
 
 
 def test_stage_fragments_send_on_skython_test(game, quest):
     q = queue.Queue()
-    sub = game.on_channel("skython_test", q.put)
+    sub = game.on_channel(CHANNEL, q.put)
     try:
         for stage in (10, 20, 200):
             assert game.call_method(quest, "Quest", "SetStage", stage) is True
-            assert q.get(timeout=15).data["payload"] == f"stage_{stage}"
+            # The engine's string pool may change case (R56): compare case-insensitively.
+            assert q.get(timeout=15).data["payload"].lower() == f"stage_{stage}"
     finally:
         sub.close()
 
@@ -579,7 +618,7 @@ def test_aliases_carry_their_scripts(game, quest):
             assert game.get_property(alias, "SkythonTestAlias", "Tag") == 5
         finally:
             game.call_method(alias, "ReferenceAlias", "Clear")
-    place = game.alias(quest, 3)
+    place = game.alias(quest, 3, "LocationAlias")  # the default kind is ReferenceAlias: type_mismatch on alias 3
     game.call_method(place, "LocationAlias", "ForceLocationTo", game.resolve(form_key=LOCATION))
     try:
         assert game.get_property(place, "SkythonTestLocationAlias", "Tag") == 6
@@ -609,6 +648,8 @@ def test_coc_into_the_test_cell(game):
     assert game.call_method(npc, "ObjectReference", "Is3DLoaded") is True
     assert game.call_method(npc, "Actor", "IsDead") is False
     assert game.call_method(npc, "Actor", "IsEssential") is False  # Tasks 53 and 55 kill it
+    # The name comes from the WEFarmerMale template (TemplateFlag.BaseData), not from SkythonTestNPCBase: record it.
+    print("SkythonTestNPC display name:", game.call_method(npc, "ObjectReference", "GetDisplayName"))
 ```
 ```bash
 uv run --project python pytest livetest/test_m15_esp_smoke.py -q   # skipped without SKYTHON_LIVE
@@ -645,7 +686,7 @@ tools/box/box_session.sh up && source out/box-live.env && source livetest/s4test
 tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600
 tools/box/box_console.sh "load s4test"
 tools/box/box_wait_log.sh Skython.log "lifecycle: interactive = true" 300
-SKYTHON_LIVE=1 SKYTHON_BOX=1 uv run --project python pytest livetest/test_m15_esp_smoke.py -v -rs
+SKYTHON_LIVE=1 SKYTHON_BOX=1 uv run --project python pytest livetest/test_m15_esp_smoke.py -v -rs -s
 tools/box/box_shot.sh out/t48-cell.png
 tools/box/box_files.sh pull Skython.log >/dev/null; grep -E '\[error\]' "$SKSE_LOG_DIR/Skython.log" | grep -v livetest_broken
 tools/box/box_quit.sh || tools/box/box_stop.sh
@@ -657,7 +698,7 @@ Expected: 5 passed (the last one leaves the player in `SkythonTestCell` next to 
 
 Append to `spikes/RESULTS.md`:
 ```markdown
-- **Task 48, SkythonTest.esp (box, Windows-native, <date time>, Skyrim 1.6.1170.0, s4test, never saved; 1 launch; SKSE plugins loaded: <list>):** owner decision 8 <accepted on <date> | names per the owner: ...>. Built by testesp/build.sh: SkythonTest.esp sha256 <the pinned value from Step 6> (master Skyrim.esm), five test-ESP .pex at the pinned stable hashes. `test_m15_esp_smoke.py` 5 passed: plugin installed; quest/location/cell/actor/marker resolve by form key with types Quest/Location/Cell/Actor/ObjectReference; `SkythonTestQuest.GetCounter`/`GetBaseCounter` -> 7/3 (initial values); stages 10/20/200 -> `stage_10`/`stage_20`/`stage_200` on skython_test; aliases 0-2 carry SkythonTestAlias (Tag 5), alias 3 carries SkythonTestLocationAlias (Tag 6); `coc SkythonTestCell` -> player and SkythonTestNPC in the cell, NPC 3D loaded, alive, not essential (screenshot out/t48-cell.png: <what it shows>). **Owner removal list:** Data\SkythonTest.esp and the six Data\Scripts .pex of the decision-7 list (SkythonTestLocationAlias.pex is new with this build; the others hold the Task 48 build over Task 47's copies).
+- **Task 48, SkythonTest.esp (box, Windows-native, <date time>, Skyrim 1.6.1170.0, s4test, never saved; 1 launch; SKSE plugins loaded: <list>):** owner decision 8 <accepted on <date> | names per the owner: ...>; **decision-8 names used: scenario function `<SetupScenario or the owner's name>`, channel `<skython_test or the owner's name>`** (Task 50's `_testesp.py` takes `SCENARIO_FUNCTION` and `CHANNEL` from this line). Built by testesp/build.sh: SkythonTest.esp sha256 <the pinned value from Step 6> (master Skyrim.esm), five test-ESP .pex at the pinned stable hashes (QF_ fragment pex: <equal to the draft's a7df6774... | differs: draft a7df6774..., this build <hex>, because <source/compiler reason>>). `test_m15_esp_smoke.py` 5 passed: plugin installed; quest/location/cell/actor/marker resolve by form key with types Quest/Location/Cell/Actor/ObjectReference; `SkythonTestQuest.GetCounter`/`GetBaseCounter` -> 7/3 (initial values), `GetRatio`/`GetFlag` -> 0.5/True; stages 10/20/200 -> `stage_10`/`stage_20`/`stage_200` on skython_test; aliases 0-2 carry SkythonTestAlias (Tag 5), alias 3 carries SkythonTestLocationAlias (Tag 6); `coc SkythonTestCell` -> player and SkythonTestNPC in the cell, NPC 3D loaded, alive, not essential, display name `<as printed>` (from the WEFarmerMale template) (screenshot out/t48-cell.png: <what it shows>). **Owner removal list:** Data\SkythonTest.esp and the six Data\Scripts .pex of the decision-7 list (SkythonTestLocationAlias.pex is new with this build; the others hold the Task 48 build over Task 47's copies).
 ```
 ```bash
 git add spikes/RESULTS.md

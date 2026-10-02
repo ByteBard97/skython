@@ -4,12 +4,12 @@
 
 > **Depends on:** nothing in this plan (the v1 tree at commit 47636bf). Linux only; no game.
 
-**What this task does.** It is the only task in this plan that edits `protocol/protocol.json` (Global Constraints: "One owner for `protocol/protocol.json`"). It raises the protocol to `[1, 1]`, adds the four ops `events.subscribe`, `events.unsubscribe`, `game.save`, `game.load`, the 20-entry `events` table, seven limits, the save-name pattern and the config keys `trace_timing` and `console_echo_errors`. `tools/gen_protocol.py` learns to validate and emit the events table (C++ `spy::kEvents` / `spy::find_event`, Python `EVENTS`, a Markdown table) and the five new argument types. `parse_request` learns the four ops, checked argument by argument from their table entries. A filter only has to be a JSON object (or `null`, meaning absent) at this level: its deep rules (field names, value types, `filter_required_any_of`) belong to `parse_event_filter` in Task 34, which consumes the `invalid_filters` entries of the new `events.json` fixture. `python/tests/fake_skython.py` gets the same parse-level checks so the Python fake keeps refusing what core refuses (Task 36 later adds its consumers).
+**What this task does.** It is the only task in this plan that edits `protocol/protocol.json` (Global Constraints: "One owner for `protocol/protocol.json`"). It raises the protocol to `[1, 1]`, adds the four ops `events.subscribe`, `events.unsubscribe`, `game.save`, `game.load`, the 20-entry `events` table, nine limits (including the per-consumer bounds `max_subscriptions_per_consumer` and `max_queued_event_bytes_per_consumer`, controller ruling R61), the save-name pattern, the `not_ready` reason `saving` (a `game.load` of a save whose file is still being written, Task 41) and the config keys `trace_timing` and `console_echo_errors`. `tools/gen_protocol.py` learns to validate and emit the events table (C++ `spy::kEvents` / `spy::find_event`, Python `EVENTS`, a Markdown table) and the five new argument types. `parse_request` learns the four ops, checked argument by argument from their table entries. A filter only has to be a JSON object (or `null`, meaning absent) at this level: its deep rules (field names, value types, `filter_required_any_of`) belong to `parse_event_filter` in Task 34, which consumes the `invalid_filters` entries of the new `events.json` fixture. `python/tests/fake_skython.py` gets the same parse-level checks so the Python fake keeps refusing what core refuses (Task 36 later adds its consumers).
 
 Because the minor bump and the new ops change pinned literals, several existing tests change too (all listed in the index's File Structure under Task 33): `core/tests/test_generated.cpp`, `core/tests/test_requests.cpp`, `core/tests/test_fake_backend.cpp` (the "while a save loads" replay must skip every op that does not need a game, not only `game.state`), `python/tests/test_generated.py`, `python/tests/test_game.py` (the four new ops have no `Game` method until Task 36), `python/tests/test_inprocess.py`, `pyglue/tests/test_module.py` and `livetest/test_m1_bridge.py` (session file `protocol`).
 
 **Files:**
-- Modify: `protocol/protocol.json` (minor 1, limits, `save_name_pattern`, config keys, ops, `events`)
+- Modify: `protocol/protocol.json` (minor 1, limits, `save_name_pattern`, `not_ready_reasons` + `saving`, config keys, ops, `events`)
 - Modify (regenerated, never by hand): `core/include/spy/protocol_generated.h`, `python/src/skython/_protocol_generated.py`, `protocol/PROTOCOL.generated.md`
 - Modify: `tools/gen_protocol.py`, `tools/test_gen_protocol.py`
 - Modify: `protocol/PROTOCOL.md` (handshake example, "Events" section rewritten, "Ops" rules for save/load)
@@ -25,7 +25,8 @@ Because the minor bump and the new ops change pinned literals, several existing 
 - Produces (exactly the index Contracts):
   - Protocol `[1, 1]`; ops `events.subscribe` (batchable no, needs_game **no**; args `event` `event_name` required, `filter` `event_filter` optional, `max_queue` `queue_size` optional), `events.unsubscribe` (no, **no**; `sub` `u64` required), `game.save` (no, yes; `name` `save_name` required, `timeout_ms` optional), `game.load` (no, **no**; `save` `save_name` required, `timeout_ms` optional).
   - Arg types `event_name`, `event_filter`, `queue_size`, `u64`, `save_name` (generated `spy::ArgType::event_name`, `event_filter`, `queue_size`, `u64`, `save_name`).
-  - Limits (generated `spy::kDefaultEventQueue` = 1024, `kMaxEventQueue` = 65536, `kMaxSubscriptions` = 1024, `kMaxFilterValues` = 128, `kMaxEventsPerNext` = 256, `kMaxChannelPayloadBytes` = 65536, `kMaxChannelBytes` = 256; Python `DEFAULT_EVENT_QUEUE`, `MAX_EVENT_QUEUE`, `MAX_SUBSCRIPTIONS`, `MAX_FILTER_VALUES`, `MAX_EVENTS_PER_NEXT`, `MAX_CHANNEL_PAYLOAD_BYTES`, `MAX_CHANNEL_BYTES`).
+  - Limits (generated `spy::kDefaultEventQueue` = 1024, `kMaxEventQueue` = 65536, `kMaxSubscriptions` = 1024, `kMaxSubscriptionsPerConsumer` = 256, `kMaxQueuedEventBytesPerConsumer` = 16777216, `kMaxFilterValues` = 128, `kMaxEventsPerNext` = 256, `kMaxChannelPayloadBytes` = 65536, `kMaxChannelBytes` = 256; Python `DEFAULT_EVENT_QUEUE`, `MAX_EVENT_QUEUE`, `MAX_SUBSCRIPTIONS`, `MAX_SUBSCRIPTIONS_PER_CONSUMER`, `MAX_QUEUED_EVENT_BYTES_PER_CONSUMER`, `MAX_FILTER_VALUES`, `MAX_EVENTS_PER_NEXT`, `MAX_CHANNEL_PAYLOAD_BYTES`, `MAX_CHANNEL_BYTES`).
+  - `not_ready_reasons` gains `saving` (generated `spy::kNotReadyReasons` / Python `NOT_READY_REASONS` end with it): Task 41's `game.load` of a save whose `game.save` the engine accepted but whose file is not on disk yet.
   - C++: `enum class spy::EventFieldType { form, integer, floating, boolean, string }`, `struct spy::EventField { std::string_view name; EventFieldType type; bool nullable; }`, `struct spy::EventSpec { std::string_view name; std::span<const EventField> fields; std::span<const std::string_view> filter_fields; std::span<const std::string_view> filter_required_any_of; bool deliver_while_loading; }`, `spy::kEvents` (20 entries, table order), `constexpr const EventSpec* spy::find_event(std::string_view)`, `spy::event_names::kDeath` ... `kNewGame`, `spy::ops::kEventsSubscribe`, `kEventsUnsubscribe`, `kGameSave`, `kGameLoad`, `spy::kSaveNamePattern`.
   - Python: `_protocol_generated.EVENTS` (name → `{"fields": ((name, type, nullable), ...), "filter_fields": (...), "filter_required_any_of": (...), "deliver_while_loading": bool}`), `EVENT_DEATH` ... `EVENT_NEW_GAME`, `SAVE_NAME_PATTERN`, `OP_EVENTS_SUBSCRIBE`, `OP_EVENTS_UNSUBSCRIBE`, `OP_GAME_SAVE`, `OP_GAME_LOAD`.
   - `bool spy::is_valid_save_name(std::string_view)` in `requests.h` (agrees with `kSaveNamePattern`; Task 35's fake and Task 41's plugin code may use it).
@@ -75,6 +76,10 @@ def limit_removed(name):
     ("save name pattern not a regex", lambda m: m.update(save_name_pattern="^[a-$"), "not a regular expression"),
     ("required limit max_event_queue removed", limit_removed("max_event_queue"), "'max_event_queue' is required"),
     ("required limit max_filter_values removed", limit_removed("max_filter_values"), "'max_filter_values' is required"),
+    ("required limit max_subscriptions_per_consumer removed", limit_removed("max_subscriptions_per_consumer"),
+     "'max_subscriptions_per_consumer' is required"),
+    ("required limit max_queued_event_bytes_per_consumer removed", limit_removed("max_queued_event_bytes_per_consumer"),
+     "'max_queued_event_bytes_per_consumer' is required"),
     ("unknown argument type on a new op",
      lambda m: next(o for o in m["ops"] if o["name"] == "game.save")["args"][0].update(type="savename"), "unknown argument type"),
 ])
@@ -104,6 +109,8 @@ def test_event_schema_problems_are_reported(name, fn, expect):
                                     "static_assert(!spy::find_op(spy::ops::kGameLoad)->needs_game);\n"
                                     "static_assert(spy::find_op(spy::ops::kGameSave)->needs_game);\n"
                                     "static_assert(spy::kDefaultEventQueue == 1024u && spy::kMaxEventsPerNext == 256u);\n"
+                                    "static_assert(spy::kMaxSubscriptionsPerConsumer == 256u && spy::kMaxQueuedEventBytesPerConsumer == 16777216u);\n"
+                                    "static_assert(spy::kNotReadyReasons.back() == \"saving\");\n"
                                     "static_assert(spy::config_defaults::kConsoleEchoErrors && !spy::config_defaults::kTraceTiming);\n"
 ```
 
@@ -164,7 +171,7 @@ FILTERABLE_FIELD_TYPES = ("form", "int", "string")
 ```
 (the closing `}` shown replaces the existing one of `ARG_TYPES`).
 
-(b) In `validate`, add the seven limit names to the `for req in (...)` tuple of required limits: `"default_event_queue", "max_event_queue", "max_subscriptions", "max_filter_values", "max_events_per_next", "max_channel_payload_bytes", "max_channel_bytes"`. Then, just before `return p` at the end of `validate`, add:
+(b) In `validate`, add the nine limit names to the `for req in (...)` tuple of required limits: `"default_event_queue", "max_event_queue", "max_subscriptions", "max_subscriptions_per_consumer", "max_queued_event_bytes_per_consumer", "max_filter_values", "max_events_per_next", "max_channel_payload_bytes", "max_channel_bytes"`. Then, just before `return p` at the end of `validate`, add:
 ```python
     # events
     events = need(m, "events", (list,), "root") or []
@@ -304,6 +311,10 @@ FILTERABLE_FIELD_TYPES = ("form", "int", "string")
      "doc": "Largest max_queue of one subscription."},
     {"name": "max_subscriptions", "value": 1024, "ctype": "size", "unit": "subscriptions",
      "doc": "Subscriptions of all consumers together (in-process scripts and bridge connections); beyond it events.subscribe is busy."},
+    {"name": "max_subscriptions_per_consumer", "value": 256, "ctype": "size", "unit": "subscriptions",
+     "doc": "Subscriptions of one consumer (one Game, or one bridge connection); beyond it events.subscribe is busy, so one client cannot take every subscription."},
+    {"name": "max_queued_event_bytes_per_consumer", "value": 16777216, "ctype": "size", "unit": "bytes",
+     "doc": "Event bytes one consumer may hold queued (each event counts its data's compact JSON length plus 96). Over it the oldest events of the subscription being pushed to are dropped (counted in dropped) until the consumer is back under it."},
     {"name": "max_filter_values", "value": 128, "ctype": "size", "unit": "values",
      "doc": "Most values in one field of an event filter."},
     {"name": "max_events_per_next", "value": 256, "ctype": "size", "unit": "events",
@@ -314,7 +325,7 @@ FILTERABLE_FIELD_TYPES = ("form", "int", "string")
      "doc": "Longest channel name of a channel event. A Skython.Send whose channel is empty or longer than this is dropped and a warning is logged once; a channel is never cut (a cut name would be a different channel)."}
 ```
 
-(c) After the `"array_elem_types"` line add: `"save_name_pattern": "^[A-Za-z0-9_]{1,64}$",`
+(c) After the `"array_elem_types"` line add: `"save_name_pattern": "^[A-Za-z0-9_]{1,64}$",`. Change `"not_ready_reasons"` to `["starting", "no_game", "loading", "paused", "saving"]` (`saving` is new: only Task 41's `game.load` answers it, for a save whose `game.save` the engine accepted but whose `.ess` is not on disk yet; it carries no `dispatched`, so `retry_not_ready` may retry it).
 
 (d) Append to `"config_keys"` (after `enable_console`):
 ```json
@@ -340,7 +351,7 @@ FILTERABLE_FIELD_TYPES = ("form", "int", "string")
        {"name": "sub", "type": "u64", "required": true, "doc": "the sub that events.subscribe returned"}]},
     {"name": "game.save", "batchable": false, "needs_game": true, "exactly_one_of": [],
      "doc": "Save the game under a new name. An existing save of that name is never overwritten.",
-     "result": "`{\"name\":\"<name>\"}` once the game reports that save",
+     "result": "`{\"name\":\"<name>\"}` once the engine has started that save (the file can appear a moment later)",
      "args": [
        {"name": "name", "type": "save_name", "required": true, "doc": ""},
        {"name": "timeout_ms", "type": "timeout_ms", "required": false, "doc": "absent means the plugin's default_timeout_ms"}]},
@@ -478,14 +489,14 @@ Expected: `wrote` for all three generated files, then FAIL only in `test_the_eve
     {"event": "quest_stage", "filter": {"stage": [2147483648]}, "error": "bad_request", "message": "must be an integer"},
     {"event": "channel", "filter": {"channel": [5]}, "error": "bad_request", "message": "must be a string"},
     {"event": "game_loaded", "filter": {"new_game": [true]}, "error": "bad_request", "message": "has no filter field 'new_game'"},
-    {"event": "death", "filter": "victim", "error": "bad_request", "message": "filter must be an object"},
+    {"event": "death", "filter": "victim", "error": "bad_request", "message": "must be an object mapping filter fields"},
     {"event": "hit", "filter": null, "error": "bad_request", "message": "hit needs a filter on target or aggressor"},
     {"event": "hit", "filter": {}, "error": "bad_request", "message": "hit needs a filter on target or aggressor"},
     {"event": "container_changed", "filter": {}, "error": "bad_request", "message": "container_changed needs a filter on old_container, new_container or item"}
   ]
 }
 ```
-(The 129-value entry is one long line; generate it rather than typing it: `python3 -c 'import json;print(json.dumps([{"kind":"form","form_id":i} for i in range(1,130)]))'` and paste the output as the `victim` array.)
+(The `"filter": "victim"` entry is refused at the parse level, before the hub sees it, with `'filter' must be an object mapping filter fields to lists of values`; `parse_event_filter` says `filter must be an object mapping ...`; the fixture's substring is common to both. The 129-value entry is one long line; generate it rather than typing it: `python3 -c 'import json;print(json.dumps([{"kind":"form","form_id":i} for i in range(1,130)]))'` and paste the output as the `victim` array.)
 
 `protocol/v1/fixtures/requests.json`: append to the end of the `"valid"` array (a comma after its current last entry):
 ```json
@@ -541,6 +552,10 @@ Expected: all pass (`... passed`), then `gen_protocol: 3 generated files are up 
     CHECK(spy::kDefaultEventQueue == 1024u);
     CHECK(spy::kMaxEventQueue == 65536u);
     CHECK(spy::kMaxSubscriptions == 1024u);
+    CHECK(spy::kMaxSubscriptionsPerConsumer == 256u);
+    CHECK(spy::kMaxQueuedEventBytesPerConsumer == 16777216u);
+    CHECK(spy::kNotReadyReasons.size() == 5u);
+    CHECK(spy::kNotReadyReasons.back() == "saving");
     CHECK(spy::kMaxFilterValues == 128u);
     CHECK(spy::kMaxEventsPerNext == 256u);
     CHECK(spy::kMaxChannelPayloadBytes == 65536u);
@@ -865,6 +880,8 @@ Expected: `0`, then `100% tests passed, 0 tests failed out of 1`.
     assert g.CONFIG_KEYS["trace_timing"]["default"] is False and g.CONFIG_KEYS["console_echo_errors"]["default"] is True
     assert (g.DEFAULT_EVENT_QUEUE, g.MAX_EVENT_QUEUE, g.MAX_SUBSCRIPTIONS, g.MAX_FILTER_VALUES) == (1024, 65536, 1024, 128)
     assert (g.MAX_EVENTS_PER_NEXT, g.MAX_CHANNEL_PAYLOAD_BYTES, g.MAX_CHANNEL_BYTES) == (256, 65536, 256)
+    assert (g.MAX_SUBSCRIPTIONS_PER_CONSUMER, g.MAX_QUEUED_EVENT_BYTES_PER_CONSUMER) == (256, 16 * 1024 * 1024)
+    assert g.NOT_READY_REASONS == ("starting", "no_game", "loading", "paused", "saving")
     assert g.SAVE_NAME_PATTERN == r"^[A-Za-z0-9_]{1,64}$"
     assert len(g.EVENTS) == 20 and g.EVENTS["hit"]["filter_required_any_of"] == ("target", "aggressor")
     assert {n for n, e in g.EVENTS.items() if e["deliver_while_loading"]} == {
@@ -967,7 +984,7 @@ Expected: `[100%] Built target _skython`, then `... passed`.
 ## Events
 The game pushes events; each one is delivered to every subscription that wants it. In-process, each `skython.Game` owns one event consumer; on the dev bridge each connection owns one. **The consumer is never named in a request:** it travels beside the request text (`_skython.submit(text, consumer)`), and the bridge forwards request text unchanged, so a client cannot subscribe or unsubscribe for another consumer. An `events.*` request submitted without a consumer is `bad_request` ("no event consumer").
 
-`events.subscribe` answers `{"sub", "event", "max_queue"}`. `events.unsubscribe` of a sub that does not exist, or that another consumer owns, is `not_found` (the two cases look the same). Subscriptions of all consumers together are limited by `max_subscriptions`; beyond it `events.subscribe` is `busy`. Both ops are answered with no game loaded.
+`events.subscribe` answers `{"sub", "event", "max_queue"}`. `events.unsubscribe` of a sub that does not exist, or that another consumer owns, is `not_found` (the two cases look the same). One consumer holds at most `max_subscriptions_per_consumer` subscriptions, and all consumers together at most `max_subscriptions`; beyond either, `events.subscribe` is `busy` (so one bridge client cannot take every subscription from the in-process scripts). Both ops are answered with no game loaded.
 
 An event frame (the dev bridge writes it as one frame; in-process, `_skython.next_events` returns a JSON list of these objects, at most `max_events_per_next` per call, in push order across the consumer's subscriptions):
 `{"type":"event","event":"death","sub":7,"seq":12,"epoch":3,"data":{"victim":{"kind":"form",...},"killer":null},"dropped":4,"suppressed":2}`
@@ -977,19 +994,19 @@ An event frame (the dev bridge writes it as one frame; in-process, `_skython.nex
 - `suppressed` (present only when non-zero): this subscription's events not queued because a load was in progress, since its previous delivered event.
 - `data` has exactly the fields the generated events table lists for that event. Form fields are form references (see Values), or `null` where the table marks them; events never carry engine pointers.
 
-**Queues.** Each subscription has its own queue of `max_queue` events (default `default_event_queue`, at most `max_event_queue`). A full queue drops its oldest event and counts it in `dropped`. The game never waits for a reader, and a slow subscription never delays another one.
+**Queues.** Each subscription has its own queue of `max_queue` events (default `default_event_queue`, at most `max_event_queue`). A full queue drops its oldest event and counts it in `dropped`. A consumer's queued events together are also bounded in bytes by `max_queued_event_bytes_per_consumer` (each event counts its data's compact JSON length plus 96): when a push takes the consumer over it, the oldest events of the subscription being pushed to are dropped, counted in that subscription's `dropped`, until the consumer is under it again (if that subscription has nothing older, the new event itself is dropped; its `seq` was still taken). So a consumer's memory is bounded however large the events are. The game never waits for a reader, and a slow subscription never delays another one.
 
 **Filters.** `filter` maps field names from the event's filter fields to non-empty arrays of at most `max_filter_values` values. An event matches when every listed field's value is in its array (AND across fields, OR within one); absent or `null` means every event. Form fields: each value is a form reference carrying `form_id` (a form key alone is `bad_request`: resolve the form first), matched by form id; a `null` event field never matches. Int fields: Papyrus Int values. String fields: strings, matched ASCII-case-insensitively (the engine's string pool can change the case). An unknown field, an empty array or a value of the wrong type is `bad_request`. Where the table names fields under "Filter required", the filter must name at least one of them, else `bad_request` (for example "hit needs a filter on target or aggressor").
 
-**Loading.** While a load is in progress (a save load pending, or the Loading Menu open), an event whose table entry is not delivered while loading is not queued; each subscription that would have taken it counts it in `suppressed`. Menu events, `mod_event`, `channel` and the lifecycle events (`game_loaded`, `game_saved`, `new_game`) are delivered. `game_loaded` is raised when a loaded save or a new game becomes interactive: it marks the end of a load. Subscriptions survive a load.
+**Loading.** While a save load or a new game is in progress (from the moment the game announces the load or the new game until `game_loaded`; the loading screens of doors, fast travel and `coc` do not count), an event whose table entry is not delivered while loading is not queued; each subscription that would have taken it counts it in `suppressed`. Menu events, `mod_event`, `channel` and the lifecycle events (`game_loaded`, `game_saved`, `new_game`) are delivered. `game_loaded` is raised when a loaded save or a new game becomes interactive: it marks the end of a load. Subscriptions survive a load. An event the game raised just before a load started can still be queued after that load's `game_loaded`, stamped with the old `epoch`: a consumer that must tell old from new compares the event's `epoch` with `game_loaded`'s, never its position in the stream.
 
 **Channel events.** The Papyrus native `Skython.Send(channel, payload)` raises `channel`. A payload longer than `max_channel_payload_bytes` is cut at a UTF-8 boundary and the event carries `truncated: true`; a call whose channel is empty or longer than `max_channel_bytes` is **dropped** (no event) and the plugin logs one warning the first time; a channel name is never cut, because a cut name would be a different channel.
 ````
 
 (c) Rename `## Ops (M1)` to `## Ops` and append these bullets to its rule list:
 ```markdown
-- `game.save` never overwrites: a save that already has that name is `bad_request` with the message `a save named <name> already exists` and `detail.reason` `"save_exists"`. It answers once the game reports the save; no report within the timeout is `timeout`.
-- `game.load` is answered without a loaded game, so it works at the main menu; while the game is starting or already loading it is `not_ready`. A missing save is `not_found` with the message `no save named <name>`; the engine refusing to load it is `internal`. It answers once the load has started. The load is a world reset, so every call in flight that needs a game ends `not_ready` (see above).
+- `game.save` never overwrites: a save that already has that name is `bad_request` with the message `a save named <name> already exists` and `detail.reason` `"save_exists"`. It answers once the engine has started the save (the game's save message for that name), which can be a moment before the file is on disk; no such message within the timeout is `timeout`. A second `game.save` of a name whose save was started but whose file is not written yet is the same `bad_request` (`a save named <name> is already in progress`, reason `"save_exists"`).
+- `game.load` is answered without a loaded game, so it works at the main menu; while the game is starting or already loading it is `not_ready`. A load of a save whose `game.save` has been answered but whose file is not written yet is `not_ready` with `detail.reason` `"saving"`; retry it shortly. A missing save is `not_found` with the message `no save named <name>`; the engine refusing to load it is `internal`. It answers once the load has started. The load is a world reset, so every call in flight that needs a game ends `not_ready` (see above).
 - Save names match the save-name pattern in the generated tables (letters, digits and underscores; no path, no extension).
 ```
 
