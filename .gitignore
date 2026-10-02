@@ -37,3 +37,4 @@ plugin/build-options.local
 # testesp/builder is a GPL-3.0-only development tool (Mutagen): never commit its build output
 testesp/builder/bin/
 testesp/builder/obj/
+.playwright-mcp/
