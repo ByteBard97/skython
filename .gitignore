@@ -27,6 +27,9 @@ __pycache__/
 *.pdb
 *.pex
 *.egg-info/
+# committed Papyrus build outputs (stable hashes in docs/PINS.md)
+!plugin/papyrus/compiled/*.pex
+!testesp/compiled/*.pex
 
 # CPython runtime and build inputs, fetched by tools/fetch_python.sh (never committed)
 third_party/cpython/

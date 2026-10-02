@@ -74,3 +74,10 @@ a1cc06b524ab3edca51f8ad3895f9c4fa20b8b19283173dff4ae781449dc9639  pybind11-3.1.0
 ## Plugin notes (Task 25)
 - The core DLL's SKSEPluginInfo is not needed by CommonLib: SKSE::Init reads PluginVersionData only for name/author/version and falls back to the module file name. Kept as harmless.
 - The core's RegisterListener uses the loader's plugin handle (GetPluginHandle() is captured during the loader's load call). SKSE may drop a second listener for the same handle and sender, so the loader registers nothing beyond SKSE::Init; every registration happens in the core.
+
+## Papyrus (Task 46)
+- Compiler: SimpleSkyrim `Stock Game/Papyrus Compiler/PapyrusCompiler.exe` sha256 f441afa877ce0b315c6b613db7fe700a7bbc66b71a72fc4d0d8bc94577ceb0ce, run headless by `tools/papyrus_compile.sh` (GE-Proton10-14 `wine64`, prefix `compatdata/4190904831`, DISPLAY and WAYLAND_DISPLAY unset; spike S5).
+- Imports and flags: the game's `Data/Scripts.zip` sha256 45ff21e55be76f3bce86385770cba878ec8dacabb8df4cd3e86976fbdf3ebdc6, `Source/Scripts/*.psc` and `TESV_Papyrus_Flags.flg` extracted to `out/papyrus-import/vanilla` (gitignored; vanilla sources are never committed).
+- `.pex` hashes: "raw" is the committed file; "stable" is `tools/papyrus_compile.sh --stable-hash` (compile time and source modification time zeroed). A rebuild is checked against the stable hash; it holds for the same source file name, machine and user (`geoff` on this machine).
+- pin plugin/papyrus/compiled/Skython.pex stable 36082f6c01b9f9e125fe2a239e4a7d8afc787c7d2b3424182cecbdbcaad22341
+  (informational only, never compared: the committed file's raw sha256 03738c8307c2681327e0f1d1f32b63d10b83dd4fe16bd141aa2b6a93343da3fe)
