@@ -1,0 +1,93 @@
+# Linux only. The plugin DLLs need Windows, MSVC, vcpkg and the CommonLibSSE-NG submodule; they are not built here
+# (see docs/BUILDING.md). The core, the Python package, the _skython module over a fake backend and the tool
+# checks all run on Linux.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  UV_MANAGED_PYTHON: "1"   # uv's own CPython builds (they include the headers the _skython build needs)
+
+jobs:
+  core:
+    name: core (cmake, ctest)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cmake -S core -B build/core -DCMAKE_BUILD_TYPE=Debug
+      - run: cmake --build build/core -j"$(nproc)"
+      - run: ctest --test-dir build/core --output-on-failure
+
+  core-sanitizers:
+    name: core (ASan, UBSan)
+    runs-on: ubuntu-24.04
+    env:
+      UBSAN_OPTIONS: print_stacktrace=1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - run: >-
+          cmake -S core -B build/asan -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined"
+      - run: cmake --build build/asan -j"$(nproc)"
+      - run: ctest --test-dir build/asan --output-on-failure
+
+  python:
+    name: python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          version: "0.12.7"
+      - run: uv python install ${{ matrix.python }}
+      # The _skython extension module is built for CPython 3.14 only (the game's interpreter).
+      - name: build _skython (fake backend)
+        if: matrix.python == '3.14'
+        run: |
+          cmake -S pyglue/linux -B build/pyglue -DCMAKE_BUILD_TYPE=Release -DPython_EXECUTABLE="$(uv python find 3.14)"
+          cmake --build build/pyglue -j"$(nproc)"
+      - name: _skython module tests
+        if: matrix.python == '3.14'
+        run: uv run --no-project --python 3.14 --with pytest python -m pytest pyglue/tests -q
+        env:
+          SKYTHON_PYGLUE_BUILD: ${{ github.workspace }}/build/pyglue
+      - name: skython package tests
+        working-directory: python
+        run: uv run --python ${{ matrix.python }} pytest -q -rs
+        env:
+          # on 3.14 the package is also tested against the real module built above
+          SKYTHON_REAL_MODULE_DIR: ${{ matrix.python == '3.14' && format('{0}/build/pyglue', github.workspace) || '' }}
+
+  tools:
+    name: tool checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          version: "0.12.7"
+      - run: uv python install 3.14
+      - run: tools/check_no_em_dash.sh
+      - run: tools/check_no_plan_refs.sh
+      - run: uv run --no-project --python 3.14 tools/gen_protocol.py --check
+      - run: uv run --no-project --python 3.14 --with pytest python -m pytest tools/test_gen_protocol.py -q
+      - run: tools/box/test_box_tools.sh
+        env:
+          BOX_OFFLINE: "1"
