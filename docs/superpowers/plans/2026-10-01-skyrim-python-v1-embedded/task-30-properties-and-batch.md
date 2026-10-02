@@ -22,7 +22,7 @@ Adapted from: branch `plan-out-of-process`, task 18 (`task-18-properties-batch-a
 - Produces: `papyrus.get_property`, `papyrus.set_property` (auto properties only; a full property is `unsupported`), `papyrus.batch` served by `ops::Run`. Batch semantics (spec 4.3): steps run in order, one `AddTask` per step, not a transaction; the batch-level `timeout_ms` covers all steps (per-step `timeout_ms` is ignored; `Batch.run` without a timeout sends the sum of the step timeouts, 5 s for a step without one, capped at `MAX_TIMEOUT_MS`: Task 21); the response is `{"results": [...]}` with one entry per step run (`{"ok": true, "result": ...}` or `{"ok": false, "error": {code, message, detail}}`), shorter than the step list if `stop_on_error` stopped it; a timed-out, cancelled or load-interrupted batch runs no further steps (`cancelled()` is checked before each step). A batch that times out reports how far it got (`detail.completed`, `detail.results`). `papyrus.batch` and `game.state` are not allowed as steps (`bad_request`, nothing runs; core's `parse_batch_args` refuses any op the generated table does not mark batchable while the request is parsed, so the plugin never sees such a batch).
 
 Known costs and limits (Task 32 puts them in the README):
-- **Each batch step costs 2-3 frames** (one `AddTask` for the step, the VM, and for an object result one more task to convert it), so a batch runs at roughly 15-30 steps per second at 30-60 fps. Batches give ordering, not speed; Task 31 records the real figure.
+- **Each batch step costs at least one task drain** (one `AddTask` for the step, the VM, and for an object result at most one more task (none when the VM calls back synchronously inside our task, R52)). S9: one drain (~46 ms on the box) per primitive call alone, two with a spinning Python thread; Task 31 records the batch figure. Batches give ordering, not speed.
 - **Property ops serve auto properties only.** A full property (one with Papyrus get/set code) is refused `unsupported`; call a Papyrus function for it. Reads and writes go through the engine's `GetPropertyValue`/`SetPropertyValue` inside an SKSE task and are **not synchronised with Papyrus threads** that may run the same script; `OnPropertyChanged` does **not** fire. For anything that must be atomic or must notify, call a pre-authored Papyrus setter with `call_method` (spec 4.9).
 - **A batch without a timeout** gets the sum of its steps' timeouts (5 s per step), capped at `MAX_TIMEOUT_MS`; give `run(timeout=...)` for a tighter bound.
 
@@ -90,13 +90,13 @@ def test_batch_of_100_steps(game):
     b = game.batch()
     for _ in range(100):
         b.call("Utility", "RandomInt", 1, 6)
-    results = b.run(timeout=60)  # 2-3 frames per step: several seconds
+    results = b.run(timeout=60)  # S9: one drain (~46 ms on the box) per primitive call alone: several seconds
     assert len(results) == 100 and all(1 <= r <= 6 for r in results)
 
 
 def test_batch_without_timeout_gets_time_for_every_step(game):
-    # No timeout given: Batch.run sends 5 s per step (capped), not one 5 s default for the whole batch. At 2-3 frames
-    # per step, 150 steps need well over 5 s.
+    # No timeout given: Batch.run sends 5 s per step (capped), not one 5 s default for the whole batch. At one drain
+    # (~46 ms on the box, S9) or more per step, 150 steps need well over 5 s.
     b = game.batch()
     for _ in range(150):
         b.call("Utility", "RandomInt", 1, 6)
@@ -230,12 +230,14 @@ struct BatchState
 // safe by ordering, not by thread: the next step is only queued from the previous step's `done`, so at most one step
 // is in flight and each access happens-before the next (the AddTask queue hand-off). No single "main thread" touches
 // it: SKSE tasks run on varying job threads (R49).
+// unmeasured: whether a task queued during a drain runs in the same drain; Task 31's meter (with the batch-step wrap)
+// shows it.
 
 void BatchStep(const std::shared_ptr<BatchState>& st);
 
 void QueueBatchStep(const std::shared_ptr<BatchState>& st)
 {
-    SKSE::GetTaskInterface()->AddTask([st] { BatchStep(st); });  // one task per step (spec 4.5)
+    SKSE::GetTaskInterface()->AddTask([st] { ops::InTask in; BatchStep(st); });  // one task per step (spec 4.5)
 }
 
 void BatchStep(const std::shared_ptr<BatchState>& st)
@@ -281,7 +283,7 @@ and delete the two `(void)cancelled; (void)progress;` lines in `Run`. Note: the 
 
 - [ ] **Step 3: Build, deploy, run**
 
-The game runs on the Windows box ([Task 1c](task-01c-part-c-on-the-box.md)); the save is loaded through DevBench; every wait is bounded and counts only this launch's log text. The cap test needs the low-cap ini, so the run is in two parts. The property happy path needs the quest S7c used, so load the named save S7 ran on (spikes/RESULTS.md), not the most recent one.
+The game runs on the Windows box ([Task 1c](task-01c-part-c-on-the-box.md)); the save is loaded through DevBench; every wait is bounded and counts only this launch's log text. The cap test needs the low-cap ini, so the run is in two parts. The property happy path needs the quest S7c used, so load the named save S7 ran on (`s4test`, spikes/RESULTS.md), not the most recent one.
 ```bash
 tools/remote_build.sh plugin Skython.dll && tools/remote_build.sh plugin SkythonCore.dll
 tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini
@@ -290,10 +292,11 @@ tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
 tools/box/box_session.sh up && source out/box-live.env
 tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
-tools/box/box_console.sh "load <the S7 save>"     # then Task 1b block B6
+tools/box/box_console.sh "load s4test"     # the S7 save; then Task 1b block B6
 tools/box/box_wait_log.sh Skython.log "lifecycle: interactive = true" 300
 export SPY_S7C_QUEST=0x001093E4 SPY_S7C_SCRIPT=QF_TGTQ01Handler_001093E4 SPY_S7C_PROPERTY=Alias_TGHandlerSilverMoldAlias SPY_S7C_KIND=Alias   # the S7c row of spikes/RESULTS.md
-export SPY_S4_QUEST=0x... SPY_S4_ALIAS=... SPY_S4_REF=0x...                          # as in Task 29
+export SPY_S4_QUEST=0x0010FDD5 SPY_S4_ALIAS=7 SPY_S4_REF=0x0001A677                   # as in Task 29
+export SPY_PLAIN_QUEST=0x0010FDD5 SPY_PLAIN_ALIAS=0 SPY_OWN_QUEST=0x... SPY_OWN_SCRIPT=... SPY_OWN_FUNCTION=...   # SPY_OWN_* from Task 29's record in spikes/RESULTS.md
 SKYTHON_LIVE=1 uv run --project python pytest livetest/test_m1_batch_props.py livetest/test_m1_calls.py -q -rs
 # test_per_connection_cap_returns_busy reports a skip here. Quit the game, then:
 tools/box/box_quit.sh     # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh
@@ -302,14 +305,14 @@ tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log "python host: (running|failed|disabled)" 600
 tools/box/box_session.sh up && source out/box-live.env     # new launch, new token
 tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600
-tools/box/box_console.sh "load <the S7 save>"     # then Task 1b block B6
+tools/box/box_console.sh "load s4test"     # the S7 save; then Task 1b block B6
 tools/box/box_wait_log.sh Skython.log "lifecycle: interactive = true" 600
 SKYTHON_LIVE=1 uv run --project python pytest livetest/test_m1_batch_props.py -q -rs -k per_connection_cap
 tools/box/box_quit.sh
 # Put the dev ini back afterwards:
 tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini
 ```
-Expected: the first run passes except the one skip (`test_per_connection_cap_returns_busy`); the second run passes it (at most 16 ok, the rest busy). A skip is not a pass: run the second part before committing, and a skip of `test_get_property_reads_an_auto_property` (missing `SPY_S7C_*`) or of the alias tests means they did not run. Any skip whose reason is `live test: set SKYTHON_LIVE=1` is a failure. The 100-step batch takes about 3-7 s, the 150-step one with no timeout about 5-10 s. If `test_get_property_reads_an_auto_property` gets `Unsupported` ("is a full property"), STOP (see the STOP list).
+Expected: the first run passes except the one skip (`test_per_connection_cap_returns_busy`); the second run passes it (at most 16 ok, the rest busy). A skip is not a pass: run the second part before committing, and a skip of `test_get_property_reads_an_auto_property` (missing `SPY_S7C_*`) or of the alias tests means they did not run. Any skip whose reason is `live test: set SKYTHON_LIVE=1` is a failure. S9: one drain (~46 ms on the box) per primitive call alone, two with a spinning Python thread, so the 100-step batch takes at least about 5 s and the 150-step one with no timeout at least about 7 s; Task 31 records the batch figure. If `test_get_property_reads_an_auto_property` gets `Unsupported` ("is a full property"), STOP (see the STOP list).
 
 - [ ] **Step 4: Commit**
 

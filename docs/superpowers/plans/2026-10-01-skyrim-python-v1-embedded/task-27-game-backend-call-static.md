@@ -14,7 +14,7 @@ Adapted from: branch `plan-out-of-process`, task 17a (`task-17a-dispatch-skeleto
 
 **Files:**
 - Replace: `plugin/src/GameBackend.h`, `plugin/src/GameBackend.cpp` (Task 26 created interim versions with the same names; this task overwrites both files whole)
-- Create: `plugin/src/Ops.h` (final), `plugin/src/Ops.cpp` (`game.state` extras and `papyrus.call_static`; Tasks 29 and 30 add ops)
+- Create: `plugin/src/Ops.h` (final apart from the drain meter Task 31 appends), `plugin/src/Ops.cpp` (`game.state` extras and `papyrus.call_static`; Tasks 29 and 30 add ops)
 - Create: `plugin/src/Signatures.h` (final), `plugin/src/Signatures.cpp` (`IEquals`, `FindFunction`, `BindArgs`; Task 28 adds `IsA` and `FindProperty`)
 - Create: `plugin/src/PapyrusValues.h` (final), `plugin/src/PapyrusValues.cpp` (primitives, `None`, `DescribeForm`; Tasks 28 and 29 fill in the rest)
 - Unchanged: `plugin/src/PythonHost.cpp`'s `InstallModuleHost` call (marked `// interim backend: replaced in Task 27`); it already uses `spy::game::GetDispatcher()`, which now resolves to the real backend. Only that comment is updated.
@@ -29,16 +29,17 @@ Adapted from: branch `plan-out-of-process`, task 17a (`task-17a-dispatch-skeleto
 - Consumes from spikes: S2 (Task 4, measured; index Global Constraints, Papyrus dispatch rules): the VM never frees the `IFunctionArguments` passed to a dispatch, so the plugin owns them: the `Callback` holds the call's `DynArgs` and deletes it after reading the result, never earlier (phase D, 1000/1000); when `Dispatch*Call` returns false the args are kept, not freed, and logged once (ruling R37: unmeasured, the callback might still fire); the callback may run inside an SKSE task or on a VM thread. S7 (Task 9) and ruling R49: see the next rule list.
 - Produces:
   - `spy::game::Backend() -> spy::Backend&` (the `GameBackend` singleton) and `spy::game::GetDispatcher() -> spy::Dispatcher&` (built on first use from `settings::Get()`: `default_timeout_ms`, `max_inflight_total`, and `on_late` logging each dropped late result with `log::Warn`; reaper started; immortal).
+  - `spy::ops::t_inTask` / `spy::ops::InTask` (`Ops.h`, `inline thread_local`, so every translation unit shares one flag per thread): the RAII guard that is the first statement of every `AddTask` lambda in the plugin (R52).
   - `spy::ops::Run(const std::string& op, const json& args, Done, Cancelled, Progress)` (main thread only; never throws), `spy::ops::AddStateExtras(json&)` (main thread), `spy::ops::WithGameState(json detail) -> json`, `spy::ops::NotReady(const std::string& reason) -> OpResult`.
   - `spy::pv::*` and `spy::sig::*` declarations (final headers; bodies arrive in Tasks 27-29 as named in the headers). `pv::FloatToJson(float)` is core's float encoder (`value_to_json`): shortest round-trip text, a non-finite Float becomes `null` (`PROTOCOL.md`); every Float leaving the plugin goes through it. `sig::FindProperty` returns the whole `PropertyTypeInfo` (Task 30 refuses full properties).
   - `game.state` result keys: `data_ready, game_loaded, loading, interactive, paused, menus, epoch, player, game_days_passed, diagnostics{late_results_dropped, in_flight}` (Task 31 adds `max_task_drain_ms` and `max_task_drain_count` to `diagnostics`; `player` and `game_days_passed` are `null` unless a game is loaded). `Backend::BaseState()`, which `_skython.state()` and every `timeout`/`not_ready` detail read, carries the same keys **without** `player` and `game_days_passed`: it never blocks, so it cannot read the engine, and it leaves the keys out rather than report a wrong `null`.
 
 Rules this task implements (spec 4.3-4.5):
-- **"Main thread" means "inside an SKSE task"** (ruling R49, measured in S7, Task 9). `AddTask`/`AddUITask` tasks were never seen to overlap (0 overlapping in about 2800 probed tasks; about 1600 of them were spread over frames, and the strongest run, 600 tasks of mixed AddTask/AddUITask submitted at interval 0, also had none), but they run on varying BSJobs worker threads (about six distinct ids; one drain runs every queued task back to back on one thread, the next drain may use another). The game window's thread (`RE::Main::threadID`, also the plugin-load thread) ran none of them. So: **never identify "the main thread" by thread id** (no `std::this_thread::get_id()` comparisons, no stored main-thread id). Code that needs engine state runs inside an `AddTask`, and the VM callback always hops through `AddTask` when `pv::NeedsMainThread(result)` is true. The serialization of tasks is **observed, not proven**: wherever this plan relies on it (one task at a time touching forms and the VM), it is relying on R49's measurement.
+- **"Main thread" means "inside an SKSE task"** (ruling R49, measured in S7, Task 9). `AddTask`/`AddUITask` tasks were never seen to overlap (0 overlapping in about 2800 probed tasks; about 1600 of them were spread over frames, and the strongest run, 600 tasks of mixed AddTask/AddUITask submitted at interval 0, also had none), but they run on varying BSJobs worker threads (about six distinct ids; one drain runs every queued task back to back on one thread, the next drain may use another). The game window's thread (`RE::Main::threadID`, also the plugin-load thread) ran none of them. So: **never identify "the main thread" by thread id** (no `std::this_thread::get_id()` comparisons, no stored main-thread id). Code that needs engine state runs inside an `AddTask`, and the VM callback converts an object result directly when `t_inTask` is set (it was called synchronously inside one of our tasks), otherwise through exactly one more `AddTask` (R52). The serialization of tasks is **observed, not proven**: wherever this plan relies on it (one task at a time touching forms and the VM), it is relying on R49's measurement.
 - `GameBackend::Run` never blocks the caller (a Python thread inside `_skython.submit`): it queues exactly one `AddTask` and returns. The queued task checks `cancelled()` first (timed out, cancelled or a load started while queued) and does nothing if so.
 - `game.state` is answered **immediately** from `life::BaseState()` when no game is loaded or a save is loading. Only when a game is loaded does it queue one `AddTask` for `player` and `game_days_passed`, and that task rechecks `Loading()` before touching the engine.
 - In the task: recheck readiness, find the function, check every argument against the declared parameter types (no default values: the count must match), dispatch.
-- VM callback: it owns the call's `DynArgs` and deletes it after reading the result (S2); on a false `Dispatch*Call` return the dispatch site keeps the args and logs once (R37). It overrides `CanSave()` to return false (ruling R38, as SkyrimPlatform does): our functor is never written into a save. The base class already returns false at the pin (`src/RE/I/IStackCallbackFunctor.cpp:11`; the header comment reads `{ return false; }`), so the override makes the default explicit rather than changing it. **Primitives and `None` are converted on whatever thread the callback runs on** (no engine state). An object result or an array of objects needs `LookupByID`/`GetFile`, so it is converted inside an SKSE task: directly when the callback runs inside one of our own tasks (the VM can call it synchronously from `Dispatch*Call`), else through one more `AddTask`. "Inside one of our tasks" is a `thread_local bool t_inTask` that every task this plugin queues sets for its duration (RAII `InTask` guard, ruling R52), never a thread-id comparison (R49). No Python runs on any of these threads (Global Constraints).
+- VM callback: it owns the call's `DynArgs` and deletes it after reading the result (S2); on a false `Dispatch*Call` return the dispatch site keeps the args and logs once (R37). It overrides `CanSave()` to return false (ruling R38, as SkyrimPlatform does): our functor is never written into a save. The base class already returns false at the pin (`src/RE/I/IStackCallbackFunctor.cpp:11`; the header comment reads `{ return false; }`), so the override makes the default explicit rather than changing it. **Primitives and `None` are converted on whatever thread the callback runs on** (no engine state). An object result or an array of objects needs `LookupByID`/`GetFile`, so it is converted inside an SKSE task: directly when the callback runs inside one of our own tasks (the VM can call it synchronously from `Dispatch*Call`), else through one more `AddTask`. "Inside one of our tasks" is a `thread_local bool t_inTask` that every task this plugin queues sets for its duration (RAII `ops::InTask` guard declared in `Ops.h`, ruling R52), never a thread-id comparison (R49). No Python runs on any of these threads (Global Constraints).
 - Readiness at submit, deadlines, `busy`, load cancellation and late-result counting are the Dispatcher's (Task 18); this task does not duplicate them.
 - Member functions are looked up in the script's empty state only.
 - **Script lookup** (`sig::TypeOf`, S7b): `GetScriptObjectType` finds a script case-insensitively (`"actor"` finds Actor), so names are passed as given. After a failed lookup of an unknown name, the **next** `GetScriptObjectType` of that name returns true with an empty stub type (no parent, 0 functions, 0 properties); `GetScriptObjectTypeNoLoad` stays false for the stub. `TypeOf` therefore requires both calls to succeed. It does not reject a type merely for having no parent and no functions or properties: a legitimate empty base script looks the same. (NoLoad after a successful load of a real script was not measured in S7; if the cross-check rejects a real script such as `Utility` on the first live run, STOP and ask the owner, do not drop the check.)
@@ -529,13 +530,19 @@ json FromVariable(const Variable& v)
 
 - [ ] **Step 4: Ops (`game.state` extras and `call_static`)**
 
-`plugin/src/Ops.h` (final):
+`plugin/src/Ops.h` (final; Task 31 appends the drain meter):
 ```cpp
 #pragma once
 #include "spy/dispatcher.h"
 #include "spy/requests.h"
+#include <utility>
 
 namespace spy::ops {
+// true while this thread runs a task this plugin queued (R52). Every AddTask lambda in the plugin starts with `ops::InTask in;`.
+inline thread_local bool t_inTask = false;
+struct InTask { InTask() : prev_(std::exchange(t_inTask, true)) {} ~InTask() { t_inTask = prev_; }
+                InTask(const InTask&) = delete; InTask& operator=(const InTask&) = delete; private: bool prev_; };
+
 // Inside an SKSE task only. Validation failures become Err results; nothing throws out of Run.
 // `done` may be called inside an SKSE task or on a VM thread; the Dispatcher accepts either (Task 18).
 void Run(const std::string& op, const json& args, Done done, Cancelled cancelled, Progress progress);
@@ -614,18 +621,6 @@ void KeptOnRefusal(const std::string& qualified)
     });
 }
 
-// true while this thread runs a task this plugin queued (R52). Every AddTask lambda below starts with `InTask in;`.
-thread_local bool t_inTask = false;
-struct InTask
-{
-    InTask() : prev_(std::exchange(t_inTask, true)) {}
-    ~InTask() { t_inTask = prev_; }
-    InTask(const InTask&) = delete;
-    InTask& operator=(const InTask&) = delete;
-private:
-    bool prev_;
-};
-
 class Callback final : public RE::BSScript::IStackCallbackFunctor
 {
 public:
@@ -641,7 +636,7 @@ public:
         // test the thread id instead: tasks run on varying job threads (R49). R52.
         if (!pv::NeedsMainThread(result) || t_inTask) return Convert(done_, result);
         auto done = done_;
-        SKSE::GetTaskInterface()->AddTask([done, result] { InTask in; Convert(done, result); });
+        SKSE::GetTaskInterface()->AddTask([done, result] { ops::InTask in; Convert(done, result); });
     }
     void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
     // Never written into a save (as SkyrimPlatform does): a save during a latent call does not record this functor,
@@ -757,7 +752,7 @@ public:
         if (op == "game.state") return State(std::move(done), std::move(cancelled));
         // Exactly one AddTask; never block the submitting Python thread.
         SKSE::GetTaskInterface()->AddTask([op, args, done, cancelled, progress] {
-            InTask in;
+            ops::InTask in;
             if (cancelled()) return;  // timed out, cancelled or a load started while queued
             try {
                 ops::Run(op, args, done, cancelled, progress);
@@ -795,7 +790,7 @@ private:
         // Answer at once at the main menu or while loading; queue a task only when it can answer.
         if (!life::GameLoaded() || life::Loading()) return done(OpResult::Ok(std::move(s)));
         SKSE::GetTaskInterface()->AddTask([done, cancelled, s = std::move(s)]() mutable {
-            InTask in;
+            ops::InTask in;
             if (cancelled()) return;
             try {
                 ops::AddStateExtras(s);

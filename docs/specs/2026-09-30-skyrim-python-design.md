@@ -147,7 +147,7 @@ Rules (each is pinned by a test):
 3. Python code runs only on the host thread and on threads Python creates. A blocking call (`game.call(...)`) releases the GIL while it waits on its C++ pending result.
 4. **Main thread**, reached with `SKSE::GetTaskInterface()->AddTask`, one task per request (or per batch step): resolves references, checks argument types against the VM signature, builds `FunctionArguments`, calls `DispatchStaticCall` / `DispatchMethodCall`. Native ops run entirely here. Tasks never re-queue themselves.
 5. **UI thread** via `AddUITask`: `game.load`, `game.save`, anything touching menus.
-6. **VM threads:** the `IStackCallbackFunctor` converts the result to `spy::Value` (any form becomes a reference by FormID only) and completes the pending result. No Python.
+6. **VM threads:** the `IStackCallbackFunctor` converts the result to `spy::Value` (any form becomes a reference by FormID only) and completes the pending result: primitives on any thread; objects inside an SKSE task (directly when the callback is synchronous inside ours, else one more `AddTask`). No Python.
 7. **Timeouts:** per call (default 5 s). On timeout the caller gets `Timeout`; a late result is dropped and logged.
 8. **Back-pressure:** a global cap on in-flight requests (default 1024) and, for the bridge, a per-connection cap (default 256). Beyond those, `Busy`.
 9. **Exceptions:** every C++ task, callback and sink body is wrapped (`std::exception` and `...`); a failure becomes `Internal`. Every Python entry point the plugin calls (`skython._host.main`, a script's `setup`/`teardown`, an event callback) is wrapped in Python; an exception is logged with its traceback and the script is marked failed, nothing else.
