@@ -4,8 +4,9 @@
 # Usage: tools/check_no_em_dash.sh        (exit 0 = clean; otherwise prints file:line for each hit)
 set -uo pipefail
 cd "$(dirname "$0")/.."
+dash="$(printf '\xe2\x80\x94')"   # U+2014, built from its UTF-8 bytes so this file stays clean
 hits="$(git ls-files -z | grep -zv -E '^(third_party/|docs/research/|docs/superpowers/)' \
-  | xargs -0 grep -n -I $'—' 2>/dev/null)"
+  | xargs -0 grep -n -I -F "$dash" 2>/dev/null)"
 if [ -n "$hits" ]; then
   echo "$hits"
   echo "em dashes found: $(echo "$hits" | wc -l) line(s)"
