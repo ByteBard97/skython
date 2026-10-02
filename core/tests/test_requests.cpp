@@ -1,6 +1,8 @@
 #include "doctest/doctest.h"
 #include "spy/requests.h"
+#include <regex>
 #include <string>
+#include <vector>
 
 using spy::json;
 
@@ -153,4 +155,54 @@ TEST_CASE("known_ops lists the generated table in order")
 {
     REQUIRE(spy::known_ops().size() == spy::kOps.size());
     for (std::size_t i = 0; i < spy::kOps.size(); ++i) CHECK(spy::known_ops()[i] == spy::kOps[i].name);
+}
+
+TEST_CASE("is_valid_save_name agrees with the generated save-name pattern")
+{
+    const std::regex pattern{std::string(spy::kSaveNamePattern)};
+    const std::vector<std::string> samples = {"", "a", "skython_t41", "A_Z_0_9", std::string(64, 'x'), std::string(65, 'x'),
+                                              "has space", "dot.ess", "../up", "tab\t", "\xC3\xBCmlaut", "semi;colon", "-dash",
+                                              std::string(1, '\0'), "trailing\n"};
+    for (const auto& s : samples) {
+        CAPTURE(s);
+        CHECK(spy::is_valid_save_name(s) == std::regex_match(s, pattern));
+    }
+    CHECK(spy::is_valid_save_name(std::string(64, 'x')));
+    CHECK_FALSE(spy::is_valid_save_name(std::string(65, 'x')));
+}
+
+TEST_CASE("events.* and game.save/game.load arguments are checked from their table entries")
+{
+    using spy::ErrorCode;
+    const json form = {{"kind", "form"}, {"form_id", 20}};
+    CHECK_NOTHROW(spy::parse_request(request("events.subscribe", {{"event", "death"}})));
+    CHECK_NOTHROW(spy::parse_request(request("events.subscribe", {{"event", "death"}, {"filter", nullptr}})));  // null = absent
+    CHECK_NOTHROW(spy::parse_request(request("events.subscribe", {{"event", "hit"}, {"filter", {{"target", json::array({form})}}}, {"max_queue", 65536}})));
+    CHECK_NOTHROW(spy::parse_request(request("events.subscribe", {{"event", "death"}, {"max_queue", 1}})));
+    CHECK(code_of_request(request("events.subscribe", json::object())) == ErrorCode::bad_request);
+    CHECK(code_of_request(request("events.subscribe", {{"event", "Death"}})) == ErrorCode::bad_request);  // exact names only
+    CHECK(code_of_request(request("events.subscribe", {{"event", "death"}, {"filter", "victim"}})) == ErrorCode::bad_request);
+    for (const json& bad_queue : {json(0), json(65537), json(1.5), json(true), json("16"), json(-1)})
+        CHECK(code_of_request(request("events.subscribe", {{"event", "death"}, {"max_queue", bad_queue}})) == ErrorCode::bad_request);
+    try {
+        spy::parse_request(request("events.subscribe", {{"event", "no_such_event"}}));
+        FAIL("expected ProtocolError");
+    } catch (const spy::ProtocolError& e) {
+        CHECK(std::string(e.what()).find("unknown event 'no_such_event'") != std::string::npos);
+    }
+
+    CHECK_NOTHROW(spy::parse_request(request("events.unsubscribe", {{"sub", 0}})));
+    CHECK_NOTHROW(spy::parse_request(request("events.unsubscribe", {{"sub", 18446744073709551615ULL}})));
+    for (const json& bad_sub : {json(-1), json(1.0), json("7"), json(nullptr)})
+        CHECK(code_of_request(request("events.unsubscribe", {{"sub", bad_sub}})) == ErrorCode::bad_request);
+    CHECK(code_of_request(request("events.unsubscribe", json::object())) == ErrorCode::bad_request);
+
+    CHECK_NOTHROW(spy::parse_request(request("game.save", {{"name", "skython_t33"}, {"timeout_ms", 60000}})));
+    CHECK_NOTHROW(spy::parse_request(request("game.load", {{"save", "skython_t33"}})));
+    CHECK(code_of_request(request("game.save", json::object())) == ErrorCode::bad_request);
+    CHECK(code_of_request(request("game.save", {{"name", 5}})) == ErrorCode::bad_request);
+    CHECK(code_of_request(request("game.save", {{"name", "a b"}})) == ErrorCode::bad_request);
+    CHECK(code_of_request(request("game.save", {{"name", "ok"}, {"timeout_ms", 0}})) == ErrorCode::bad_request);
+    CHECK(code_of_request(request("game.load", {{"save", "../x"}})) == ErrorCode::bad_request);
+    CHECK(code_of_request(request("game.load", {{"name", "ok"}})) == ErrorCode::bad_request);  // the load argument is "save"
 }

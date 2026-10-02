@@ -67,7 +67,8 @@ def mutate(fn):
     ("frame cap above the 4-byte prefix", lambda m: m["limits"][0].update(ctype="size", value=2**32), "4-byte length prefix"),
     ("required limit removed", lambda m: m["limits"].pop(3), "'max_batch_calls' is required"),
     ("duplicate limit", lambda m: m["limits"].append(dict(m["limits"][0])), "duplicate limit"),
-    ("required limit max_array_items removed", lambda m: m["limits"].pop(-1), "'max_array_items' is required"),
+    ("required limit max_array_items removed",
+     lambda m: m["limits"].remove(next(l for l in m["limits"] if l["name"] == "max_array_items")), "'max_array_items' is required"),
     ("config default outside its range", lambda m: cfg(m, "port").update(default=70000), "outside 0..65535"),
     ("default timeout outside the timeout limits", lambda m: cfg(m, "default_timeout_ms").update(max=7200000), "inside the timeout limits"),
     ("unknown config type", lambda m: cfg(m, "port").update(type="float"), "unknown 'float'"),
@@ -85,6 +86,41 @@ def mutate(fn):
     ("unknown format", lambda m: m.update(format=2), "format 1 only"),
 ])
 def test_schema_problems_are_reported(name, fn, expect):
+    problems = mutate(fn)
+    assert any(expect in p for p in problems), (name, problems)
+
+
+def ev(m, name):
+    return next(e for e in m["events"] if e["name"] == name)
+
+
+def limit_removed(name):
+    return lambda m: m["limits"].remove(next(l for l in m["limits"] if l["name"] == name))
+
+
+@pytest.mark.parametrize("name, fn, expect", [
+    ("duplicate event", lambda m: m["events"].append(dict(m["events"][0])), "duplicate event"),
+    ("event name not an identifier", lambda m: ev(m, "death").update(name="Death!"), "lower-case identifier"),
+    ("unknown event field type", lambda m: ev(m, "death")["fields"][0].update(type="pointer"), "unknown event field type"),
+    ("field without nullable", lambda m: ev(m, "death")["fields"][0].pop("nullable"), "missing 'nullable'"),
+    ("filter field that is not a field", lambda m: ev(m, "death")["filter_fields"].append("nope"), "'nope' is not a field"),
+    ("filter on a bool field", lambda m: ev(m, "hit")["filter_fields"].append("blocked"), "cannot be filtered"),
+    ("required filter that is not a filter field", lambda m: ev(m, "hit")["filter_required_any_of"].append("source"),
+     "'source' is not a filter field"),
+    ("event without deliver_while_loading", lambda m: ev(m, "death").pop("deliver_while_loading"), "missing 'deliver_while_loading'"),
+    ("no events", lambda m: m.update(events=[]), "events: empty"),
+    ("save name pattern not anchored", lambda m: m.update(save_name_pattern="[a-z]+"), "anchored"),
+    ("save name pattern not a regex", lambda m: m.update(save_name_pattern="^[a-$"), "not a regular expression"),
+    ("required limit max_event_queue removed", limit_removed("max_event_queue"), "'max_event_queue' is required"),
+    ("required limit max_filter_values removed", limit_removed("max_filter_values"), "'max_filter_values' is required"),
+    ("required limit max_subscriptions_per_consumer removed", limit_removed("max_subscriptions_per_consumer"),
+     "'max_subscriptions_per_consumer' is required"),
+    ("required limit max_queued_event_bytes_per_consumer removed", limit_removed("max_queued_event_bytes_per_consumer"),
+     "'max_queued_event_bytes_per_consumer' is required"),
+    ("unknown argument type on a new op",
+     lambda m: next(o for o in m["ops"] if o["name"] == "game.save")["args"][0].update(type="savename"), "unknown argument type"),
+])
+def test_event_schema_problems_are_reported(name, fn, expect):
     problems = mutate(fn)
     assert any(expect in p for p in problems), (name, problems)
 
@@ -157,6 +193,15 @@ def test_the_generated_python_module_matches_the_source():
     assert ns["BATCHABLE_OPS"] == tuple(o["name"] for o in m["ops"] if o["batchable"])
     assert {n: o["needs_game"] for n, o in ns["OPS"].items()} == {o["name"]: o["needs_game"] for o in m["ops"]}
     assert set(ns["CONFIG_KEYS"]) == {k["name"] for k in m["config_keys"]}
+    assert set(ns["EVENTS"]) == {e["name"] for e in m["events"]}
+    for e in m["events"]:
+        spec = ns["EVENTS"][e["name"]]
+        assert spec["fields"] == tuple((f["name"], f["type"], f["nullable"]) for f in e["fields"])
+        assert spec["filter_fields"] == tuple(e["filter_fields"])
+        assert spec["filter_required_any_of"] == tuple(e["filter_required_any_of"])
+        assert spec["deliver_while_loading"] is e["deliver_while_loading"]
+        assert ns["EVENT_" + e["name"].upper()] == e["name"]
+    assert ns["SAVE_NAME_PATTERN"] == m["save_name_pattern"]
 
 
 @pytest.mark.skipif(shutil.which("g++") is None, reason="no C++ compiler on this machine")
@@ -168,6 +213,15 @@ def test_the_generated_header_compiles_standalone(tmp_path):
                                     "static_assert(spy::find_op(spy::ops::kPapyrusCallStatic)->needs_game);\n"
                                     "static_assert(spy::kMaxArrayItems == 128u);\n"
                                     "static_assert(!spy::config_defaults::kBridgeEnabled && spy::config_defaults::kPythonEnabled);\n"
+                                    "static_assert(spy::find_event(\"hit\")->filter_required_any_of.size() == 2);\n"
+                                    "static_assert(spy::find_event(spy::event_names::kNewGame)->fields.empty());\n"
+                                    "static_assert(spy::find_event(\"no_such_event\") == nullptr);\n"
+                                    "static_assert(!spy::find_op(spy::ops::kGameLoad)->needs_game);\n"
+                                    "static_assert(spy::find_op(spy::ops::kGameSave)->needs_game);\n"
+                                    "static_assert(spy::kDefaultEventQueue == 1024u && spy::kMaxEventsPerNext == 256u);\n"
+                                    "static_assert(spy::kMaxSubscriptionsPerConsumer == 256u && spy::kMaxQueuedEventBytesPerConsumer == 16777216u);\n"
+                                    "static_assert(spy::kNotReadyReasons.back() == \"saving\");\n"
+                                    "static_assert(spy::config_defaults::kConsoleEchoErrors && !spy::config_defaults::kTraceTiming);\n"
                                     "int main() { return 0; }\n")
     inc = tmp_path / "inc" / "spy"
     inc.mkdir(parents=True)
@@ -237,15 +291,37 @@ def test_the_committed_generated_files_are_current():
 
 
 # ---- rules the index's Contracts fix ------------------------------------------------------------------------
-def test_only_game_state_works_without_a_game():
-    assert [o["name"] for o in model()["ops"] if not o["needs_game"]] == ["game.state"]
+def test_the_ops_answered_without_a_game():
+    assert [o["name"] for o in model()["ops"] if not o["needs_game"]] == ["game.state", "events.subscribe", "events.unsubscribe", "game.load"]
 
 
 def test_the_config_keys_are_the_plugin_config_fields_with_their_defaults():
     keys = {k["name"]: k["default"] for k in model()["config_keys"]}
     assert keys == {"python_enabled": True, "scripts_enabled": True, "bridge_enabled": False, "port": 45977, "fixed_token": "",
                     "session_file": "", "default_timeout_ms": 5000, "max_inflight_per_connection": 256,
-                    "max_inflight_total": 1024, "enable_console": False}
+                    "max_inflight_total": 1024, "enable_console": False, "trace_timing": False, "console_echo_errors": True}
+
+
+def test_the_generated_markdown_lists_every_event_and_the_save_name_pattern():
+    md = gen.render_md(model())
+    for e in model()["events"]:
+        assert f"| `{e['name']}` |" in md, e["name"]
+    assert model()["save_name_pattern"] in md
+
+
+def test_the_events_fixture_uses_only_names_from_the_table():
+    m = model()
+    events = {e["name"]: e for e in m["events"]}
+    fx = fixture("events.json")
+    for c in fx["subscribe"]:
+        assert c["request"]["op"] == "events.subscribe" and c["request"]["args"]["event"] in events
+        assert set(c["request"]["args"].get("filter") or {}) <= set(events[c["request"]["args"]["event"]]["filter_fields"])
+    for f in fx["frames"]:
+        assert f["type"] == "event" and f["event"] in events
+        assert set(f["data"]) == {x["name"] for x in events[f["event"]]["fields"]}
+    codes = {c["code"] for c in m["error_codes"]}
+    for c in fx["invalid_filters"]:
+        assert c["event"] in events and c["error"] in codes and c["message"]
 
 
 # ---- protocol.json agrees with the golden fixtures ---------------------------------------------------------

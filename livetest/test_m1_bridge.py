@@ -140,5 +140,5 @@ def test_session_file(session):
     p = pathlib.Path(os.environ["SKYTHON_SESSION"])
     data = json.loads(p.read_text())
     assert re.fullmatch(r"[0-9a-f]{32}", data["token"]) and data["port"] > 0
-    assert data["protocol"] == [1, 0] and data["plugin_version"]
+    assert data["protocol"] == [1, 1] and data["plugin_version"]
     raw_connect(session).close()  # the token in the file is the one the bridge accepts

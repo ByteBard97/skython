@@ -368,11 +368,16 @@ CALLERS = {
 }
 
 
+# Protocol 1.1 ops whose Game methods (Game.on, Game.save, Game.load) arrive in Task 36, which adds Game callers for
+# them to CALLERS and deletes this set (and the two uses below).
+PENDING_OPS = {"events.subscribe", "events.unsubscribe", "game.save", "game.load"}
+
+
 def replay_handler(op, args, ctx):
     return {"results": []} if op == "papyrus.batch" else {}
 
 
-@pytest.mark.parametrize("fx", REQUESTS["valid"], ids=lambda r: f"{r['id']}-{r['op']}")
+@pytest.mark.parametrize("fx", [r for r in REQUESTS["valid"] if r["op"] not in PENDING_OPS], ids=lambda r: f"{r['id']}-{r['op']}")
 def test_valid_request_fixtures_replay(game, fake, fx):
     fake.handler = replay_handler
     CALLERS[fx["op"]](game, fx["args"])
@@ -385,7 +390,7 @@ def test_valid_request_fixtures_replay(game, fake, fx):
 
 
 def test_the_game_speaks_exactly_the_ops_in_the_table():
-    assert set(CALLERS) == set(g.OPS)
+    assert set(CALLERS) == set(g.OPS) - PENDING_OPS
     assert set(STEPS) == set(g.BATCHABLE_OPS)
     assert {fx["op"] for fx in REQUESTS["valid"]} == set(g.OPS)
 

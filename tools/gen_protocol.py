@@ -43,7 +43,14 @@ ARG_TYPES = {  # protocol type name -> C++ enumerator, and what it means (also u
     "timeout_ms": ("timeout_ms", "integer from min_timeout_ms to max_timeout_ms"),
     "bool": ("boolean", "true or false"),
     "call_list": ("call_list", "1..max_batch_calls objects `{\"op\", \"args\"}`"),
+    "event_name": ("event_name", "a name from the events table"),
+    "event_filter": ("event_filter", "object: filter field -> 1..max_filter_values values (PROTOCOL.md, Events); null means absent"),
+    "queue_size": ("queue_size", "integer from 1 to max_event_queue"),
+    "u64": ("u64", "unsigned 64-bit integer"),
+    "save_name": ("save_name", "string matching save_name_pattern"),
 }
+EVENT_FIELD_TYPES = {"form": "form", "int": "integer", "float": "floating", "bool": "boolean", "string": "string"}  # protocol -> C++ enumerator
+FILTERABLE_FIELD_TYPES = ("form", "int", "string")
 CONFIG_TYPES = {"u16": "std::uint16_t", "u32": "std::uint32_t", "bool": "bool", "token": "std::string_view", "path": "std::string_view"}
 CPP_KEYWORDS = {"default", "new", "delete", "class", "struct", "enum", "union", "namespace", "template", "this", "true",
                 "false", "int", "bool", "void", "char", "float", "double", "return", "switch", "case", "if", "else",
@@ -160,7 +167,9 @@ def validate(m: dict) -> list[str]:
     for req in ("max_frame_bytes", "pre_auth_frame_bytes", "max_name_bytes", "max_batch_calls", "min_timeout_ms",
                 "max_timeout_ms", "max_error_message_bytes", "max_client_name_bytes", "max_connections", "hello_timeout_ms",
                 "max_json_depth", "max_queued_bytes_per_connection", "token_length", "int_min", "int_max", "float_max_text",
-                "max_array_items"):
+                "max_array_items", "default_event_queue", "max_event_queue", "max_subscriptions", "max_subscriptions_per_consumer",
+                "max_queued_event_bytes_per_consumer", "max_filter_values", "max_events_per_next", "max_channel_payload_bytes",
+                "max_channel_bytes"):
         if req not in lim:
             p.append(f"limits: '{req}' is required")
     if lim.get("pre_auth_frame_bytes", 0) > lim.get("max_frame_bytes", 0):
@@ -273,6 +282,50 @@ def validate(m: dict) -> list[str]:
         ascii_only(o.get("result") if isinstance(o, dict) else None, f"{w}.result")
     if not ops:
         p.append("ops: empty")
+    # events
+    events = need(m, "events", (list,), "root") or []
+    unique([e.get("name") for e in events if isinstance(e, dict)], "event")
+    for i, e in enumerate(events):
+        w = f"events[{i}]"
+        name = need(e, "name", (str,), w)
+        if name is not None and (not SNAKE_RE.match(name) or name in CPP_KEYWORDS):
+            p.append(f"{w}.name: '{name}' is not a lower-case identifier usable in C++")
+        for k in ("doc", "source"):
+            ascii_only(need(e, k, (str,), w), f"{w}.{k}")
+        need(e, "deliver_while_loading", (bool,), w)
+        fields = need(e, "fields", (list,), w) or []
+        types = {}
+        for j, f in enumerate(fields):
+            wf = f"{w}.fields[{j}]"
+            fn, ft = need(f, "name", (str,), wf), need(f, "type", (str,), wf)
+            need(f, "nullable", (bool,), wf)
+            if fn is not None and not SNAKE_RE.match(fn):
+                p.append(f"{wf}.name: not a lower-case identifier")
+            if ft is not None and ft not in EVENT_FIELD_TYPES:
+                p.append(f"{wf}.type: unknown event field type {ft!r}")
+            if fn is not None:
+                types[fn] = ft
+        unique([f.get("name") for f in fields if isinstance(f, dict)], f"{w} field")
+        ff = need(e, "filter_fields", (list,), w) or []
+        for n in ff:
+            if n not in types:
+                p.append(f"{w}.filter_fields: '{n}' is not a field")
+            elif types[n] not in FILTERABLE_FIELD_TYPES:
+                p.append(f"{w}.filter_fields: '{n}' has type {types[n]}, which cannot be filtered")
+        unique(list(ff), f"{w} filter field")
+        for n in need(e, "filter_required_any_of", (list,), w) or []:
+            if n not in ff:
+                p.append(f"{w}.filter_required_any_of: '{n}' is not a filter field")
+    if not events:
+        p.append("events: empty")
+    pat = need(m, "save_name_pattern", (str,), "root")
+    if isinstance(pat, str):
+        if not (pat.startswith("^") and pat.endswith("$")):
+            p.append("save_name_pattern: must be anchored with ^ and $")
+        try:
+            re.compile(pat)
+        except re.error as ex:
+            p.append(f"save_name_pattern: not a regular expression ({ex})")
     return p
 
 
@@ -436,6 +489,49 @@ def render_cpp(m: dict) -> str:
           "    return nullptr;",
           "}", ""]
 
+    L += ["// ---- events (data fields, filterable fields, the loading rule)",
+          "enum class EventFieldType { " + ", ".join(EVENT_FIELD_TYPES.values()) + " };",
+          "struct EventField { std::string_view name; EventFieldType type; bool nullable; };",
+          "struct EventSpec",
+          "{",
+          "    std::string_view name;",
+          "    std::span<const EventField> fields;                        // exactly the keys of the event's data object",
+          "    std::span<const std::string_view> filter_fields;           // fields a subscription filter may name",
+          "    std::span<const std::string_view> filter_required_any_of;  // empty, or a filter must name one of these",
+          "    bool deliver_while_loading;  // false: not queued while a load is in progress (counted in suppressed)",
+          "};",
+          "namespace event_names {"]
+    for e in m["events"]:
+        L.append(f"inline constexpr std::string_view k{camel(e['name'])} = {cpp_str(e['name'])};")
+    L.append("}")
+    for e in m["events"]:
+        n = e["name"]
+        if e["fields"]:
+            L.append(f"inline constexpr std::array<EventField, {len(e['fields'])}> kEventFields_{n}{{{{")
+            for f in e["fields"]:
+                L.append(f"    {{{cpp_str(f['name'])}, EventFieldType::{EVENT_FIELD_TYPES[f['type']]}, {'true' if f['nullable'] else 'false'}}},")
+            L.append("}};")
+        for key, ident in (("filter_fields", "kEventFilter_"), ("filter_required_any_of", "kEventFilterRequired_")):
+            if e[key]:
+                L.append(f"inline constexpr std::array<std::string_view, {len(e[key])}> {ident}{n}{{{{")
+                L += [f"    {cpp_str(x)}," for x in e[key]]
+                L.append("}};")
+    L.append(f"inline constexpr std::array<EventSpec, {len(m['events'])}> kEvents{{{{")
+    for e in m["events"]:
+        n = e["name"]
+        parts = [cpp_str(n), f"kEventFields_{n}" if e["fields"] else "{}", f"kEventFilter_{n}" if e["filter_fields"] else "{}",
+                 f"kEventFilterRequired_{n}" if e["filter_required_any_of"] else "{}", "true" if e["deliver_while_loading"] else "false"]
+        L.append("    {" + ", ".join(parts) + "},")
+    L += ["}};",
+          "inline constexpr const EventSpec* find_event(std::string_view name)",
+          "{",
+          "    for (const auto& e : kEvents)",
+          "        if (e.name == name) return &e;",
+          "    return nullptr;",
+          "}",
+          "// game.save and game.load names (ECMAScript syntax; is_valid_save_name in requests.h implements it)",
+          f"inline constexpr std::string_view kSaveNamePattern = {cpp_str(m['save_name_pattern'])};", ""]
+
     L.append("// ---- config keys")
     L.append("enum class ConfigType { u16, u32, boolean, token, path };")
     L.append("struct ConfigKey { std::string_view name; ConfigType type; std::uint64_t min; std::uint64_t max; std::string_view default_text; };")
@@ -517,6 +613,18 @@ def render_py(m: dict) -> str:
     L.append(f"OPS = {py(ops)}")
     L.append(f"BATCHABLE_OPS = {py([o['name'] for o in m['ops'] if o['batchable']])}")
     L.append("")
+    L.append("# ---- events: name -> {fields: ((name, type, nullable), ...), filter_fields, filter_required_any_of, deliver_while_loading}")
+    for e in m["events"]:
+        L.append(f"EVENT_{upper(e['name'])} = {py(e['name'])}")
+    events = {}
+    for e in m["events"]:
+        events[e["name"]] = {"fields": tuple((f["name"], f["type"], f["nullable"]) for f in e["fields"]),
+                             "filter_fields": tuple(e["filter_fields"]),
+                             "filter_required_any_of": tuple(e["filter_required_any_of"]),
+                             "deliver_while_loading": e["deliver_while_loading"]}
+    L.append(f"EVENTS = {py(events)}")
+    L.append(f"SAVE_NAME_PATTERN = {py(m['save_name_pattern'])}")
+    L.append("")
 
     L.append("# ---- config keys (the plugin ini) and their defaults")
     keys = {}
@@ -579,7 +687,7 @@ def render_md(m: dict) -> str:
           f"`{f['light_extension']}` plugins have local ids up to `0x{f['max_light_local_id']:X}`, the others up to `0x{f['max_local_id']:X}`.",
           f"- A form id whose top byte is `0x{f['runtime_prefix']:02X}` is runtime-created (no form key); `0x{f['light_prefix']:02X}` is a light form.",
           f"- A form key has at most {f['max_key_hex_digits']} hex digits after `0x`; the canonical text has {f['canonical_hex_digits']} uppercase digits.",
-          "", "## Ops (M1)", ""]
+          "", "## Ops", ""]
     for o in m["ops"]:
         L.append(f"### `{o['name']}`")
         L.append("")
@@ -603,6 +711,20 @@ def render_md(m: dict) -> str:
     L += ["### Argument types", "", "| Type | Meaning |", "|---|---|"]
     for t, (_, meaning) in ARG_TYPES.items():
         L.append(f"| `{t}` | {md_cell(meaning)} |")
+    L += ["", "## Events", "",
+          "Every event frame's `data` object has exactly these fields; `?` marks a field that may be `null`. Form fields are form "
+          "references. A subscription filter may name only the filter fields; where a row lists fields under \"Filter required\", "
+          "the filter must name at least one of them. Events not delivered while loading are counted in `suppressed` instead "
+          "(PROTOCOL.md, Events).", "",
+          "| Event | Data fields | Filter fields | Filter required (one of) | Delivered while loading | Engine source | Meaning |",
+          "|---|---|---|---|---|---|---|"]
+    for e in m["events"]:
+        fields = ", ".join(f"`{f['name']}` {f['type']}{'?' if f['nullable'] else ''}" for f in e["fields"]) or "(none)"
+        ff = ", ".join(f"`{x}`" for x in e["filter_fields"]) or "-"
+        req = ", ".join(f"`{x}`" for x in e["filter_required_any_of"]) or "-"
+        L.append(f"| `{e['name']}` | {fields} | {ff} | {req} | {'yes' if e['deliver_while_loading'] else 'no'} | "
+                 f"{md_cell(e['source'])} | {md_cell(e['doc'])} |")
+    L += ["", f"Save names (`game.save`, `game.load`) match `{m['save_name_pattern']}`."]
     L += ["", "## Plugin ini keys (`Skython.ini`)", "", "| Key | Type | Default | Range | Meaning |", "|---|---|---|---|---|"]
     for k in m["config_keys"]:
         dflt = ("true" if k["default"] else "false") if k["type"] == "bool" else (f"`{k['default']}`" if k["default"] != "" else "(empty)")

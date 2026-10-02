@@ -20,6 +20,8 @@ struct Config
     std::uint32_t max_inflight_per_connection = config_defaults::kMaxInflightPerConnection;  // dev bridge; at least 1
     std::uint32_t max_inflight_total = config_defaults::kMaxInflightTotal;  // dispatcher; at least 1
     bool enable_console = config_defaults::kEnableConsole;
+    bool trace_timing = config_defaults::kTraceTiming;               // dev only: GameBackend logs per-request timestamps (Task 38)
+    bool console_echo_errors = config_defaults::kConsoleEchoErrors;  // a player script failure echoes one console line (Task 43)
     std::vector<std::string> ignored_keys;  // unrecognised keys and lines without '=', as ignored_entry_label gives them (log them: "Port" instead of "port" is silent otherwise)
 };
 

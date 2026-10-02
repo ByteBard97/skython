@@ -156,7 +156,7 @@ TEST_CASE("fixture replay while a save loads: every needs_game request is not_re
     for (const auto& m : fx["valid"]) {
         CAPTURE(m.dump());
         auto r = run(d, spy::dump_json(m));
-        if (m["op"] == "game.state") { CHECK(code_of(r) == "ok"); continue; }
+        if (!spy::find_op(m["op"].get<std::string>())->needs_game) continue;  // answered with no game (game.state, events.*, game.load)
         CHECK(r["error"]["code"] == expected["code"]);
         CHECK(r["error"]["message"] == expected["message"]);
         CHECK(r["error"]["detail"]["reason"] == expected["detail"]["reason"]);

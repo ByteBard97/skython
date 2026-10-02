@@ -9,6 +9,7 @@ Dispatcher (Task 18) over FakeBackend:
 - every request has a deadline (args.timeout_ms, else default_timeout_ms) after which it completes with
   timeout (a batch's detail carries "completed" and "results" from its last progress report);
 - timeout_ms and require_unpaused are read only when the op's table entry lists them as arguments;
+- the protocol 1.1 ops' arguments are checked like core's check_typed_args (event names, queue sizes, u64, save names; a filter only has to be an object or null);
 - _fake_bump_loads() (a world reset: a save load or a quit to the main menu) fails every in-flight needs_game
   request with not_ready, reason the not-ready reason of that moment (else "loading"), detail.dispatched = true;
 - every timeout and not_ready detail carries paused and menus;
@@ -24,6 +25,7 @@ afterwards. Tasks 23 (bridge) and 24 (skython._host) reuse it.
 import itertools
 import json
 import pathlib
+import re
 import tempfile
 import threading
 import time
@@ -303,6 +305,24 @@ class FakeSkython:
                 return f"timeout_ms must be an integer from {_g.MIN_TIMEOUT_MS} to {_g.MAX_TIMEOUT_MS}"
         if "require_unpaused" in declared and "require_unpaused" in args and type(args["require_unpaused"]) is not bool:
             return "require_unpaused must be a boolean"
+        for name, typ, required in _g.OPS[op]["args"]:  # the protocol 1.1 argument types, as core's check_typed_args
+            if typ not in ("event_name", "event_filter", "queue_size", "u64", "save_name"):
+                continue
+            if name not in args:
+                if required:
+                    return f"missing field {name!r}"
+                continue
+            v = args[name]
+            if typ == "event_name" and (not isinstance(v, str) or v not in _g.EVENTS):
+                return f"unknown event {v!r}"
+            if typ == "event_filter" and v is not None and not isinstance(v, dict):
+                return f"{name!r} must be an object mapping filter fields to lists of values"
+            if typ == "queue_size" and (type(v) is not int or not 1 <= v <= _g.MAX_EVENT_QUEUE):
+                return f"{name!r} must be an integer from 1 to {_g.MAX_EVENT_QUEUE}"
+            if typ == "u64" and (type(v) is not int or not 0 <= v <= _U64_MAX):
+                return f"{name!r} must be a non-negative integer"
+            if typ == "save_name" and (not isinstance(v, str) or re.fullmatch(_g.SAVE_NAME_PATTERN, v) is None):
+                return f"{name!r} must be 1 to 64 letters, digits or underscores"
         names = ["script", "function"] if op in (_g.OP_PAPYRUS_CALL_STATIC, _g.OP_PAPYRUS_CALL_METHOD) else []
         if op in (_g.OP_PAPYRUS_GET_PROPERTY, _g.OP_PAPYRUS_SET_PROPERTY):
             names = ["script", "property"]

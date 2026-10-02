@@ -1,14 +1,18 @@
+import json
+
 import pytest
 
 from support import load_fixture
+from skython import _protocol_generated as g
 from skython import errors
 from skython.refs import format_form_key, parse_form_key
-from skython.values import MAX_ARRAY_ITEMS, PArray, from_wire, to_wire
+from skython.values import MAX_ARRAY_ITEMS, Form, PArray, from_wire, to_wire
 
 VALUES = load_fixture("values.json")
 KEYS = load_fixture("form_keys.json")
 RESPONSES = load_fixture("responses.json")
 REQUESTS = load_fixture("requests.json")
+EVENTS_FX = load_fixture("events.json")
 
 
 def same(a, b):
@@ -120,4 +124,43 @@ def test_request_without_args_is_accepted(fake, fx):
     import json
     resp = json.loads(fake.call(json.dumps(fx), 5.0))
     assert resp["id"] == fx["id"]
+    assert resp["ok"] is True or resp["error"]["code"] != "bad_request", resp
+
+
+@pytest.mark.parametrize("frame", EVENTS_FX["frames"], ids=lambda f: f"{f['event']}-{f['seq']}")
+def test_event_frames_have_exactly_the_tables_fields_and_decode(frame):
+    spec = g.EVENTS[frame["event"]]
+    assert frame["type"] == "event"
+    assert set(frame["data"]) == {name for name, _t, _n in spec["fields"]}
+    for name, typ, nullable in spec["fields"]:
+        v = frame["data"][name]
+        if v is None:
+            assert nullable, name
+        elif typ == "form":
+            assert isinstance(from_wire(v), Form), name
+        else:
+            assert isinstance(v, {"int": int, "float": (int, float), "bool": bool, "string": str}[typ]), name
+    assert set(frame) - {"type", "event", "sub", "seq", "epoch", "data"} <= {"dropped", "suppressed"}
+    assert all(frame[k] > 0 for k in ("dropped", "suppressed") if k in frame)
+
+
+@pytest.mark.parametrize("case", EVENTS_FX["subscribe"], ids=lambda c: str(c["request"]["id"]))
+def test_subscribe_fixtures_name_only_filter_fields(case):
+    args = case["request"]["args"]
+    assert set(args.get("filter") or {}) <= set(g.EVENTS[args["event"]]["filter_fields"])
+    assert case["result"]["max_queue"] == args.get("max_queue", g.DEFAULT_EVENT_QUEUE)
+
+
+NEW_OPS = {"events.subscribe", "events.unsubscribe", "game.save", "game.load"}
+
+
+@pytest.mark.parametrize("case", [c for c in REQUESTS["invalid"] if c["message"].get("op") in NEW_OPS], ids=lambda c: str(c["message"]["id"]))
+def test_the_fake_refuses_bad_arguments_of_the_new_ops_like_core(fake, case):
+    resp = json.loads(fake.call(json.dumps(case["message"]), 5.0))
+    assert resp["ok"] is False and resp["error"]["code"] == case["error"], resp
+
+
+@pytest.mark.parametrize("req", [r for r in REQUESTS["valid"] if r["op"] in NEW_OPS], ids=lambda r: r["op"])
+def test_the_fake_accepts_valid_requests_of_the_new_ops(fake, req):
+    resp = json.loads(fake.call(json.dumps(req), 5.0))
     assert resp["ok"] is True or resp["error"]["code"] != "bad_request", resp

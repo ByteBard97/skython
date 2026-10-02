@@ -1,16 +1,20 @@
 {
-  "about": "valid[0..5]: shapes; 40 batch result; 41 batch timeout (completed, results); 42 late cancel (the caller stopped waiting, in-process); 43 not_ready after a save load started, 44 after a quit to the main menu (both reached the backend: dispatched)",
+  "about": "valid[0..5]: shapes; 40 batch result; 41 batch timeout (completed, results); 42 late cancel (the caller stopped waiting, in-process); 43 not_ready after a save load started, 44 after a quit to the main menu (both reached the backend: dispatched); 62 game.save; 63 game.load started; 64 game.save of an existing name (save_exists); 65 game.load of a missing save",
   "valid": [
     {"type": "response", "id": 1, "ok": true, "result": 6},
     {"type": "response", "id": 2, "ok": false, "error": {"code": "not_ready", "message": "a game is loading", "detail": {"reason": "loading", "paused": false, "menus": []}}},
     {"type": "response", "id": 3, "ok": true, "result": {"kind": "form", "form_id": 20, "form_key": "Skyrim.esm|0x000014", "type": "Actor", "epoch": 1}},
-    {"type": "welcome", "protocol": [1, 0], "plugin_version": "0.1.0", "game_version": "1.6.1170.0", "runtime": "AE", "epoch": 1, "capabilities": ["game.state"]},
+    {"type": "welcome", "protocol": [1, 1], "plugin_version": "0.1.0", "game_version": "1.6.1170.0", "runtime": "AE", "epoch": 1, "capabilities": ["game.state", "events.subscribe", "events.unsubscribe", "game.save", "game.load"]},
     {"type": "handshake_error", "code": "unauthorized", "message": "bad token"},
     {"type": "response", "id": 22, "ok": false, "error": {"code": "timeout", "message": "papyrus.call_static timed out after 5000 ms", "detail": {"paused": false, "menus": []}}},
     {"type": "response", "id": 40, "ok": true, "result": {"results": [{"ok": true, "result": 4}, {"ok": false, "error": {"code": "unknown_function", "message": "no script named Nope is loaded", "detail": {}}}]}},
     {"type": "response", "id": 41, "ok": false, "error": {"code": "timeout", "message": "no result within 20 ms", "detail": {"paused": false, "menus": [], "completed": 1, "results": [{"ok": true, "result": 4}]}}},
     {"type": "response", "id": 42, "ok": false, "error": {"code": "timeout", "message": "no response within 0.2 s; the call was cancelled", "detail": {"paused": false, "menus": [], "late_cancel": true}}},
     {"type": "response", "id": 43, "ok": false, "error": {"code": "not_ready", "message": "a game is loading", "detail": {"reason": "loading", "paused": false, "menus": [], "dispatched": true}}},
-    {"type": "response", "id": 44, "ok": false, "error": {"code": "not_ready", "message": "no game is loaded", "detail": {"reason": "no_game", "paused": false, "menus": [], "dispatched": true}}}
+    {"type": "response", "id": 44, "ok": false, "error": {"code": "not_ready", "message": "no game is loaded", "detail": {"reason": "no_game", "paused": false, "menus": [], "dispatched": true}}},
+    {"type": "response", "id": 62, "ok": true, "result": {"name": "skython_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}},
+    {"type": "response", "id": 63, "ok": true, "result": {"save": "skython_t41", "started": true}},
+    {"type": "response", "id": 64, "ok": false, "error": {"code": "bad_request", "message": "a save named skython_t41 already exists", "detail": {"reason": "save_exists"}}},
+    {"type": "response", "id": 65, "ok": false, "error": {"code": "not_found", "message": "no save named no_such_save_skython", "detail": {}}}
   ]
 }

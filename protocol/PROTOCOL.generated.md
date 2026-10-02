@@ -4,7 +4,7 @@
 
 > GENERATED FILE - DO NOT EDIT. These tables are written by `python3 tools/gen_protocol.py` from `protocol/protocol.json`; edit that file, regenerate, and commit all of the outputs. `PROTOCOL.md` explains the rules; this file holds every number and name.
 
-Protocol version: **1.0** (a major mismatch is refused; a newer minor is accepted).
+Protocol version: **1.1** (a major mismatch is refused; a newer minor is accepted).
 
 ## Message types
 
@@ -30,7 +30,7 @@ Protocol version: **1.0** (a major mismatch is refused; a newer minor is accepte
 
 An unknown code from a newer server maps to the generic `RemoteError` (or `HandshakeError`).
 
-`not_ready` detail: `{"reason": "starting"|"no_game"|"loading"|"paused"}`.
+`not_ready` detail: `{"reason": "starting"|"no_game"|"loading"|"paused"|"saving"}`.
 
 ## Limits
 
@@ -53,6 +53,15 @@ An unknown code from a newer server maps to the generic `RemoteError` (or `Hands
 | `int_max` | 2 147 483 647 | - | Largest Papyrus Int; also the largest alias_id and the largest hello protocol number. |
 | `float_max_text` | 3.4028235e+38 | - | Largest Papyrus Float magnitude, as the shortest text that round-trips FLT_MAX; a larger magnitude is type_mismatch. |
 | `max_array_items` | 128 | items | Most items in a Papyrus array (the VM's own limit); a longer array argument is type_mismatch. |
+| `default_event_queue` | 1 024 | events | Queue length of a subscription that sends no max_queue. A full queue drops its oldest event; the next delivered event carries the count in dropped. |
+| `max_event_queue` | 65 536 | events | Largest max_queue of one subscription. |
+| `max_subscriptions` | 1 024 | subscriptions | Subscriptions of all consumers together (in-process scripts and bridge connections); beyond it events.subscribe is busy. |
+| `max_subscriptions_per_consumer` | 256 | subscriptions | Subscriptions of one consumer (one Game, or one bridge connection); beyond it events.subscribe is busy, so one client cannot take every subscription. |
+| `max_queued_event_bytes_per_consumer` | 16 777 216 (16 MiB) | bytes | Event bytes one consumer may hold queued (each event counts its data's compact JSON length plus 96). Over it the oldest events of the subscription being pushed to are dropped (counted in dropped) until the consumer is back under it. |
+| `max_filter_values` | 128 | values | Most values in one field of an event filter. |
+| `max_events_per_next` | 256 | events | Most events one _skython.next_events call returns. |
+| `max_channel_payload_bytes` | 65 536 (64 KiB) | bytes | A Skython.Send payload longer than this is cut at a UTF-8 boundary and its channel event carries truncated: true. |
+| `max_channel_bytes` | 256 | bytes | Longest channel name of a channel event. A Skython.Send whose channel is empty or longer than this is dropped and a warning is logged once; a channel is never cut (a cut name would be a different channel). |
 
 ## Values
 
@@ -62,7 +71,7 @@ An unknown code from a newer server maps to the generic `RemoteError` (or `Hands
 - A form id whose top byte is `0xFF` is runtime-created (no form key); `0xFE` is a light form.
 - A form key has at most 8 hex digits after `0x`; the canonical text has 6 uppercase digits.
 
-## Ops (M1)
+## Ops
 
 ### `game.state`
 
@@ -152,6 +161,50 @@ Run several papyrus.* steps in order in one round trip. Not a transaction. Refus
 
 Result: `{"results":[{"ok":true,"result":v}|{"ok":false,"error":{...}}]}`
 
+### `events.subscribe`
+
+Subscribe the calling consumer to one event. The consumer travels beside the request text, never inside it. Answered at any time, also with no game loaded.
+
+| Argument | Type | Required | Default | Notes |
+|---|---|---|---|---|
+| `event` | `event_name` | yes | - | a name from the events table |
+| `filter` | `event_filter` | no | - | absent or null means every event |
+| `max_queue` | `queue_size` | no | - | absent means default_event_queue |
+
+Result: `{"sub":n,"event":"<name>","max_queue":n}`
+
+### `events.unsubscribe`
+
+End one of the calling consumer's subscriptions; its queued events are discarded. Answered at any time, also with no game loaded.
+
+| Argument | Type | Required | Default | Notes |
+|---|---|---|---|---|
+| `sub` | `u64` | yes | - | the sub that events.subscribe returned |
+
+Result: null
+
+### `game.save`
+
+Save the game under a new name. An existing save of that name is never overwritten. Refused with `not_ready` until a game is loaded and interactive.
+
+| Argument | Type | Required | Default | Notes |
+|---|---|---|---|---|
+| `name` | `save_name` | yes | - |  |
+| `timeout_ms` | `timeout_ms` | no | - | absent means the plugin's default_timeout_ms |
+
+Result: `{"name":"<name>"}` once the engine has started that save (the file can appear a moment later)
+
+### `game.load`
+
+Load a save. Works at the main menu; refused while the game is starting or already loading. Answered at any time, also with no game loaded.
+
+| Argument | Type | Required | Default | Notes |
+|---|---|---|---|---|
+| `save` | `save_name` | yes | - |  |
+| `timeout_ms` | `timeout_ms` | no | - | absent means the plugin's default_timeout_ms |
+
+Result: `{"save":"<name>","started":true}` once the load has started
+
 ### Argument types
 
 | Type | Meaning |
@@ -165,6 +218,40 @@ Result: `{"results":[{"ok":true,"result":v}|{"ok":false,"error":{...}}]}`
 | `timeout_ms` | integer from min_timeout_ms to max_timeout_ms |
 | `bool` | true or false |
 | `call_list` | 1..max_batch_calls objects `{"op", "args"}` |
+| `event_name` | a name from the events table |
+| `event_filter` | object: filter field -> 1..max_filter_values values (PROTOCOL.md, Events); null means absent |
+| `queue_size` | integer from 1 to max_event_queue |
+| `u64` | unsigned 64-bit integer |
+| `save_name` | string matching save_name_pattern |
+
+## Events
+
+Every event frame's `data` object has exactly these fields; `?` marks a field that may be `null`. Form fields are form references. A subscription filter may name only the filter fields; where a row lists fields under "Filter required", the filter must name at least one of them. Events not delivered while loading are counted in `suppressed` instead (PROTOCOL.md, Events).
+
+| Event | Data fields | Filter fields | Filter required (one of) | Delivered while loading | Engine source | Meaning |
+|---|---|---|---|---|---|---|
+| `death` | `victim` form, `killer` form? | `victim`, `killer` | - | no | TESDeathEvent, dead == true | An actor died. |
+| `dying` | `victim` form, `killer` form? | `victim`, `killer` | - | no | TESDeathEvent, dead == false | An actor started dying (raised before death). |
+| `quest_stage` | `quest` form, `stage` int | `quest`, `stage` | - | no | TESQuestStageEvent | A quest stage was set. |
+| `quest_start` | `quest` form | `quest` | - | no | TESQuestStartStopEvent, started | A quest started. |
+| `quest_stop` | `quest` form | `quest` | - | no | TESQuestStartStopEvent, stopped | A quest stopped. |
+| `mod_event` | `name` string, `str_arg` string, `num_arg` float, `sender` form? | `name`, `sender` | - | yes | SKSE ModCallbackEvent | A Papyrus mod event (SendModEvent). |
+| `channel` | `channel` string, `payload` string, `truncated` bool | `channel` | - | yes | native Skython.Send | A Skython.Send call from Papyrus. |
+| `hit` | `target` form, `aggressor` form?, `source` form?, `projectile` form?, `power_attack` bool, `sneak_attack` bool, `bash_attack` bool, `blocked` bool | `target`, `aggressor` | `target`, `aggressor` | no | TESHitEvent | Something was hit. A subscription must filter on target or aggressor. |
+| `equip` | `actor` form, `item` form, `reference` form? | `actor`, `item` | - | no | TESEquipEvent, equipped | An actor equipped an item (item is the base object). |
+| `unequip` | `actor` form, `item` form, `reference` form? | `actor`, `item` | - | no | TESEquipEvent, unequipped | An actor unequipped an item (item is the base object). |
+| `container_changed` | `old_container` form?, `new_container` form?, `item` form, `count` int, `reference` form? | `old_container`, `new_container`, `item` | `old_container`, `new_container`, `item` | no | TESContainerChangedEvent | Items moved between containers. A subscription must filter on a container or the item. |
+| `cell_attach` | `reference` form | `reference` | - | no | TESCellAttachDetachEvent, attached | A reference was attached to the loaded cells. It can repeat for one reference. |
+| `cell_detach` | `reference` form | `reference` | - | no | TESCellAttachDetachEvent, detached | A reference was detached from the loaded cells. |
+| `activate` | `target` form, `activator` form? | `target`, `activator` | - | no | TESActivateEvent | A reference was activated. |
+| `player_location` | `old_location` form?, `new_location` form? | `old_location`, `new_location` | - | no | TESActorLocationChangeEvent for the player | The player moved to another location. |
+| `menu_open` | `menu` string | `menu` | - | yes | MenuOpenCloseEvent, opening | A menu opened. |
+| `menu_close` | `menu` string | `menu` | - | yes | MenuOpenCloseEvent, closing | A menu closed. |
+| `game_loaded` | `new_game` bool | - | - | yes | interactive signal after kPostLoadGame (success) or kNewGame | A loaded save or a new game became interactive: the end of a load. |
+| `game_saved` | `name` string | - | - | yes | kSaveGame message | The game was saved. |
+| `new_game` | (none) | - | - | yes | kNewGame message | A new game started. |
+
+Save names (`game.save`, `game.load`) match `^[A-Za-z0-9_]{1,64}$`.
 
 ## Plugin ini keys (`Skython.ini`)
 
@@ -180,6 +267,8 @@ Result: `{"results":[{"ok":true,"result":v}|{"ok":false,"error":{...}}]}`
 | `max_inflight_per_connection` | u32 | 256 | 1..4294967295 | Requests one dev-bridge connection may have in flight. |
 | `max_inflight_total` | u32 | 1024 | 1..4294967295 | Requests in flight in the whole plugin (in-process and bridge together). |
 | `enable_console` | bool | false | - | Allow native.console (M2). |
+| `trace_timing` | bool | false | - | Development only: log one timing line per request (submit, task start, callback, done). |
+| `console_echo_errors` | bool | true | - | A failing player script also prints one rate-limited line in the in-game console. |
 
 ## Discovery
 

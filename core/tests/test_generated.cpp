@@ -54,7 +54,7 @@ static const json* first_valid_request(const json& fx, std::string_view op)
 TEST_CASE("the v1 wire contract is pinned: change these literals only together with a protocol version bump")
 {
     CHECK(spy::kProtocolMajor == 1);
-    CHECK(spy::kProtocolMinor == 0);
+    CHECK(spy::kProtocolMinor == 1);
     CHECK(spy::kMaxFrameBytes == 16u * 1024u * 1024u);
     CHECK(spy::kPreAuthFrameBytes == 64u * 1024u);
     CHECK(spy::kMaxNameBytes == 256u);
@@ -72,6 +72,20 @@ TEST_CASE("the v1 wire contract is pinned: change these literals only together w
     CHECK(spy::kHelloTimeoutMs == 5000u);
     CHECK(spy::kMaxJsonDepth == 64u);
     CHECK(spy::kMaxArrayItems == 128u);
+    CHECK(spy::kDefaultEventQueue == 1024u);
+    CHECK(spy::kMaxEventQueue == 65536u);
+    CHECK(spy::kMaxSubscriptions == 1024u);
+    CHECK(spy::kMaxSubscriptionsPerConsumer == 256u);
+    CHECK(spy::kMaxQueuedEventBytesPerConsumer == 16777216u);
+    CHECK(spy::kNotReadyReasons.size() == 5u);
+    CHECK(spy::kNotReadyReasons.back() == "saving");
+    CHECK(spy::kMaxFilterValues == 128u);
+    CHECK(spy::kMaxEventsPerNext == 256u);
+    CHECK(spy::kMaxChannelPayloadBytes == 65536u);
+    CHECK(spy::kMaxChannelBytes == 256u);
+    CHECK_FALSE(spy::config_defaults::kTraceTiming);
+    CHECK(spy::config_defaults::kConsoleEchoErrors);
+    CHECK(spy::kSaveNamePattern == "^[A-Za-z0-9_]{1,64}$");
     CHECK(spy::form_ids::kMaxLocalId == 0xFFFFFFu);
     CHECK(spy::form_ids::kMaxLightLocalId == 0xFFFu);
     CHECK(spy::form_ids::kRuntimePrefix == 0xFFu);
@@ -93,7 +107,8 @@ TEST_CASE("the v1 wire contract is pinned: change these literals only together w
     REQUIRE(spy::kErrorCodeNames.size() == codes.size());
     for (std::size_t i = 0; i < codes.size(); ++i) CHECK(spy::kErrorCodeNames[i].name == codes[i]);
     const std::vector<std::string> ops = {"game.state", "form.resolve", "papyrus.call_static", "papyrus.call_method",
-                                          "papyrus.get_property", "papyrus.set_property", "papyrus.batch"};
+                                          "papyrus.get_property", "papyrus.set_property", "papyrus.batch",
+                                          "events.subscribe", "events.unsubscribe", "game.save", "game.load"};
     CHECK(spy::known_ops() == ops);
 }
 
@@ -106,12 +121,41 @@ TEST_CASE("the ErrorCode enum values index the name table, and names are unique"
     }
 }
 
-TEST_CASE("only game.state is answered without a loaded game")
+TEST_CASE("the ops answered without a loaded game are game.state, events.subscribe, events.unsubscribe and game.load")
 {
+    const std::set<std::string_view> no_game = {spy::ops::kGameState, spy::ops::kEventsSubscribe, spy::ops::kEventsUnsubscribe,
+                                                spy::ops::kGameLoad};
     for (const auto& spec : spy::kOps) {
         CAPTURE(std::string(spec.name));
-        CHECK(spec.needs_game == (spec.name != spy::ops::kGameState));
+        CHECK(spec.needs_game == (no_game.count(spec.name) == 0));
+        if (spec.name.starts_with("events.") || spec.name.starts_with("game.")) CHECK_FALSE(spec.batchable);
     }
+}
+
+TEST_CASE("the events table is the plan's v1 list, with its filter and loading rules")
+{
+    const std::vector<std::string> names = {"death", "dying", "quest_stage", "quest_start", "quest_stop", "mod_event", "channel",
+                                            "hit", "equip", "unequip", "container_changed", "cell_attach", "cell_detach", "activate",
+                                            "player_location", "menu_open", "menu_close", "game_loaded", "game_saved", "new_game"};
+    REQUIRE(spy::kEvents.size() == names.size());
+    const std::set<std::string> while_loading = {"mod_event", "channel", "menu_open", "menu_close", "game_loaded", "game_saved", "new_game"};
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        const auto& e = spy::kEvents[i];
+        CAPTURE(names[i]);
+        CHECK(e.name == names[i]);
+        CHECK(spy::find_event(names[i]) == &e);
+        CHECK(e.deliver_while_loading == (while_loading.count(names[i]) == 1));
+        for (const auto f : e.filter_fields) {
+            bool is_field = false;
+            for (const auto& d : e.fields) is_field = is_field || (d.name == f && d.type != spy::EventFieldType::boolean && d.type != spy::EventFieldType::floating);
+            CHECK_MESSAGE(is_field, "filter field " << f << " is not a form, int or string field");
+        }
+        const bool needs_filter = names[i] == "hit" || names[i] == "container_changed";
+        CHECK(e.filter_required_any_of.empty() == !needs_filter);
+    }
+    CHECK(spy::find_event(spy::event_names::kDeath)->fields[1].nullable);         // killer may be null
+    CHECK_FALSE(spy::find_event(spy::event_names::kDeath)->fields[0].nullable);   // victim never
+    CHECK(spy::find_event("Death") == nullptr);                                    // names are exact
 }
 
 TEST_CASE("every op in the generated table has a fixture, and the validators enforce the table's required arguments")
@@ -277,6 +321,8 @@ TEST_CASE("every ini key in the table is parsed by parse_config, at its default 
     CHECK(defaults.max_inflight_per_connection == spy::config_defaults::kMaxInflightPerConnection);
     CHECK(defaults.max_inflight_total == spy::config_defaults::kMaxInflightTotal);
     CHECK(defaults.enable_console == spy::config_defaults::kEnableConsole);
+    CHECK(defaults.trace_timing == spy::config_defaults::kTraceTiming);
+    CHECK(defaults.console_echo_errors == spy::config_defaults::kConsoleEchoErrors);
 
     for (const auto& key : spy::kConfigKeys) {
         const std::string name(key.name);

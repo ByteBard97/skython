@@ -15,6 +15,8 @@ TEST_CASE("defaults when empty: Python and scripts on, the dev bridge off")
     CHECK(c.max_inflight_per_connection == 256u);
     CHECK(c.max_inflight_total == 1024u);
     CHECK_FALSE(c.enable_console);
+    CHECK_FALSE(c.trace_timing);
+    CHECK(c.console_echo_errors);
     CHECK(c.ignored_keys.empty());
 }
 
@@ -147,7 +149,19 @@ TEST_CASE("config_to_json carries every field under its ini name")
     CHECK(j["max_inflight_per_connection"] == 256);
     CHECK(j["max_inflight_total"] == 1024);
     CHECK(j["enable_console"] == false);
+    CHECK(j["trace_timing"] == false);
+    CHECK(j["console_echo_errors"] == true);
     CHECK(j["ignored_keys"] == spy::json::array({"Wrong"}));
     for (const auto& key : spy::kConfigKeys) CHECK_MESSAGE(j.contains(std::string(key.name)), "config_to_json lacks " << key.name);
     CHECK(j.size() == spy::kConfigKeys.size() + 1);  // the table's keys plus ignored_keys
+}
+
+TEST_CASE("trace_timing and console_echo_errors parse as booleans")
+{
+    auto c = spy::parse_config("trace_timing = true\nconsole_echo_errors = 0\n");
+    CHECK(c.trace_timing);
+    CHECK_FALSE(c.console_echo_errors);
+    CHECK(c.ignored_keys.empty());
+    CHECK_THROWS_AS(spy::parse_config("trace_timing = yes\n"), std::invalid_argument);
+    CHECK_THROWS_AS(spy::parse_config("console_echo_errors = 2\n"), std::invalid_argument);
 }

@@ -22,6 +22,9 @@ Request parse_request_text(std::string_view text);
 std::optional<std::uint64_t> peek_request_id(std::string_view text);
 // The op names of the generated kOps table, in table order.
 const std::vector<std::string>& known_ops();
+// A save name game.save and game.load accept: 1 to 64 bytes of A-Z, a-z, 0-9 and '_' (the generated kSaveNamePattern;
+// core/tests/test_requests.cpp checks that the two agree).
+bool is_valid_save_name(std::string_view s);
 
 struct CallArgs
 {

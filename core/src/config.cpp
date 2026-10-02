@@ -98,6 +98,8 @@ Config parse_config(std::string_view text)
         else if (key == "max_inflight_per_connection") c.max_inflight_per_connection = static_cast<std::uint32_t>(to_uint(key, val, spec->min, spec->max));
         else if (key == "max_inflight_total") c.max_inflight_total = static_cast<std::uint32_t>(to_uint(key, val, spec->min, spec->max));
         else if (key == "enable_console") c.enable_console = to_bool(key, val);
+        else if (key == "trace_timing") c.trace_timing = to_bool(key, val);
+        else if (key == "console_echo_errors") c.console_echo_errors = to_bool(key, val);
         else throw std::logic_error("config key '" + key + "' is in protocol.json but parse_config does not handle it");
     }
     return c;
@@ -115,6 +117,8 @@ json config_to_json(const Config& c)
             {"max_inflight_per_connection", c.max_inflight_per_connection},
             {"max_inflight_total", c.max_inflight_total},
             {"enable_console", c.enable_console},
+            {"trace_timing", c.trace_timing},
+            {"console_echo_errors", c.console_echo_errors},
             {"ignored_keys", c.ignored_keys}};
 }
 }

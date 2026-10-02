@@ -2,7 +2,9 @@
 #include "spy/requests.h"
 #include "spy/refs.h"
 #include "spy/values.h"
+#include <algorithm>
 #include <fstream>
+#include <set>
 
 using spy::json;
 
@@ -112,4 +114,78 @@ TEST_CASE("responses built by the plugin match the fixture shapes")
     actor.type = "Actor";
     actor.epoch = 1;
     CHECK(same_text(spy::make_ok(3, spy::form_ref_to_json(actor)), fx["valid"][2]));
+}
+
+namespace {
+// A data value against its events-table field: form references parse, nullable fields may be null.
+bool field_ok(const spy::EventField& f, const json& v)
+{
+    if (v.is_null()) return f.nullable;
+    switch (f.type) {
+    case spy::EventFieldType::form:
+        try {
+            spy::form_ref_from_json(v);
+            return true;
+        } catch (const spy::ProtocolError&) {
+            return false;
+        }
+    case spy::EventFieldType::integer: return v.is_number_integer();
+    case spy::EventFieldType::floating: return v.is_number();
+    case spy::EventFieldType::boolean: return v.is_boolean();
+    case spy::EventFieldType::string: return v.is_string();
+    }
+    return false;
+}
+}
+
+TEST_CASE("events fixture: requests parse, and results, frames and bad filters use the events table")
+{
+    const auto fx = load("events.json");
+    for (const auto& c : fx["subscribe"]) {
+        CAPTURE(c.dump());
+        const auto r = spy::parse_request(c["request"]);
+        CHECK(r.op == spy::ops::kEventsSubscribe);
+        const auto* spec = spy::find_event(r.args["event"].get<std::string>());
+        REQUIRE(spec != nullptr);
+        CHECK(c["result"]["event"] == r.args["event"]);
+        CHECK(spy::is_uint(c["result"]["sub"], UINT64_MAX));
+        const std::size_t expected_queue = r.args.contains("max_queue") ? r.args["max_queue"].get<std::size_t>() : spy::kDefaultEventQueue;
+        CHECK(c["result"]["max_queue"].get<std::size_t>() == expected_queue);
+        if (r.args.contains("filter") && r.args["filter"].is_object())
+            for (const auto& [field, values] : r.args["filter"].items()) {
+                CHECK(std::find(spec->filter_fields.begin(), spec->filter_fields.end(), field) != spec->filter_fields.end());
+                CHECK((values.is_array() && !values.empty() && values.size() <= spy::kMaxFilterValues));
+            }
+    }
+    for (const auto& c : fx["unsubscribe"]) {
+        CAPTURE(c.dump());
+        CHECK(spy::parse_request(c["request"]).op == spy::ops::kEventsUnsubscribe);
+        CHECK((c.contains("result") ? c["result"].is_null() : spy::error_code_from_string(c["error"].get<std::string>()).has_value()));
+    }
+    for (const auto& f : fx["frames"]) {
+        CAPTURE(f.dump());
+        CHECK(f["type"] == "event");
+        const auto* spec = spy::find_event(f["event"].get<std::string>());
+        REQUIRE(spec != nullptr);
+        std::set<std::string> keys;
+        for (const auto& [k, v] : f.items()) keys.insert(k);
+        for (const char* k : {"type", "event", "sub", "seq", "epoch", "data"}) CHECK(keys.erase(k) == 1);
+        for (const char* k : {"dropped", "suppressed"})
+            if (keys.erase(k) == 1) CHECK(f[k].get<std::uint64_t>() > 0);  // present only when non-zero
+        CHECK(keys.empty());
+        CHECK(f["seq"].get<std::uint64_t>() >= 1);
+        REQUIRE(f["data"].is_object());
+        CHECK(f["data"].size() == spec->fields.size());
+        for (const auto& field : spec->fields) {
+            CAPTURE(std::string(field.name));
+            REQUIRE(f["data"].contains(std::string(field.name)));
+            CHECK(field_ok(field, f["data"][std::string(field.name)]));
+        }
+    }
+    for (const auto& c : fx["invalid_filters"]) {
+        CAPTURE(c.dump());
+        CHECK(spy::find_event(c["event"].get<std::string>()) != nullptr);
+        CHECK(spy::error_code_from_string(c["error"].get<std::string>()).has_value());
+        CHECK_FALSE(c["message"].get<std::string>().empty());
+    }
 }

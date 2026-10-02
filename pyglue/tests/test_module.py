@@ -14,7 +14,7 @@ from conftest import BUILD, FAKE_DIR, ROOT, code, request, response
 
 def test_surface():
     assert _skython.BACKEND == "fake"
-    assert _skython.PROTOCOL == (1, 0)
+    assert _skython.PROTOCOL == (1, 1)
     for name in ("submit", "wait", "wait_any", "cancel", "call", "state", "config", "log", "in_flight",
                  "_fake_set_not_ready", "_fake_bump_loads", "_fake_set_paused"):
         assert callable(getattr(_skython, name)), name

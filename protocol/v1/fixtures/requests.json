@@ -9,7 +9,11 @@
     {"type": "request", "id": 30, "op": "papyrus.get_property", "args": {"object": {"kind": "form", "form_id": 83888128}, "script": "SkythonTestScript", "property": "Counter"}},
     {"type": "request", "id": 31, "op": "papyrus.set_property", "args": {"object": {"kind": "alias", "quest": {"kind": "form", "form_id": 83888128}, "alias_id": 0, "alias_type": "ReferenceAlias"}, "script": "ReferenceAlias", "property": "Tag", "value": 7}},
     {"type": "request", "id": 32, "op": "form.resolve", "args": {"editor_id": "IronSword"}},
-    {"type": "request", "id": 33, "op": "form.resolve", "args": {"form_id": 20}}
+    {"type": "request", "id": 33, "op": "form.resolve", "args": {"form_id": 20}},
+    {"type": "request", "id": 60, "op": "events.subscribe", "args": {"event": "death", "filter": {"victim": [{"kind": "form", "form_id": 20}]}, "max_queue": 16}},
+    {"type": "request", "id": 61, "op": "events.unsubscribe", "args": {"sub": 7}},
+    {"type": "request", "id": 62, "op": "game.save", "args": {"name": "skython_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "timeout_ms": 60000}},
+    {"type": "request", "id": 63, "op": "game.load", "args": {"save": "skython_t41", "timeout_ms": 120000}}
   ],
   "invalid": [
     {"message": {"type": "request", "op": "game.state", "args": {}}, "error": "bad_request"},
@@ -39,7 +43,22 @@
     {"message": {"type": "request", "id": 26, "op": "papyrus.call_static", "args": {"script": "Math", "function": "Abs", "args": [3.5e38]}}, "error": "type_mismatch"},
     {"message": {"type": "request", "id": 27, "op": "papyrus.batch", "args": {"calls": [{"op": "papyrus.call_static", "args": {"script": "Utility", "function": "RandomInt", "args": [1, 6]}}], "stop_on_error": "yes"}}, "error": "bad_request"},
     {"message": {"type": "request", "id": 28, "op": "papyrus.batch", "args": {"calls": []}}, "error": "bad_request"},
-    {"message": {"type": "request", "id": 29, "op": "form.resolve", "args": {"form_key": "Skyrim.esm|0x1", "form_id": 1}}, "error": "bad_request"}
+    {"message": {"type": "request", "id": 29, "op": "form.resolve", "args": {"form_key": "Skyrim.esm|0x1", "form_id": 1}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 80, "op": "events.subscribe", "args": {}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 81, "op": "events.subscribe", "args": {"event": "no_such_event"}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 82, "op": "events.subscribe", "args": {"event": 5}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 83, "op": "events.subscribe", "args": {"event": "death", "filter": [["victim"]]}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 84, "op": "events.subscribe", "args": {"event": "death", "max_queue": 0}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 85, "op": "events.subscribe", "args": {"event": "death", "max_queue": 65537}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 86, "op": "events.subscribe", "args": {"event": "death", "max_queue": "16"}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 87, "op": "events.unsubscribe", "args": {"sub": -1}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 88, "op": "events.unsubscribe", "args": {"sub": "7"}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 89, "op": "events.unsubscribe", "args": {}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 90, "op": "game.save", "args": {"name": "has space"}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 91, "op": "game.save", "args": {"name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 92, "op": "game.save", "args": {"name": ""}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 93, "op": "game.load", "args": {"save": "../escape"}}, "error": "bad_request"},
+    {"message": {"type": "request", "id": 94, "op": "game.load", "args": {"save": "skython_ok", "timeout_ms": 0}}, "error": "bad_request"}
   ],
   "valid_without_args": [
     {"type": "request", "id": 34, "op": "game.state"}

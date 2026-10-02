@@ -16,7 +16,7 @@ RESPONSES = load_fixture("responses.json")
 
 def test_v1_wire_contract_is_pinned():
     """A tripwire: change these literals only together with a protocol version bump."""
-    assert g.PROTOCOL_VERSION == (1, 0)
+    assert g.PROTOCOL_VERSION == (1, 1)
     assert (g.MAX_FRAME_BYTES, g.PRE_AUTH_FRAME_BYTES) == (16 * 1024 * 1024, 64 * 1024)
     assert (g.MAX_NAME_BYTES, g.MAX_BATCH_CALLS, g.MIN_TIMEOUT_MS, g.MAX_TIMEOUT_MS) == (256, 256, 1, 3_600_000)
     assert (g.MAX_ERROR_MESSAGE_BYTES, g.MAX_CLIENT_NAME_BYTES, g.TOKEN_LENGTH) == (1024, 64, 32)
@@ -28,11 +28,22 @@ def test_v1_wire_contract_is_pinned():
     assert g.ERROR_CODES == ("not_ready", "busy", "bad_request", "unknown_function", "type_mismatch", "stale_reference",
                              "not_found", "timeout", "vm_error", "unsupported", "internal", "unauthorized", "protocol_mismatch")
     assert tuple(g.OPS) == ("game.state", "form.resolve", "papyrus.call_static", "papyrus.call_method",
-                            "papyrus.get_property", "papyrus.set_property", "papyrus.batch")
+                            "papyrus.get_property", "papyrus.set_property", "papyrus.batch",
+                            "events.subscribe", "events.unsubscribe", "game.save", "game.load")
     assert g.BATCHABLE_OPS == ("papyrus.call_static", "papyrus.call_method", "papyrus.get_property", "papyrus.set_property")
-    assert [name for name, spec in g.OPS.items() if not spec["needs_game"]] == ["game.state"]
+    assert [name for name, spec in g.OPS.items() if not spec["needs_game"]] == ["game.state", "events.subscribe", "events.unsubscribe", "game.load"]
     assert tuple(g.CONFIG_KEYS) == ("python_enabled", "scripts_enabled", "bridge_enabled", "port", "fixed_token", "session_file",
-                                    "default_timeout_ms", "max_inflight_per_connection", "max_inflight_total", "enable_console")
+                                    "default_timeout_ms", "max_inflight_per_connection", "max_inflight_total", "enable_console",
+                                    "trace_timing", "console_echo_errors")
+    assert g.CONFIG_KEYS["trace_timing"]["default"] is False and g.CONFIG_KEYS["console_echo_errors"]["default"] is True
+    assert (g.DEFAULT_EVENT_QUEUE, g.MAX_EVENT_QUEUE, g.MAX_SUBSCRIPTIONS, g.MAX_FILTER_VALUES) == (1024, 65536, 1024, 128)
+    assert (g.MAX_EVENTS_PER_NEXT, g.MAX_CHANNEL_PAYLOAD_BYTES, g.MAX_CHANNEL_BYTES) == (256, 65536, 256)
+    assert (g.MAX_SUBSCRIPTIONS_PER_CONSUMER, g.MAX_QUEUED_EVENT_BYTES_PER_CONSUMER) == (256, 16 * 1024 * 1024)
+    assert g.NOT_READY_REASONS == ("starting", "no_game", "loading", "paused", "saving")
+    assert g.SAVE_NAME_PATTERN == r"^[A-Za-z0-9_]{1,64}$"
+    assert len(g.EVENTS) == 20 and g.EVENTS["hit"]["filter_required_any_of"] == ("target", "aggressor")
+    assert {n for n, e in g.EVENTS.items() if e["deliver_while_loading"]} == {
+        "mod_event", "channel", "menu_open", "menu_close", "game_loaded", "game_saved", "new_game"}
     assert g.CONFIG_KEYS["port"]["default"] == 45977 and g.CONFIG_KEYS["bridge_enabled"]["default"] is False
     assert g.HOST == "127.0.0.1"
     assert (g.ENV_SESSION, g.ENV_PORT, g.ENV_TOKEN) == ("SKYTHON_SESSION", "SKYTHON_PORT", "SKYTHON_TOKEN")

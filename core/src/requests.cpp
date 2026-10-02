@@ -1,5 +1,7 @@
 #include "spy/requests.h"
 #include "spy/json_depth.h"
+#include <algorithm>
+#include <stdexcept>
 
 namespace spy {
 namespace {
@@ -39,6 +41,46 @@ Value parse_object_ref(const json& o)
     return v;
 }
 
+// The ops added in protocol 1.1 are checked from their table entries, argument by argument. A filter only has to be
+// an object (or null, meaning absent) here: its field names, value types and required fields are EventHub's rules
+// (parse_event_filter, core/src/events.cpp), applied when the subscription is made.
+void check_typed_args(const OpSpec& spec, const json& args)
+{
+    for (const auto& a : spec.args) {
+        const std::string name(a.name);
+        if (!args.contains(name)) {
+            if (a.required) bad("missing field '" + name + "'");
+            continue;
+        }
+        const json& v = args[name];
+        switch (a.type) {
+        case ArgType::event_name:
+            if (!v.is_string()) bad("'" + name + "' must be a string naming an event");
+            if (find_event(v.get_ref<const std::string&>()) == nullptr) bad("unknown event '" + clip_text(v.get_ref<const std::string&>(), 64) + "'");
+            break;
+        case ArgType::event_filter:
+            if (!v.is_null() && !v.is_object()) bad("'" + name + "' must be an object mapping filter fields to lists of values");
+            break;
+        case ArgType::queue_size:
+            if (!is_uint(v, kMaxEventQueue) || v.get<std::uint64_t>() < 1)
+                bad("'" + name + "' must be an integer from 1 to " + std::to_string(kMaxEventQueue));
+            break;
+        case ArgType::u64:
+            if (!is_uint(v, UINT64_MAX)) bad("'" + name + "' must be a non-negative integer");
+            break;
+        case ArgType::save_name:
+            if (!v.is_string() || !is_valid_save_name(v.get_ref<const std::string&>()))
+                bad("'" + name + "' must be 1 to 64 letters, digits or underscores");
+            break;
+        case ArgType::timeout_ms:
+            opt_timeout(args);
+            break;
+        default:
+            throw std::logic_error("check_typed_args: the type of argument '" + name + "' is not handled");
+        }
+    }
+}
+
 // The checks themselves are code; which ops exist, which are batchable and which arguments are alternatives come from
 // the generated op table (core/tests/test_generated.cpp checks that this function agrees with that table).
 void validate_op_args(const std::string& op, const json& args)
@@ -48,6 +90,8 @@ void validate_op_args(const std::string& op, const json& args)
     else if (op == ops::kPapyrusGetProperty) parse_property_args(args, false);
     else if (op == ops::kPapyrusSetProperty) parse_property_args(args, true);
     else if (op == ops::kPapyrusBatch) parse_batch_args(args);
+    else if (op == ops::kEventsSubscribe || op == ops::kEventsUnsubscribe || op == ops::kGameSave || op == ops::kGameLoad)
+        check_typed_args(*find_op(op), args);
     else if (op == ops::kFormResolve) {
         const OpSpec* spec = find_op(op);
         int n = 0;
@@ -73,6 +117,15 @@ const std::vector<std::string>& known_ops()
         return v;
     }();
     return names;
+}
+
+bool is_valid_save_name(std::string_view s)
+{
+    constexpr std::size_t kMaxSaveNameBytes = 64;  // the {1,64} of kSaveNamePattern
+    if (s.empty() || s.size() > kMaxSaveNameBytes) return false;
+    return std::all_of(s.begin(), s.end(), [](char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+    });
 }
 
 Request parse_request(const json& j)

@@ -25,7 +25,7 @@ def fake_call(function, *a, req_id=1, **extra):
 def test_the_welcome_is_built_from_config_and_state(fake):
     fake.epoch = 4
     t = InProcessTransport()  # imports _skython, which the fixture installed
-    assert t.welcome["protocol"] == [1, 0] and t.welcome["epoch"] == 4
+    assert t.welcome["protocol"] == [1, 1] and t.welcome["epoch"] == 4
     assert (t.welcome["plugin_version"], t.welcome["game_version"], t.welcome["runtime"]) == ("0.0.0-fake", "0.0.0", "fake")
     assert t.welcome["capabilities"] == list(g.OPS) and t.welcome["backend"] == "fake"
     assert t.closed is False
