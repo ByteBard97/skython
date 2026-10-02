@@ -4,14 +4,14 @@
 #        since the stamp), ABSENT, or REFUSED (a path with '..', a drive or a leading slash, or session.json).
 #        Exit 3 with NO_STAMP when no launch was stamped. A file rewritten since the stamp with exactly the bytes it
 #        had then (same length, same hash) reads as UNCHANGED: snapshot_lib cannot tell it from an untouched file.
-#   session: the same for SkyrimPython\session.json alone (box_session.sh; it holds the bridge token, so only that
+#   session: the same for Skython\session.json alone (box_session.sh; it holds the bridge token, so only that
 #        script reads it, and only into out/box-session.json).
-#   put: writes exactly one file, SkyrimPython\livetest_control.json (livetest/smoke.py's command channel; Task 31),
+#   put: writes exactly one file, Skython\livetest_control.json (livetest/smoke.py's command channel; Task 31),
 #        through a temp file and an atomic replace. Any other name is refused. Nothing is ever deleted.
 param([string]$Mode, [string]$NamesB64 = '', [string]$NameB64 = '', [string]$DataB64 = '')
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'snapshot_lib.ps1')
-$PutAllowed = 'SkyrimPython\livetest_control.json'
+$PutAllowed = 'Skython\livetest_control.json'
 function Bad-Name([string]$n) { return ($n -match '\.\.' -or $n -match ':' -or $n -match '^[\\/]' -or $n -match 'session\.json$') }
 switch ($Mode) {
   'new' {
@@ -32,7 +32,7 @@ switch ($Mode) {
     $snap = Get-Snapshot
     if (-not $snap) { 'NO_STAMP: run box_launch.sh first (launch-snapshot.json missing)'; exit 3 }
     $t = $null
-    try { $t = Get-NewText 'SkyrimPython\session.json' $snap } catch { $t = $null }
+    try { $t = Get-NewText 'Skython\session.json' $snap } catch { $t = $null }
     if ($null -eq $t) { 'ABSENT' } elseif ($t -eq '') { 'UNCHANGED' } else { 'NEW ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($t)) }
     exit 0
   }

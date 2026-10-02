@@ -5,12 +5,13 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT/tools/env.sh"
-# --python [out/<Core>.dll]: copy the pinned embeddable CPython to Data/SKSE/Plugins/SkyrimPython/python/
-# (with its LICENSE.txt) and, if given, a core DLL to Data/SKSE/Plugins/SkyrimPython/.
+# --python [out/<Core>.dll]: copy the pinned embeddable CPython to Data/SKSE/Plugins/Skython/python/
+# (with its LICENSE.txt) and, if given, a core DLL to Data/SKSE/Plugins/Skython/. (SkyrimPythonSpike.dll reads
+# Plugins/SkyrimPython/ instead; a spike re-run needs OWN pointed back there.)
 if [ "${1:-}" = "--python" ]; then
   shift
   "$ROOT/tools/fetch_python.sh" --check || { echo "deploy: third_party/cpython does not match docs/PINS.md" >&2; exit 1; }
-  DEST="$SIMPLESKYRIM_DATA/SKSE/Plugins"; OWN="$DEST/SkyrimPython"; PYDIR="$OWN/python"
+  DEST="$SIMPLESKYRIM_DATA/SKSE/Plugins"; OWN="$DEST/Skython"; PYDIR="$OWN/python"
   [ -d "$DEST" ] || { echo "deploy: $DEST does not exist" >&2; exit 1; }
   mkdir -p "$ROOT/out"; touch "$ROOT/out/deployed.txt"
   if [ -e "$PYDIR" ] && ! grep -qxF "$PYDIR" "$ROOT/out/deployed.txt"; then

@@ -3,6 +3,8 @@
 # PowerShell on the box before it is put in place, then register the scheduled tasks SkyrimPythonGame and
 # SkyrimPythonShot (setup_task.ps1; an existing task is left as it is, EXISTS). Touches nothing outside
 # C:\dev\skyrim-python-box except creating those two tasks.
+# Re-run it after the Skython rename (2026-10-01): until then the box's copies of launch.ps1 (SKYTHON_TEST_*),
+# files.ps1 and list.ps1 still carry the old names.
 set -euo pipefail
 source "$(dirname "$0")/box_env.sh"
 psv="$(bssh 'Write-Output "PSV=$($PSVersionTable.PSVersion.Major)"' | tr -d '\r')" || box_die "cannot ssh to $BOX (STOP and ask the owner)"

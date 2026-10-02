@@ -2,6 +2,7 @@
 # limited rights, on demand only: no trigger):
 #   SkyrimPythonGame -> launch.ps1 (box_launch.sh)
 #   SkyrimPythonShot -> shot.ps1   (box_shot.sh: screenshot and window titles, e.g. of a modal SKSE dialog)
+# The task names keep their pre-Skython names: the tasks already exist on the box and renaming would orphan them.
 # A task that exists is printed (EXISTS) and left as it is. It never modifies or removes any other task.
 $ErrorActionPreference = 'Stop'
 function Register-Ours([string]$name, [string]$script, [int]$minutes, [string]$desc) {

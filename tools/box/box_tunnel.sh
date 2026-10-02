@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: tools/box/box_tunnel.sh up [--reverse PORT]... | down | status
-#   up: one background ssh (control socket $SKYRIM_PYTHON_STATE/box-tunnel.sock) forwarding Linux
+#   up: one background ssh (control socket $SKYTHON_STATE/box-tunnel.sock) forwarding Linux
 #       127.0.0.1:45978 and :45979 to the box's 127.0.0.1:45978/:45979 (spike harness, S8 echo server), and
 #       for each --reverse PORT the box's 127.0.0.1:PORT back to Linux 127.0.0.1:PORT (S10's HTTP server).
 #       Fails loudly (ExitOnForwardFailure) if a local port is taken (e.g. the Linux game is running).
@@ -8,7 +8,7 @@
 #   (spike_client.py exit 1), not as ConnectionRefusedError.
 set -euo pipefail
 source "$(dirname "$0")/box_env.sh"
-mkdir -p "$SKYRIM_PYTHON_STATE"
+mkdir -p "$SKYTHON_STATE"
 case "${1:-}" in
   up)
     shift
