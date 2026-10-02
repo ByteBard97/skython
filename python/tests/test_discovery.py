@@ -3,9 +3,9 @@ import os
 
 import pytest
 
-from skyrim import _protocol_generated as g
-from skyrim.discovery import Session, find_session, write_inactive_session_file, write_session_file
-from skyrim.errors import NotRunning
+from skython import _protocol_generated as g
+from skython.discovery import Session, find_session, write_inactive_session_file, write_session_file
+from skython.errors import NotRunning
 
 TOK = "00112233445566778899aabbccddeeff"
 

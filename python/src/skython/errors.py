@@ -10,32 +10,32 @@ At the bottom of this module each class is looked up by the name the table gives
 from . import _protocol_generated as _g
 
 
-class SkyrimPythonError(Exception):
+class SkythonError(Exception):
     """Base class for everything this package raises on purpose."""
 
 
-class ConnectionLost(SkyrimPythonError):
+class ConnectionLost(SkythonError):
     """The connection to the game closed (game quit, crashed, stopped reading, or the client closed it)."""
 
 
-class NotRunning(SkyrimPythonError):
-    """No reachable SkyrimPython server: no session file, connection refused, or no welcome in time."""
+class NotRunning(SkythonError):
+    """No reachable Skython server: no session file, connection refused, or no welcome in time."""
 
 
-class CallTimeout(SkyrimPythonError):
+class CallTimeout(SkythonError):
     """The client stopped waiting for a response. The call may still run in the game."""
 
 
-class ProtocolViolation(SkyrimPythonError):
+class ProtocolViolation(SkythonError):
     """The peer sent something that is not protocol v1."""
 
 
-class EncodeError(SkyrimPythonError, ValueError):
+class EncodeError(SkythonError, ValueError):
     """A request cannot be put on the wire: over the frame limit, or text that is not valid Unicode.
     Raised before anything is sent, so the connection is unaffected."""
 
 
-class HandshakeError(SkyrimPythonError):
+class HandshakeError(SkythonError):
     def __init__(self, code: str, message: str):
         super().__init__(f"{code}: {message}")
         self.code = code
@@ -53,7 +53,7 @@ class ProtocolMismatch(HandshakeError):
     """Client and plugin speak different protocol major versions."""
 
 
-class RemoteError(SkyrimPythonError):
+class RemoteError(SkythonError):
     code = _g.CODE_INTERNAL  # the class default; each subclass below gets its code from the generated table
 
     def __init__(self, code: str, message: str, detail: dict | None = None):
@@ -85,7 +85,7 @@ def _registry(names: dict, base: type) -> dict:
     for wire_code, class_name in names.items():
         cls = globals().get(class_name)
         if not (isinstance(cls, type) and issubclass(cls, base)):
-            raise ImportError(f"skyrim.errors has no {base.__name__} subclass {class_name!r}, "
+            raise ImportError(f"skython.errors has no {base.__name__} subclass {class_name!r}, "
                               f"which protocol.json names for the code {wire_code!r}")
         cls.code = wire_code
         out[wire_code] = cls
@@ -123,5 +123,5 @@ def handshake_error_from_wire(msg: dict) -> HandshakeError:
     return _HANDSHAKE.get(code, HandshakeError)(code, _text(msg.get("message"), ""))
 
 
-__all__ = ["SkyrimPythonError", "ConnectionLost", "NotRunning", "CallTimeout", "ProtocolViolation", "EncodeError",
+__all__ = ["SkythonError", "ConnectionLost", "NotRunning", "CallTimeout", "ProtocolViolation", "EncodeError",
            "HandshakeError", "Unauthorized", "ProtocolMismatch", "RemoteError", *[c.__name__ for c in _REMOTE.values()]]

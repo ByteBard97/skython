@@ -1,4 +1,4 @@
-"""The dev bridge, end to end on Linux: a real BridgeServer over the fake _skyrim, driven by the real remote
+"""The dev bridge, end to end on Linux: a real BridgeServer over the fake _skython, driven by the real remote
 transport and by raw sockets for everything a well-behaved client would never send."""
 import json
 import logging
@@ -10,13 +10,13 @@ import time
 import pytest
 
 from support import load_fixture, wait_until
-from skyrim import _framing
-from skyrim import _protocol_generated as g
-from skyrim import bridge as bridge_mod
-from skyrim import errors
-from skyrim.bridge import nesting_within, serve
-from skyrim.discovery import find_session
-from skyrim.remote import connect_remote
+from skython import _framing
+from skython import _protocol_generated as g
+from skython import bridge as bridge_mod
+from skython import errors
+from skython.bridge import nesting_within, serve
+from skython.discovery import find_session
+from skython.remote import connect_remote
 
 INFO = {"plugin_version": "0.1.0", "game_version": "1.6.1170.0", "runtime": "AE", "epoch": 1}
 
@@ -253,7 +253,7 @@ def test_an_accept_error_is_logged_and_the_bridge_keeps_accepting(bridge, caplog
 
 
 def test_a_client_that_stops_reading_is_closed(start, fake, caplog):
-    caplog.set_level(logging.INFO, logger="skyrim.bridge")
+    caplog.set_level(logging.INFO, logger="skython.bridge")
     b = start(max_queued_bytes=256 * 1024)
     s = socket.socket()
     s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)

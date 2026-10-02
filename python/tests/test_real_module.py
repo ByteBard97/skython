@@ -1,7 +1,7 @@
-"""The skyrim package against the REAL _skython (C++ Dispatcher + FakeBackend, Task 19), not fake_skyrim.
+"""The skython package against the REAL _skython (C++ Dispatcher + FakeBackend, Task 19), not fake_skython.
 
 Skipped unless SKYTHON_REAL_MODULE_DIR names the folder holding the built _skython*.so
-(pyglue/build after Task 19). It pins fake_skyrim's behaviour to the real Dispatcher's.
+(pyglue/build after Task 19). It pins fake_skython's behaviour to the real Dispatcher's.
 """
 import importlib
 import json
@@ -14,9 +14,9 @@ import time
 import pytest
 
 from support import wait_until
-from skyrim import _framing, bridge, errors
-from skyrim.inprocess import connect_in_process
-from skyrim.remote import connect_remote
+from skython import _framing, bridge, errors
+from skython.inprocess import connect_in_process
+from skython.remote import connect_remote
 
 MODULE_DIR = os.environ.get("SKYTHON_REAL_MODULE_DIR")
 pytestmark = pytest.mark.skipif(not MODULE_DIR, reason="SKYTHON_REAL_MODULE_DIR not set")

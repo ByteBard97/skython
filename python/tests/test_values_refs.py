@@ -2,9 +2,9 @@ import math
 
 import pytest
 
-from skyrim import errors
-from skyrim.refs import format_form_key, is_light_form_id, is_runtime_form_id, parse_form_key
-from skyrim.values import INT_MAX, INT_MIN, MAX_ARRAY_ITEMS, Alias, Form, PArray, from_wire, to_wire
+from skython import errors
+from skython.refs import format_form_key, is_light_form_id, is_runtime_form_id, parse_form_key
+from skython.values import INT_MAX, INT_MIN, MAX_ARRAY_ITEMS, Alias, Form, PArray, from_wire, to_wire
 
 
 def test_int_range_checked_not_truncated():
@@ -121,7 +121,7 @@ def test_form_keys():
     assert format_form_key("Skyrim.esm", 0x14) == "Skyrim.esm|0x000014"
     with pytest.raises(ValueError):
         parse_form_key("Skyrim.esm|0x1000000")
-    assert parse_form_key("skyrim.ESM|0X14") == ("skyrim.ESM", 0x14)
+    assert parse_form_key("skython.ESM|0X14") == ("skython.ESM", 0x14)
     assert parse_form_key("Light Mod.esl|0xFFF") == ("Light Mod.esl", 0xFFF)
     assert is_runtime_form_id(0xFF000002)
     assert not is_runtime_form_id(0x14)

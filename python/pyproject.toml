@@ -1,5 +1,5 @@
 [project]
-name = "skyrim-python"
+name = "skython"
 version = "0.1.0"
 description = "Call Papyrus in a running Skyrim from Python: in the game through the embedded interpreter, or from another process through the dev bridge"
 requires-python = ">=3.12"
@@ -14,7 +14,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/skyrim"]
+packages = ["src/skython"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

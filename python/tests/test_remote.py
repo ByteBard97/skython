@@ -10,12 +10,12 @@ import time
 
 import pytest
 
-from fake_skyrim import FakeSkyrim
+from fake_skython import FakeSkython
 from support import TOKEN, FakeServer, err, load_fixture, ok, wait_until
-import skyrim
-from skyrim import _protocol_generated as g
-from skyrim import errors
-from skyrim.remote import RemoteTransport, connect_remote
+import skython
+from skython import _protocol_generated as g
+from skython import errors
+from skython.remote import RemoteTransport, connect_remote
 
 
 def connect(server, **kw):
@@ -107,7 +107,7 @@ def test_a_bad_retry_not_ready_leaves_no_socket_and_no_reader_thread(server, soc
     with pytest.raises(ValueError):
         connect(server, retry_not_ready=-1)
     assert sockets and all(s.fileno() == -1 for s in sockets)
-    wait_until(lambda: not [t for t in threading.enumerate() if t.name == "skyrim-remote-reader"],
+    wait_until(lambda: not [t for t in threading.enumerate() if t.name == "skython-remote-reader"],
                what="the reader thread to end")
 
 
@@ -297,25 +297,25 @@ def test_connect_defaults_are_the_tables_and_the_v1_values():
         (g.CONNECT_TIMEOUT_S, g.CALL_TIMEOUT_S, g.SEND_TIMEOUT_S) == (5.0, 30.0, 30.0)
 
 
-# -- skyrim.connect: one entry point for both modes --------------------------------------------------------
+# -- skython.connect: one entry point for both modes --------------------------------------------------------
 def test_connect_is_remote_without_a_game_module(server, monkeypatch):
-    monkeypatch.delitem(sys.modules, "_skyrim", raising=False)
-    with skyrim.connect(port=server.port, token=TOKEN) as game:
+    monkeypatch.delitem(sys.modules, "_skython", raising=False)
+    with skython.connect(port=server.port, token=TOKEN) as game:
         assert isinstance(game.transport, RemoteTransport)
 
 
 def test_connect_is_remote_next_to_the_fake_module(server, fake):
     assert fake.BACKEND == "fake"  # the Linux test build is not "the game"
-    with skyrim.connect(port=server.port, token=TOKEN) as game:
+    with skython.connect(port=server.port, token=TOKEN) as game:
         assert isinstance(game.transport, RemoteTransport)
 
 
 def test_connect_is_in_process_inside_the_game(tmp_path, monkeypatch):
-    f = FakeSkyrim(root=tmp_path)
-    f.BACKEND = "game"  # what the module built into SkyrimPythonCore.dll reports
-    monkeypatch.setitem(sys.modules, "_skyrim", f)
+    f = FakeSkython(root=tmp_path)
+    f.BACKEND = "game"  # what the module built into SkythonCore.dll reports
+    monkeypatch.setitem(sys.modules, "_skython", f)
     try:
-        with skyrim.connect() as game:
+        with skython.connect() as game:
             assert type(game.transport).__name__ == "InProcessTransport"
             assert game.call("Fake", "Echo", 5) == 5
     finally:
@@ -323,11 +323,11 @@ def test_connect_is_in_process_inside_the_game(tmp_path, monkeypatch):
 
 
 def test_connect_with_an_explicit_session_is_remote_even_inside_the_game(server, tmp_path, monkeypatch):
-    f = FakeSkyrim(root=tmp_path)
+    f = FakeSkython(root=tmp_path)
     f.BACKEND = "game"
-    monkeypatch.setitem(sys.modules, "_skyrim", f)
+    monkeypatch.setitem(sys.modules, "_skython", f)
     try:
-        with skyrim.connect(port=server.port, token=TOKEN) as game:
+        with skython.connect(port=server.port, token=TOKEN) as game:
             assert isinstance(game.transport, RemoteTransport)
     finally:
         f.close()

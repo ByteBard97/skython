@@ -23,8 +23,8 @@ import socket  # noqa: E402
 import threading  # noqa: E402
 import traceback  # noqa: E402
 
-from skyrim import _framing  # noqa: E402
-from skyrim.errors import ConnectionLost, ProtocolViolation  # noqa: E402
+from skython import _framing  # noqa: E402
+from skython.errors import ConnectionLost, ProtocolViolation  # noqa: E402
 
 TOKEN = "00112233445566778899aabbccddeeff"
 WELCOME = {"protocol": [1, 0], "plugin_version": "0.1.0", "game_version": "1.6.1170.0",

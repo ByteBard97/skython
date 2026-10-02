@@ -5,7 +5,7 @@ import inspect
 import pytest
 
 from support import load_fixture
-from skyrim import _framing, _protocol_generated as g, errors, refs, values
+from skython import _framing, _protocol_generated as g, errors, refs, values
 
 REQUESTS = load_fixture("requests.json")
 HELLO = load_fixture("hello.json")

@@ -1,6 +1,6 @@
 """The Game API, the same in both modes. A Game talks to the game through a Transport:
-skyrim.inprocess.InProcessTransport inside the game (over the built-in _skyrim module), or
-skyrim.remote.RemoteTransport from another process (over the dev bridge, Task 22)."""
+skython.inprocess.InProcessTransport inside the game (over the built-in _skython module), or
+skython.remote.RemoteTransport from another process (over the dev bridge, Task 22)."""
 import math
 import time
 from typing import Any, Protocol

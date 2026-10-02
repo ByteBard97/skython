@@ -1,7 +1,7 @@
 # GENERATED FILE - DO NOT EDIT.
 # Source: protocol/protocol.json. Regenerate with: python3 tools/gen_protocol.py
 # The drift check (python3 tools/gen_protocol.py --check) fails if this file differs from what the generator writes.
-# Constants, error-code registry data and the op table for the skyrim package. Nothing here is logic.
+# Constants, error-code registry data and the op table for the skython package. Nothing here is logic.
 
 PROTOCOL_MAJOR = 1
 PROTOCOL_MINOR = 0
@@ -57,7 +57,7 @@ ERROR_CODES = (
     "unauthorized",
     "protocol_mismatch",
 )
-# wire code -> exception class name in skyrim.errors
+# wire code -> exception class name in skython.errors
 REMOTE_EXCEPTIONS = {
     "not_ready": "NotReady",
     "busy": "Busy",

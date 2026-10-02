@@ -2,14 +2,14 @@ import sys
 
 import pytest
 
-from fake_skyrim import FakeSkyrim
+from fake_skython import FakeSkython
 
 
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
-    """A FakeSkyrim installed as the `_skyrim` module; its directories live under tmp_path."""
-    f = FakeSkyrim(root=tmp_path)
-    monkeypatch.setitem(sys.modules, "_skyrim", f)
+    """A FakeSkython installed as the `_skython` module; its directories live under tmp_path."""
+    f = FakeSkython(root=tmp_path)
+    monkeypatch.setitem(sys.modules, "_skython", f)
     yield f
     f.close()
 
@@ -17,7 +17,7 @@ def fake(tmp_path, monkeypatch):
 @pytest.fixture
 def game(fake):
     """A Game over the in-process transport, talking to `fake`."""
-    from skyrim.inprocess import connect_in_process
+    from skython.inprocess import connect_in_process
     with connect_in_process() as g:
         yield g
 

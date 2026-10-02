@@ -3,7 +3,7 @@ import pickle
 
 import pytest
 
-from skyrim import errors
+from skython import errors
 
 SAMPLES = [
     errors.ConnectionLost("gone"),

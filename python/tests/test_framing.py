@@ -5,8 +5,8 @@ import time
 
 import pytest
 
-from skyrim import _framing
-from skyrim.errors import ConnectionLost, EncodeError, ProtocolViolation
+from skython import _framing
+from skython.errors import ConnectionLost, EncodeError, ProtocolViolation
 
 
 @pytest.fixture

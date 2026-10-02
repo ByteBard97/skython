@@ -5,9 +5,9 @@
     python3 tools/gen_protocol.py --check    exit 1 and print a diff if a committed generated file is stale
 
 Outputs (all committed, so the Windows build box needs no extra tooling; the C++ header is read by core/ and the plugin,
-the Python module by the skyrim package, the dev bridge and skyrim.remote):
+the Python module by the skython package, the dev bridge and skython.remote):
     core/include/spy/protocol_generated.h      C++ constants, ErrorCode, op and config tables
-    python/src/skyrim/_protocol_generated.py   Python constants, error-code registry data, op table
+    python/src/skython/_protocol_generated.py   Python constants, error-code registry data, op table
     protocol/PROTOCOL.generated.md             the human-readable tables PROTOCOL.md links to
 
 Output is deterministic: lists keep the order of protocol.json (the order of error codes is the enum order),
@@ -25,7 +25,7 @@ import sys
 SOURCE = "protocol/protocol.json"
 OUTPUTS = {
     "cpp": "core/include/spy/protocol_generated.h",
-    "py": "python/src/skyrim/_protocol_generated.py",
+    "py": "python/src/skython/_protocol_generated.py",
     "md": "protocol/PROTOCOL.generated.md",
 }
 BANNER = "GENERATED FILE - DO NOT EDIT"
@@ -476,7 +476,7 @@ def render_cpp(m: dict) -> str:
 # ---------------------------------------------------------------------------------------------- Python
 def render_py(m: dict) -> str:
     L = header_lines("#")
-    L += ["# Constants, error-code registry data and the op table for the skyrim package. Nothing here is logic.",
+    L += ["# Constants, error-code registry data and the op table for the skython package. Nothing here is logic.",
           "", f"PROTOCOL_MAJOR = {m['protocol']['major']}", f"PROTOCOL_MINOR = {m['protocol']['minor']}",
           "PROTOCOL_VERSION = (PROTOCOL_MAJOR, PROTOCOL_MINOR)", "", f"MESSAGE_TYPES = {py(m['message_types'])}", ""]
     L.append("# ---- limits")
@@ -490,7 +490,7 @@ def render_py(m: dict) -> str:
     for c in codes:
         L.append(f"CODE_{upper(c['code'])} = {py(c['code'])}")
     L.append(f"ERROR_CODES = {py([c['code'] for c in codes])}")
-    L.append("# wire code -> exception class name in skyrim.errors")
+    L.append("# wire code -> exception class name in skython.errors")
     L.append(f"REMOTE_EXCEPTIONS = {py({c['code']: c['remote_exception'] for c in codes if c['remote_exception']})}")
     L.append(f"HANDSHAKE_EXCEPTIONS = {py({c['code']: c['handshake_exception'] for c in codes if c['handshake_exception']})}")
     L.append(f"HANDSHAKE_CODES = {py([c['code'] for c in codes if c['context'] in ('handshake', 'both')])}")
@@ -616,7 +616,7 @@ def render_md(m: dict) -> str:
           f"- Host: `{d['host']}`. Session file: `{d['session_dir_name']}/{d['session_file_name']}` under the game's SKSE log directory unless `session_file` says otherwise.",
           f"- Session file fields: {', '.join('`%s`' % x for x in d['session_file_fields'])}.",
           f"- Environment variables: `{d['env_session']}` (path of a session file), or `{d['env_port']}` together with `{d['env_token']}`.", "",
-          "## Client defaults", "", "Used by `skyrim.Game` in both modes; `connect_timeout_s` and `send_timeout_s` apply to the dev bridge only.", "",
+          "## Client defaults", "", "Used by `skython.Game` in both modes; `connect_timeout_s` and `send_timeout_s` apply to the dev bridge only.", "",
           "| Setting | Value (seconds) |", "|---|---|"]
     c = m["client"]
     for key in ("connect_timeout_s", "call_timeout_s", "send_timeout_s", "retry_not_ready_s", "ready_timeout_s", "grace_s"):

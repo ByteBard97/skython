@@ -191,7 +191,7 @@ Dev bridge only; an in-process script needs no discovery.
 
 ## Client defaults
 
-Used by `skyrim.Game` in both modes; `connect_timeout_s` and `send_timeout_s` apply to the dev bridge only.
+Used by `skython.Game` in both modes; `connect_timeout_s` and `send_timeout_s` apply to the dev bridge only.
 
 | Setting | Value (seconds) |
 |---|---|
