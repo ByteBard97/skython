@@ -34,7 +34,7 @@ void OpenLog()
 bool RuntimeSupported()
 {
     if (spy::loader::TestUnverifiedRuntime(&Log)) return false;  // SPY_TEST_HOOKS builds only
-    static const REL::Version kVerified[] = { REL::Version{ 1, 6, 1170, 0 } };
+    static const REL::Version kVerified[] = { REL::Version{ 1, 6, 1170, 0 }, REL::Version{ 1, 7, 104, 0 } };
     const auto v = REL::Module::get().version();
     for (const auto& ok : kVerified)
         if (v == ok) return true;
@@ -54,7 +54,7 @@ SKSE_PLUGIN_LOAD(const SKSE::LoadInterface* skse)
             return true;
         }
         // Address Library for SKSE Plugins: CommonLib's REL::ID needs it and stops the game with a message box if it
-        // is missing, so the core is not started without it. For 1.6.1170 the file is versionlib-1-6-1170-0.bin.
+        // is missing, so the core is not started without it. The file is versionlib-<version>.bin, e.g. versionlib-1-7-104-0.bin.
         if (const auto lib = "versionlib-" + REL::Module::get().version().string("-") + ".bin";
             !spy::loader::PluginsFileExists(lib)) {
             Log("Address Library for SKSE Plugins not found (" + lib + "); Python stays off");
