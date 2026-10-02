@@ -6,6 +6,7 @@
 #include "Events.h"
 #include "Log.h"
 #include "Settings.h"
+#include "SinkProbe.h"
 #include "spy/pymodule.h"
 #include <atomic>
 #include <condition_variable>
@@ -146,6 +147,7 @@ void Run(const Config cfg)
         else log::Info(line);
     };
     host.console_echo = [](const std::string& m) { console::Echo(m); };
+    if (cfg.trace_timing) host.probe_sink_cycles = [](int n) { return probe::SinkCycles(n); };
     // _skython talks to the game dispatcher (GameBackend, Task 27).
     InstallModuleHost(std::move(host));
     if (PyImport_AppendInittab("_skython", &PyInit__skython) == -1) throw std::runtime_error("PyImport_AppendInittab failed");

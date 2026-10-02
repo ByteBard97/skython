@@ -82,6 +82,7 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
             State().on_menu(std::string(RE::MainMenu::MENU_NAME), true);
             State().set_paused(ui->GameIsPaused());
             log::Info("lifecycle: Main Menu opened; no game loaded (already open at kDataLoaded)");
+            console::FlushHeld();
         }
         break;
     }

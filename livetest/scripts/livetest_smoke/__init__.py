@@ -213,6 +213,11 @@ def _handle(game, cmd: dict) -> dict:
         return _hold_sub(cmd)
     if name == "release_sub":
         return _release_sub(cmd)
+    if name == "probe_sink_cycles":
+        probe = getattr(_skython, "_probe_sink_cycles", None)
+        if probe is None:
+            return {"error": "_skython._probe_sink_cycles is absent: deploy plugin/config/variants/trace-timing.ini"}
+        return json.loads(probe(int(cmd["n"])))
     return {"error": f"unknown command {name!r}"}
 
 

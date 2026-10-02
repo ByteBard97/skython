@@ -17,6 +17,7 @@ struct ModuleHost
     FakeBackend* fake = nullptr;  // set only by the fake build: adds the _fake_* controls
     EventHub* events = nullptr;  // open_consumer / close_consumer / next_events; null: no events in this build
     std::function<void(const std::string& message)> console_echo;  // _skython.console_echo(); unset = no-op (Task 43)
+    std::function<std::string(int n)> probe_sink_cycles;  // game build with trace_timing only (Task 44); unset = absent
 };
 
 void InstallModuleHost(ModuleHost host);

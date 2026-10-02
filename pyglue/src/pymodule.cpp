@@ -156,5 +156,9 @@ void DefineModule(py::module_& m)
                   py::arg("event"), py::arg("data_json"), release(), "Fake build only: push one event, as a game sink would.");
         }
     }
+    if (h.probe_sink_cycles) {
+        m.def("_probe_sink_cycles", [](int n) { return Host().probe_sink_cycles(n); }, py::arg("n"), release(),
+              "Dev only (trace_timing): register/unregister cycles of a spare activate sink; JSON summary.");
+    }
 }
 }

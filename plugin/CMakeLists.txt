@@ -26,7 +26,7 @@ target_link_libraries(Skython PRIVATE CommonLibSSE::CommonLibSSE)
 set(SPY_CORE_SOURCES
   src/main.cpp src/Log.cpp src/Settings.cpp src/Lifecycle.cpp src/PythonHost.cpp
   src/GameBackend.cpp src/PyModule.cpp src/Ops.cpp src/Signatures.cpp src/PapyrusValues.cpp
-  src/Events.cpp src/EventSinks.cpp src/EventSinksWorld.cpp src/SaveLoad.cpp src/ConsoleEcho.cpp
+  src/Events.cpp src/EventSinks.cpp src/EventSinksWorld.cpp src/SaveLoad.cpp src/ConsoleEcho.cpp src/SinkProbe.cpp
   ${SPY_ROOT}/pyglue/src/pymodule.cpp)
 add_library(SkythonCore SHARED ${SPY_CORE_SOURCES})
 target_compile_definitions(SkythonCore PRIVATE ${SPY_DEFS})
