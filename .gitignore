@@ -30,3 +30,4 @@ __pycache__/
 
 # CPython runtime and build inputs, fetched by tools/fetch_python.sh (never committed)
 third_party/cpython/
+plugin/build-options.local

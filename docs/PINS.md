@@ -70,3 +70,7 @@ a1cc06b524ab3edca51f8ad3895f9c4fa20b8b19283173dff4ae781449dc9639  pybind11-3.1.0
 9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6  json.hpp
 44faa038e9c3f9728efbda143748d01124ea0a27f4bf78f35a15d8fab2e039fb  doctest.h
 ```
+
+## Plugin notes (Task 25)
+- The core DLL's SKSEPluginInfo is not needed by CommonLib: SKSE::Init reads PluginVersionData only for name/author/version and falls back to the module file name. Kept as harmless.
+- The core's RegisterListener uses the loader's plugin handle (GetPluginHandle() is captured during the loader's load call). SKSE may drop a second listener for the same handle and sender, so the loader registers nothing beyond SKSE::Init; every registration happens in the core.
