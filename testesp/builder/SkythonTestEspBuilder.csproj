@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Development tool only, never distributed: links Mutagen (GPL-3.0-only). See LICENSE-NOTE.md. -->
+  <!-- Mutagen.Bethesda.Skyrim 23.4.0 ships net5.0 / netstandard2.1 assemblies; they load and run under net8.0. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <RootNamespace>SkythonTestEsp</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Mutagen.Bethesda.Skyrim" Version="23.4.0" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,7 @@
+plugin SkythonTest.esp masters=-
+quest SkythonTestQuest 000800:SkythonTest.esp flags=AllowRepeatedStages form_version=0
+  alias 0 SkythonTestAlias0 Reference flags=Optional, AllowDisabled, AllowReserved
+  stage 10 log_entries=1
+  vmad version=5 objformat=2 unknown=2 file=QF_SkythonTestQuest_01000800 scripts=QF_SkythonTestQuest_01000800
+  fragment stage=10 index=0 unknown2=1 script=QF_SkythonTestQuest_01000800 function=Fragment_0
+  alias-vmad alias=0 quest=000800:SkythonTest.esp scripts=SkythonTestAlias

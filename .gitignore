@@ -34,3 +34,6 @@ __pycache__/
 # CPython runtime and build inputs, fetched by tools/fetch_python.sh (never committed)
 third_party/cpython/
 plugin/build-options.local
+# testesp/builder is a GPL-3.0-only development tool (Mutagen): never commit its build output
+testesp/builder/bin/
+testesp/builder/obj/
