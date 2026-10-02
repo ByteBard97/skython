@@ -174,6 +174,7 @@ done
 t="$(BOX_FILES_PRINT=1 "$B/box_files.sh" pull Skython.log Skython/python.log 2>&1)"
 [ "$t" = "$(printf '%s\n' "$ROOT/out/box-skse/Skython.log" "$ROOT/out/box-skse/Skython/python.log")" ] && ok "pull mirrors into out/box-skse" || bad "pull targets: '$t'"
 grep -qF "\$PutAllowed = 'Skython\livetest_control.json'" "$B/win/files.ps1" 2>/dev/null && ok "files.ps1 put allow-list: livetest_control.json only" || bad "files.ps1 put allow-list"
+grep -qF '[IO.File]::Replace($tmp, $dest, [NullString]::Value)' "$B/win/files.ps1" 2>/dev/null && ok "files.ps1 put replaces with no backup path ([NullString]::Value, not \$null)" || bad "files.ps1 put passes \$null as File.Replace's backup path (PowerShell 5.1 makes it \"\")"
 grep -qF 'Get-NewText' "$B/win/files.ps1" 2>/dev/null && ok "files.ps1 pull uses the launch-stamp snapshot" || bad "files.ps1 does not use Get-NewText"
 
 # 6f. box_saves.sh: a save name is checked before any ssh

@@ -43,10 +43,12 @@ switch ($Mode) {
     $dest = Join-Path $LogDir $rel
     $tmp = $dest + '.linux-tmp'
     [IO.File]::WriteAllBytes($tmp, [Convert]::FromBase64String($DataB64))
-    # The in-game script may be reading the file at that moment: a few short retries.
+    # The in-game script may be reading the file at that moment: a few short retries. No backup file: PowerShell 5.1
+    # turns a plain $null into "" for a string parameter ("The path is not of a legal form", Task 31), so pass
+    # [NullString]::Value.
     for ($i = 1; $i -le 10; $i++) {
       try {
-        if (Test-Path -LiteralPath $dest) { [IO.File]::Replace($tmp, $dest, $null) } else { [IO.File]::Move($tmp, $dest) }
+        if (Test-Path -LiteralPath $dest) { [IO.File]::Replace($tmp, $dest, [NullString]::Value) } else { [IO.File]::Move($tmp, $dest) }
         "PUT $rel"; exit 0
       } catch { if ($i -eq 10) { "ERR $($_.Exception.Message)"; exit 1 }; Start-Sleep -Milliseconds 100 }
     }
