@@ -99,6 +99,11 @@ private:
 // `done` may be called inside an SKSE task or on a VM thread; the Dispatcher accepts either (Task 18).
 void Run(const std::string& op, const json& args, Done done, Cancelled cancelled, Progress progress);
 
+// papyrus.call_static's validated path (inside an SKSE task only): FindFunction (throws unknown_function or
+// bad_request), BindArgs (throws type_mismatch), then DispatchStaticCall; `done` gets the converted result from the VM
+// callback, or vm_error when the VM refuses the dispatch (R37). game.save uses it for SKSE's Game.SaveGame (R63).
+void DispatchStatic(const std::string& script, const std::string& function, const std::vector<Value>& args, const Done& done);
+
 // Fills `player` and `game_days_passed` (inside an SKSE task; only when a game is loaded and not loading).
 void AddStateExtras(json& state);
 

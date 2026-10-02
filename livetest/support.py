@@ -315,3 +315,48 @@ def translate_player(game, dx: float, dy: float, dz: float, speed: float = 3000.
     time.sleep(settle)
     game.call_method(PLAYER, "ObjectReference", "StopTranslation")
     return x, y, z
+
+
+# ---- Task 41: saves. New names only (skython_*), each checked unused first and recorded for the owner. -------
+import re as _re  # noqa: E402
+
+LOADABLE = _re.compile(r"s4test|spikebase|skythonbase|skython_[A-Za-z0-9_]{1,56}")
+
+
+def box_save_count(name: str) -> int:
+    """How many saves on the box match NAME*.ess (tools/box/box_saves.sh: a prefix match, so no new name may be a
+    prefix of another: every name made here ends in a 14-digit timestamp)."""
+    r = subprocess.run([str(REPO / "tools" / "box" / "box_saves.sh"), "count", name], check=True,
+                       capture_output=True, text=True, timeout=90)
+    return int(r.stdout.strip())
+
+
+def new_save_name(tag: str) -> str:
+    """skython_<tag>_<timestamp>, checked unused on the box (count 0) and appended to livetest/results/new_saves.txt
+    for the owner's removal list."""
+    name = f"skython_{tag}_{time.strftime('%Y%m%d%H%M%S')}"
+    assert _re.fullmatch(r"[A-Za-z0-9_]{1,64}", name), name
+    n = box_save_count(name)
+    assert n == 0, f"STOP: a save named {name} already exists on the box (count {n}); never save over a save"
+    out = REPO / "livetest" / "results" / "new_saves.txt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("a", encoding="utf-8") as f:
+        f.write(name + "\n")
+    return name
+
+
+def wait_save_file(name: str, timeout: float = 30.0) -> None:
+    """kSaveGame may come before the .ess is written: poll the box until exactly one file matches."""
+    deadline = time.monotonic() + timeout
+    while (n := box_save_count(name)) != 1:
+        assert n == 0, f"{n} saves match {name}*"
+        assert time.monotonic() < deadline, f"STOP: {name}.ess did not appear within {timeout} s"
+        time.sleep(2.0)
+
+
+def load_save(game, name: str, timeout: float = 120.0) -> dict:
+    """Load one of the saves this plan or the M0/M1 spikes made (Global Constraints: Saves) through Game.load and
+    wait until the game is interactive again with a higher epoch. Returns that state."""
+    if not LOADABLE.fullmatch(name):
+        raise ValueError(f"tests load only s4test, spikebase, skythonbase or skython_* saves, not {name!r}")
+    return game.load(name, timeout=timeout, wait=True)

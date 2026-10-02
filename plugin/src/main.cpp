@@ -3,6 +3,7 @@
 #include "Lifecycle.h"
 #include "Log.h"
 #include "PythonHost.h"
+#include "SaveLoad.h"
 #include "Settings.h"
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
@@ -69,6 +70,7 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
         if (m->type == SKSE::MessagingInterface::kDataLoaded) {
             spy::game::GetDispatcher();      // the dispatcher (and through it the hub) exists first
             spy::events::RegisterSinks();    // before Python starts: no subscription can race the sink setup (Task 44 relies on it)
+            spy::saveload::SaveDir();        // read the INI once, in the kDataLoaded handler, and log the folder
             spy::host::Start(spy::settings::Get());
         }
     } catch (const std::exception& e) {

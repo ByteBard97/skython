@@ -29,3 +29,26 @@ def game(session):
     g = skython.connect(port=session.port, token=session.token, client_name="livetest")
     yield g
     g.close()
+
+
+@pytest.fixture(scope="module")
+def fresh_save(session):
+    """Spec 8 / v1 'After this plan' item 2: load a fixed save before the module runs. skythonbase (Task 49) when it
+    exists on the box, else s4test. Returns {"save": name, "state": the interactive state after the load}.
+    skythonbase holds SkythonTest.esp, so a launch that may load it is preceded by `tools/box/box_plugins.sh add`
+    (Global Constraints, after Gate 0); the quit/stop tools restore plugins.txt."""
+    import skython
+    from skython import errors
+    from support import box_save_count, load_save
+    # box_save_count is a prefix match (skythonbase*.ess); the exact name is checked by the plugin's game.load, which
+    # answers not_found unless skythonbase.ess itself exists.
+    name = "skythonbase" if box_save_count("skythonbase") >= 1 else "s4test"
+    with skython.connect(port=session.port, token=session.token, client_name="livetest-fresh-save") as g:
+        try:
+            state = load_save(g, name)
+        except errors.NotFound:
+            if name != "skythonbase":
+                raise
+            name = "s4test"  # only other saves start with skythonbase: no base save yet
+            state = load_save(g, name)
+    return {"save": name, "state": state}

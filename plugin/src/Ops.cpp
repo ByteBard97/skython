@@ -124,15 +124,7 @@ OpResult PausedError() { return OpResult::Err(ErrorCode::not_ready, "the game is
 void CallStatic(const CallArgs& c, const Done& done)
 {
     if (c.require_unpaused && PausedNow()) return done(PausedError());
-    const auto qualified = c.script + "." + c.function;
-    auto fn = sig::FindFunction(c.script, c.function, false);
-    auto vars = sig::BindArgs(*fn, c.args, qualified);
-    auto* args = new DynArgs(std::move(vars));
-    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{new Callback(done, args)};  // cb owns args
-    if (!VM()->DispatchStaticCall(RE::BSFixedString(c.script), RE::BSFixedString(c.function), args, cb)) {
-        KeptOnRefusal(qualified);  // never `delete args` here (R37)
-        done(OpResult::Err(ErrorCode::vm_error, "the VM refused the call to " + qualified));
-    }
+    DispatchStatic(c.script, c.function, c.args, done);
 }
 
 json Resolve(const json& args)
@@ -355,6 +347,19 @@ void AddStateExtras(json& s)
     if (!life::GameLoaded() || life::Loading()) return;  // recheck: a load may have started since submit
     if (auto* player = RE::PlayerCharacter::GetSingleton()) s["player"] = form_ref_to_json(pv::DescribeForm(player));
     if (auto* cal = RE::Calendar::GetSingleton()) s["game_days_passed"] = pv::FloatToJson(cal->GetDaysPassed());  // 32-bit float
+}
+
+void DispatchStatic(const std::string& script, const std::string& function, const std::vector<Value>& callArgs, const Done& done)
+{
+    const auto qualified = script + "." + function;
+    auto fn = sig::FindFunction(script, function, false);
+    auto vars = sig::BindArgs(*fn, callArgs, qualified);
+    auto* args = new DynArgs(std::move(vars));
+    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{new Callback(done, args)};  // cb owns args
+    if (!VM()->DispatchStaticCall(RE::BSFixedString(script), RE::BSFixedString(function), args, cb)) {
+        KeptOnRefusal(qualified);  // never `delete args` here (R37)
+        done(OpResult::Err(ErrorCode::vm_error, "the VM refused the call to " + qualified));
+    }
 }
 
 json WithGameState(json detail)

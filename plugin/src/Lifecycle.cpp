@@ -1,6 +1,7 @@
 #include "Lifecycle.h"
 #include "Events.h"
 #include "Log.h"
+#include "SaveLoad.h"
 #include "spy/lifecycle_state.h"
 #include <RE/Skyrim.h>
 #include <atomic>
@@ -110,6 +111,7 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
         static std::atomic_bool logged{ false };
         if (!logged.exchange(true)) log::Info("lifecycle: kSaveGame data '" + name + "' (" + std::to_string(m->dataLen) + " bytes)");
         events::Push("game_saved", json{ { "name", name } });
+        saveload::OnSaveGame(name);
         break;
     }
     default:

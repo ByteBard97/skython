@@ -3,6 +3,7 @@
 #include "Lifecycle.h"
 #include "Log.h"
 #include "Ops.h"
+#include "SaveLoad.h"
 #include "Settings.h"
 #include "spy/clock.h"
 #include <RE/Skyrim.h>  // RE::GetSecondsSinceLastFrame (RE/M/Misc.h), Task 38
@@ -19,6 +20,7 @@ class GameBackend final : public spy::Backend
 public:
     void Run(const std::string& op, const json& args, Done done, Cancelled cancelled, Progress progress) override
     {
+        if (op == "game.save" || op == "game.load") return saveload::Run(op, args, std::move(done), std::move(cancelled));
         if (op == "game.state") return State(std::move(done), std::move(cancelled));
         std::shared_ptr<ops::Timing> timing;  // Task 38: only with trace_timing (dev); null costs nothing
         if (settings::Get().trace_timing) {
