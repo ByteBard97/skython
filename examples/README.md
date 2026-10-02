@@ -6,7 +6,7 @@ Each example is one Python file. Drop it into `Data/SKSE/Plugins/Skython/scripts
 |---|---|---|
 | [`twitch_mudcrabs.py`](twitch_mudcrabs.py) | A viewer types `!mudcrab` in your Twitch chat and a mudcrab carrying their name appears next to you. Reads chat anonymously, so no bot account or token is needed. | ~90 |
 | [`talk_to_npc_llm.py`](talk_to_npc_llm.py) | Look at any NPC, press K, and they greet you in character through a language model (local Ollama/LM Studio or any OpenAI-compatible API). | ~80 |
-| [`live_dashboard.py`](live_dashboard.py) | A live stats page (health, magicka, stamina, gold, level, location, time) at `http://127.0.0.1:8765`, usable as an OBS browser source. | ~100 |
+| [`live_dashboard.py`](live_dashboard.py) | A live stats page (health, magicka, stamina, gold, level, location, time) on `127.0.0.1:8765`, usable as an OBS browser source. Each run writes the address with its access token to `python.log`. | ~120 |
 | [`real_weather.py`](real_weather.py) | Skyrim's weather follows the real weather in your city (Open-Meteo, no API key). | ~60 |
 
 ## Why Python

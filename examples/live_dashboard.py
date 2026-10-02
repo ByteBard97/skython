@@ -1,15 +1,23 @@
 """A live stats page for your browser or as an OBS browser source: health, magicka, stamina, gold,
 level, location and time of day, refreshed every second.
 
-Open http://127.0.0.1:8765 while the game runs. In OBS: add a Browser source with that URL.
+The page is served on 127.0.0.1:8765 only, and every request needs a token. Each time the script starts it makes a
+random one and writes the full address to python.log, for example:
+    live_dashboard: open http://127.0.0.1:8765/?token=...
+Open that address while the game runs. In OBS: add a Browser source with that URL. The token changes every run; to keep
+one OBS URL, set SKYTHON_DASHBOARD_TOKEN in the game's environment to a long random string of your own. The token goes
+in the URL (?token=...) or in an X-Skython-Token header; anything else gets 403.
 
 Install: copy this file into Data/SKSE/Plugins/Skython/scripts/.
 Needs: Skython 0.1 (Papyrus calls). Standard library only.
 """
+import hmac
 import json
+import os
+import secrets
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 from skython.errors import ConnectionLost, NotReady
 
@@ -20,6 +28,7 @@ GAME_HOUR = "Skyrim.esm|0x38"
 stats = {"status": "waiting for a save to load"}
 stop = threading.Event()                        # set by teardown(): poll() ends, the server is shut down
 server = None
+token = ""                                      # set by setup(), new each run
 
 PAGE = b"""<!doctype html><meta charset="utf-8"><title>Skyrim</title>
 <style>body{font:20px Georgia,serif;color:#eee;background:transparent;text-shadow:0 0 4px #000}
@@ -27,7 +36,7 @@ PAGE = b"""<!doctype html><meta charset="utf-8"><title>Skyrim</title>
 <div id="s"></div>
 <script>
 async function tick(){
-  const s = await (await fetch('/stats')).json();
+  const s = await (await fetch('/stats' + location.search)).json();   // the page's own ?token=...
   const bar = (v,c) => `<div class="bar" style="width:${Math.max(0,v)*2}px;background:${c}"></div>`;
   document.getElementById('s').innerHTML = s.status ? s.status :
     `<b>Level ${s.level}</b> &middot; ${s.location} &middot; ${s.time}<br>
@@ -40,7 +49,15 @@ setInterval(tick, 1000); tick();
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        body, kind = (json.dumps(stats).encode(), "application/json") if self.path == "/stats" else (PAGE, "text/html")
+        url = urlsplit(self.path)
+        given = self.headers.get("X-Skython-Token") or parse_qs(url.query).get("token", [""])[0]
+        if not hmac.compare_digest(given.encode(), token.encode()):
+            self.send_response(403)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"wrong or missing token: use the address in python.log\n")
+            return
+        body, kind = (json.dumps(stats).encode(), "application/json") if url.path == "/stats" else (PAGE, "text/html")
         self.send_response(200)
         self.send_header("Content-Type", kind)
         self.end_headers()
@@ -86,9 +103,11 @@ def poll(game):
 
 
 def setup(game):
-    global server
+    global server, token
     stop.clear()
+    token = os.environ.get("SKYTHON_DASHBOARD_TOKEN") or secrets.token_urlsafe(16)
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    print(f"live_dashboard: open http://127.0.0.1:{PORT}/?token={token}")
     threading.Thread(target=server.serve_forever, daemon=True).start()
     threading.Thread(target=poll, args=(game,), daemon=True).start()
 
