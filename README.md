@@ -4,6 +4,10 @@ Write Skyrim mods in real Python. Skython is a Skyrim SE/AE mod (an SKSE C++ plu
 
 Status: in development, not released. The Linux-side code (core, dispatcher, Python package, dev bridge) is built and tested; the spikes that test the riskiest premises are running on a Windows test machine; the plugin itself (the game-side DLLs) is next. Code, file names and the repo folder still say `skyrim-python` / `SkyrimPython`; they are renamed to Skython before the plugin is built.
 
+## Examples
+
+See [`examples/`](examples/): Twitch chat spawning named mudcrabs, talking to NPCs through a language model, a live stats overlay for OBS, and real-world weather sync, each in one Python file.
+
 ## Scope
 
 In scope: embedding or hosting Python, a generic Papyrus call dispatcher, typed Python stubs generated from Papyrus `.psc` headers, an event layer, game-thread safety, packaging for non-technical players.
