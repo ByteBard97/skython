@@ -1,5 +1,5 @@
 plugin SkythonTest.esp masters=Skyrim.esm
-location SkythonTestLocation 000801:SkythonTest.esp
+location SkythonTestLocation 000801:SkythonTest.esp parent=018A56:Skyrim.esm keywords=0130DC:Skyrim.esm,01CB85:Skyrim.esm,0FC1A3:Skyrim.esm static_refs=14 marker_refs=8 world_marker=01F88E:Skyrim.esm
 npc SkythonTestNPCBase 000803:SkythonTest.esp race=013746:Skyrim.esm template=1034E4:Skyrim.esm
 cell SkythonTestCell 000802:SkythonTest.esp block=0/5 location=000801:SkythonTest.esp
   cell-data flags=IsInteriorCell, PublicArea, ShowSky lighting_template=06175D:Skyrim.esm lighting=inherits=AmbientColor, DirectionalColor, FogColor, FogNear, FogFar, ClipDistance water_height=0 image_space=036ED2:Skyrim.esm acoustic_space=0C5B6B:Skyrim.esm

@@ -14,7 +14,11 @@ namespace SkythonTestEsp
             using var mod = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE);
             var masters = string.Join(",", mod.ModHeader.MasterReferences.Select(m => m.Master.FileName.ToString()));
             Console.WriteLine($"plugin {System.IO.Path.GetFileName(path)} masters={(masters.Length > 0 ? masters : "-")}");
-            foreach (var l in mod.Locations) Console.WriteLine($"location {l.EditorID} {l.FormKey}");
+            foreach (var l in mod.Locations)
+                Console.WriteLine($"location {l.EditorID} {l.FormKey} parent={l.ParentLocation.FormKeyNullable?.ToString() ?? "-"}"
+                    + $" keywords={(l.Keywords == null ? "-" : string.Join(",", l.Keywords.Select(k => k.FormKey.ToString())))}"
+                    + $" static_refs={l.LocationCellStaticReferences?.Count ?? 0} marker_refs={l.LocationCellMarkerReference?.Count ?? 0}"
+                    + $" world_marker={l.WorldLocationMarkerRef.FormKeyNullable?.ToString() ?? "-"}");
             foreach (var n in mod.Npcs) Console.WriteLine($"npc {n.EditorID} {n.FormKey} race={n.Race.FormKey} template={n.Template.FormKey}");
             foreach (var b in mod.Cells.Records)
                 foreach (var sb in b.SubBlocks)

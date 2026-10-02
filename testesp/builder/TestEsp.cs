@@ -24,6 +24,7 @@ namespace SkythonTestEsp
         static readonly FormKey ImpFloorMid01 = E(0x03CB89);       // 256 x 256 floor piece; scaled x4 below
         static readonly FormKey WhiterunBreezehome = E(0x0165A8);   // vanilla interior whose cell record ours copies
         static readonly FormKey WRFireLightShadow01 = E(0x077FCE);  // a light Breezehome places (radius 768, shadow casting)
+        static readonly FormKey WhiterunBreezehomeLocation = E(0x01F86F);  // vanilla location whose record ours copies (R70)
 
         static readonly (string EditorId, FormKey Key)[] EsmRefs =
         {
@@ -31,9 +32,12 @@ namespace SkythonTestEsp
             ("XMarker", XMarker),
             ("COCMarkerHeading", COCMarkerHeading), ("ImpFloorMid01", ImpFloorMid01),
             ("WhiterunBreezehome", WhiterunBreezehome), ("WRFireLightShadow01", WRFireLightShadow01),
+            ("WhiterunBreezehomeLocation", WhiterunBreezehomeLocation),
         };
 
-        // `verify-esm <Skyrim.esm>`: prints "<EditorID> <FormKey> ok|MISMATCH <found>" for each reference above.
+        // `verify-esm <Skyrim.esm>`: prints "<EditorID> <FormKey> ok|MISMATCH <found>" for each reference above, then
+        // "location-link <FormKey> <type> ok|ABSENT" for every Skyrim.esm link the copied location carries (some of those
+        // references have no editor id, so only presence is checked).
         public static int VerifyEsm(string esmPath)
         {
             using var esm = SkyrimMod.CreateFromBinaryOverlay(esmPath, R);
@@ -47,6 +51,13 @@ namespace SkythonTestEsp
                 if (!ok) bad++;
                 System.Console.WriteLine($"{id} {key} {(ok ? "ok" : "MISMATCH " + (found ?? "absent"))}");
             }
+            foreach (var link in TestLocation(esm).ContainedFormLinks)
+            {
+                if (link.FormKey.ModKey != Esm) continue;
+                var ok = byKey.ContainsKey(link.FormKey);
+                if (!ok) bad++;
+                System.Console.WriteLine($"location-link {link.FormKey} {link.Type.Name} {(ok ? "ok" : "ABSENT")}");
+            }
             return bad == 0 ? 0 : 1;
         }
 
@@ -59,7 +70,7 @@ namespace SkythonTestEsp
         public static void Write(string path, string esmPath)
         {
             var mod = new SkyrimMod(Own, R);
-            mod.Locations.Add(new Location(O(LocationId), R) { EditorID = "SkythonTestLocation", Name = "Skython Test Location" });
+            using (var esm = SkyrimMod.CreateFromBinaryOverlay(esmPath, R)) mod.Locations.Add(TestLocation(esm));
             mod.Npcs.Add(NpcBase());
             mod.Cells.Records.Add(CellBlockWith(TestCell(esmPath)));
             mod.Quests.Add(TestQuest());
@@ -87,9 +98,28 @@ namespace SkythonTestEsp
         static Placement At(float x, float y, float z) =>
             new Placement { Position = new P3Float(x, y, z), Rotation = new P3Float(0, 0, 0) };
 
-        // Default location of the installed Skyrim.esm (this machine); SKYTHON_SKYRIM_ESM overrides it. The cell is
-        // copied from it, so the build reads it (Task 48 R67).
+        // Default location of the installed Skyrim.esm (this machine); SKYTHON_SKYRIM_ESM overrides it. The cell
+        // (Task 48 R67) and the location (R70) are copied from it, so the build reads it.
         public const string DefaultSkyrimEsm = "/mnt/games/SteamLibrary/steamapps/common/Skyrim Special Edition/Data/Skyrim.esm";
+
+        // R70: the location record is a copy of WhiterunBreezehomeLocation (parent location WhiterunLocation, keywords,
+        // the static and marker reference lists, the world location marker), keeping only our FormKey, EditorID and Name
+        // (the Test ESP Contract). The copied reference lists still name Breezehome's own references in WhiterunBreezehome,
+        // not our copies of them: a verbatim copy, so this build changes one thing. Name is masked out because reading
+        // Skyrim.esm's localized strings goes through a Windows-only BSA path in Mutagen 23.4.0 on Linux.
+        static Location TestLocation(ISkyrimModDisposableGetter esm)
+        {
+            ILocationGetter src = null;
+            foreach (var l in esm.Locations)
+                if (l.FormKey == WhiterunBreezehomeLocation) src = l;
+            if (src == null || src.EditorID != "WhiterunBreezehomeLocation")
+                throw new System.InvalidOperationException($"WhiterunBreezehomeLocation {WhiterunBreezehomeLocation} not found in Skyrim.esm");
+            var location = new Location(O(LocationId), R);
+            location.DeepCopyIn(src, new Location.TranslationMask(defaultOn: true) { Name = false });
+            location.EditorID = "SkythonTestLocation";
+            location.Name = "Skython Test Location";
+            return location;
+        }
 
         static Cell TestCell(string esmPath)
         {

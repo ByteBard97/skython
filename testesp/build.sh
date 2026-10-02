@@ -7,7 +7,7 @@
 # "- pin <path> stable <hex>" (a .pex: tools/papyrus_compile.sh --stable-hash). Exit 0 only when every pin matches and
 # Mutagen's read-back equals testesp/expected-dump.txt. A mismatch without a source change that explains it is a STOP.
 # Offline only: dotnet restores from ~/.nuget/packages and never from the network. The full build copies a cell record
-# from the installed Skyrim.esm (path: SKYTHON_SKYRIM_ESM, else TestEsp.DefaultSkyrimEsm).
+# and a location record from the installed Skyrim.esm (path: SKYTHON_SKYRIM_ESM, else TestEsp.DefaultSkyrimEsm).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DOTNET="${DOTNET:-$HOME/.dotnet/dotnet}"
