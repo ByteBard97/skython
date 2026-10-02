@@ -176,14 +176,23 @@ ConsumerId EventHub::OpenConsumer()
     return id;
 }
 
-void EventHub::RemoveSubLocked(SubId id)
+void EventHub::NotifyWanted(const WantedChanges& changes) const
+{
+    if (!options_.on_wanted) return;
+    for (const auto& [event, wanted] : changes) {
+        try { options_.on_wanted(event, wanted); } catch (...) {}  // a callback failure never breaks the hub
+    }
+}
+
+void EventHub::RemoveSubLocked(SubId id, WantedChanges& changes)
 {
     const auto it = subs_.find(id);
     if (it == subs_.end()) return;
     Sub& s = it->second;
     auto& list = by_event_[s.event_index];
     list.erase(std::remove(list.begin(), list.end(), id), list.end());
-    wanted_[s.event_index].fetch_sub(1, std::memory_order_release);
+    if (wanted_[s.event_index].fetch_sub(1, std::memory_order_release) == 1)
+        changes.emplace_back(kEvents[s.event_index].name, false);
     const auto c = consumers_.find(s.consumer);
     if (c != consumers_.end()) {
         c->second.queued -= s.queue.size();
@@ -207,6 +216,7 @@ void EventHub::CloseConsumer(ConsumerId consumer)
 {
     std::shared_ptr<std::mutex> drain;
     std::shared_ptr<std::condition_variable> cv;
+    WantedChanges changes;
     {
         std::lock_guard lk(mx_);
         const auto c = consumers_.find(consumer);
@@ -220,10 +230,11 @@ void EventHub::CloseConsumer(ConsumerId consumer)
         const auto c = consumers_.find(consumer);
         if (c == consumers_.end()) return;  // another thread closed it meanwhile
         const std::vector<SubId> owned = c->second.subs;
-        for (SubId id : owned) RemoveSubLocked(id);
+        for (SubId id : owned) RemoveSubLocked(id, changes);
         consumers_.erase(consumer);
     }
     cv->notify_all();  // a Next waiting for this consumer returns empty
+    NotifyWanted(changes);
 }
 
 json EventHub::Subscribe(ConsumerId consumer, const json& args)
@@ -243,26 +254,32 @@ json EventHub::Subscribe(ConsumerId consumer, const json& args)
     }
     const std::size_t index = index_of(spec);
 
-    std::lock_guard lk(mx_);
-    const auto c = consumers_.find(consumer);
-    if (c == consumers_.end()) bad("no event consumer " + std::to_string(consumer) + " (never opened, or closed)");
-    if (c->second.subs.size() >= kMaxSubscriptionsPerConsumer)
-        throw ProtocolError(ErrorCode::busy, "consumer " + std::to_string(consumer) + " has " +
-                                                 std::to_string(kMaxSubscriptionsPerConsumer) + " subscriptions (max_subscriptions_per_consumer)");
-    if (subs_.size() >= kMaxSubscriptions)
-        throw ProtocolError(ErrorCode::busy, "too many event subscriptions (" + std::to_string(kMaxSubscriptions) + ")");
-    const SubId id = next_sub_++;
-    Sub s;
-    s.id = id;
-    s.consumer = consumer;
-    s.event_index = index;
-    s.filter = std::move(filter);
-    s.max_queue = max_queue;
-    subs_.emplace(id, std::move(s));
-    by_event_[index].push_back(id);
-    c->second.subs.push_back(id);
-    wanted_[index].fetch_add(1, std::memory_order_release);
-    return {{"sub", id}, {"event", event}, {"max_queue", max_queue}};
+    bool first = false;
+    json answer;
+    {
+        std::lock_guard lk(mx_);
+        const auto c = consumers_.find(consumer);
+        if (c == consumers_.end()) bad("no event consumer " + std::to_string(consumer) + " (never opened, or closed)");
+        if (c->second.subs.size() >= kMaxSubscriptionsPerConsumer)
+            throw ProtocolError(ErrorCode::busy, "consumer " + std::to_string(consumer) + " has " +
+                                                     std::to_string(kMaxSubscriptionsPerConsumer) + " subscriptions (max_subscriptions_per_consumer)");
+        if (subs_.size() >= kMaxSubscriptions)
+            throw ProtocolError(ErrorCode::busy, "too many event subscriptions (" + std::to_string(kMaxSubscriptions) + ")");
+        const SubId id = next_sub_++;
+        Sub s;
+        s.id = id;
+        s.consumer = consumer;
+        s.event_index = index;
+        s.filter = std::move(filter);
+        s.max_queue = max_queue;
+        subs_.emplace(id, std::move(s));
+        by_event_[index].push_back(id);
+        c->second.subs.push_back(id);
+        first = wanted_[index].fetch_add(1, std::memory_order_release) == 0;
+        answer = {{"sub", id}, {"event", event}, {"max_queue", max_queue}};
+    }
+    if (first) NotifyWanted({{kEvents[index].name, true}});
+    return answer;
 }
 
 void EventHub::Unsubscribe(ConsumerId consumer, SubId sub)
@@ -276,11 +293,15 @@ void EventHub::Unsubscribe(ConsumerId consumer, SubId sub)
         if (c == consumers_.end() || s == subs_.end() || s->second.consumer != consumer) throw missing();
         drain = c->second.drain;
     }
-    std::lock_guard dl(*drain);
-    std::lock_guard lk(mx_);
-    const auto s = subs_.find(sub);
-    if (s == subs_.end() || s->second.consumer != consumer) throw missing();  // a racing Unsubscribe or CloseConsumer won
-    RemoveSubLocked(sub);
+    WantedChanges changes;
+    {
+        std::lock_guard dl(*drain);
+        std::lock_guard lk(mx_);
+        const auto s = subs_.find(sub);
+        if (s == subs_.end() || s->second.consumer != consumer) throw missing();  // a racing Unsubscribe or CloseConsumer won
+        RemoveSubLocked(sub, changes);
+    }
+    NotifyWanted(changes);
 }
 
 bool EventHub::Wants(std::string_view event) const

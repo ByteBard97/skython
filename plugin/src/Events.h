@@ -2,7 +2,9 @@
 #include "spy/errors.h"  // spy::json
 #include "spy/events.h"
 #include <cstdint>
+#include <functional>
 #include <string_view>
+#include <vector>
 
 namespace RE { class TESForm; }
 
@@ -17,4 +19,15 @@ void RegisterWorldSinks();                             // batch 2 (Task 40, Even
 void NoteSinkError(const char* sink, const char* what) noexcept;  // logs the first failure per sink only
 void NoteFirstEvent(const char* event) noexcept;                  // one line per event name: the S5-style thread note
 std::uint64_t SkippedNullTotal() noexcept;  // events not pushed because a required (non-null) form field was null
+
+// Task 44: each engine sink, the hub events it serves, and how to add/remove it (inside an SKSE task only).
+struct SinkEntry
+{
+    const char* sink;
+    std::vector<const char*> events;
+    std::function<void()> add, remove;
+    bool attached = false;  // touched only inside our SKSE tasks (serialized, observed: R49)
+};
+std::vector<SinkEntry>& Sinks();  // filled once at kDataLoaded (before Python starts), never resized later
+void OnWanted(std::string_view event, bool wanted);  // the hub's on_wanted: queues one reconcile task per affected sink
 }

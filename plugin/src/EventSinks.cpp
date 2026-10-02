@@ -81,10 +81,16 @@ void RegisterBatch1()
         log::Error(std::string("events: batch 1 not registered: ") + (!holder ? "ScriptEventSourceHolder" : "ModCallbackEvent source") + " is null");
         return;
     }
-    holder->AddEventSink<RE::TESDeathEvent>(&death);
-    holder->AddEventSink<RE::TESQuestStageEvent>(&stage);
-    holder->AddEventSink<RE::TESQuestStartStopEvent>(&startStop);
-    modSource->AddEventSink(&mod);
+    // Task 44: known and ready to attach; each is added inside an SKSE task while one of its events has a subscriber.
+    Sinks().push_back({ "death", { "death", "dying" }, [holder] { holder->AddEventSink<RE::TESDeathEvent>(&death); },
+                        [holder] { holder->RemoveEventSink<RE::TESDeathEvent>(&death); } });
+    Sinks().push_back({ "quest_stage", { "quest_stage" }, [holder] { holder->AddEventSink<RE::TESQuestStageEvent>(&stage); },
+                        [holder] { holder->RemoveEventSink<RE::TESQuestStageEvent>(&stage); } });
+    Sinks().push_back({ "quest_start_stop", { "quest_start", "quest_stop" },
+                        [holder] { holder->AddEventSink<RE::TESQuestStartStopEvent>(&startStop); },
+                        [holder] { holder->RemoveEventSink<RE::TESQuestStartStopEvent>(&startStop); } });
+    Sinks().push_back({ "mod_event", { "mod_event" }, [modSource] { modSource->AddEventSink(&mod); },
+                        [modSource] { modSource->RemoveEventSink(&mod); } });
     log::Info("events: sinks registered (batch 1)");
 }
 }

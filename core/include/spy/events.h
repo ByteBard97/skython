@@ -47,8 +47,11 @@ struct EventHubOptions
     std::function<std::uint32_t()> epoch;   // LifecycleState::epoch (life::Epoch) in the plugin; a counter in tests (empty: 0)
     std::function<bool()> loading;          // life::SaveLoadInProgress in the plugin (Task 39); a switch in tests (empty: false)
     std::size_t max_queued_bytes_per_consumer = kMaxQueuedEventBytesPerConsumer;  // R61; tests lower it
-    // No other member in this task. Task 44 appends `on_wanted` (optional, last) only if its sink-detach probe passes;
-    // an initializer that sets it uses designated initializers (.epoch = ..., .loading = ..., .on_wanted = ...).
+    // Task 44 (its sink-detach probe passed): called when an event's subscriber count goes 0->1 (wanted = true) or
+    // 1->0 (wanted = false), from Subscribe, Unsubscribe and CloseConsumer, always after the hub's locks are released
+    // (it may call back into the hub). An exception it throws is swallowed. Empty: never called. Optional and last: an
+    // initializer that sets it uses designated initializers (.epoch = ..., .loading = ..., .on_wanted = ...).
+    std::function<void(std::string_view event, bool wanted)> on_wanted{};  // Task 44: subscriber count 0->1 (true) / 1->0 (false); optional
 };
 
 // Event consumers, subscriptions and their bounded queues (spec 4.6). Pure C++: no game, no Python. Thread-safe.
@@ -101,7 +104,9 @@ private:
         std::shared_ptr<std::mutex> drain = std::make_shared<std::mutex>();
         std::shared_ptr<std::condition_variable> cv = std::make_shared<std::condition_variable>();  // Next waits here
     };
-    void RemoveSubLocked(SubId id);             // hub mutex held
+    using WantedChanges = std::vector<std::pair<std::string_view, bool>>;  // event name (static table text), wanted
+    void RemoveSubLocked(SubId id, WantedChanges& changes);  // hub mutex held; a count 1->0 is appended to changes
+    void NotifyWanted(const WantedChanges& changes) const;   // no hub lock held
     void DropOldestLocked(Sub& s, Consumer& c);  // hub mutex held; s.queue not empty
 
     EventHubOptions options_;

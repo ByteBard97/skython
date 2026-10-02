@@ -5,6 +5,7 @@
 #include "PapyrusValues.h"
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -22,7 +23,8 @@ spy::EventHub& Hub()
     // loading is a save load or new game only, never a door or coc loading screen (R60).
     static spy::EventHub* hub = new spy::EventHub(spy::EventHubOptions{
         .epoch = [] { return life::Epoch(); },
-        .loading = [] { return life::SaveLoadInProgress(); } });
+        .loading = [] { return life::SaveLoadInProgress(); },
+        .on_wanted = [](std::string_view e, bool w) { OnWanted(e, w); } });
     return *hub;
 }
 
@@ -100,6 +102,34 @@ void NoteFirstEvent(const char* event) noexcept
     } catch (...) {}
 }
 
+std::vector<SinkEntry>& Sinks() { static auto* v = new std::vector<SinkEntry>; return *v; }  // filled at kDataLoaded, then fixed
+
+namespace {
+void Reconcile(std::size_t i)
+{
+    auto& e = Sinks()[i];
+    const bool want = std::ranges::any_of(e.events, [](const char* n) { return Hub().Wants(n); });
+    if (want == e.attached) return;
+    (want ? e.add : e.remove)();
+    e.attached = want;
+    log::Info(std::string("events: sink ") + (want ? "attached " : "detached ") + e.sink);
+}
+}
+
+void OnWanted(std::string_view event, bool)
+{
+    // Any order of callbacks ends right: the task reads Wants() when it runs.
+    for (std::size_t i = 0; i < Sinks().size(); ++i) {
+        const auto& names = Sinks()[i].events;
+        if (std::ranges::none_of(names, [&](const char* n) { return event == n; })) continue;
+        SKSE::GetTaskInterface()->AddTask([i] {
+            ops::InTask in;
+            ops::Measured measured;
+            try { Reconcile(i); } catch (...) { NoteSinkError("reconcile", "unknown"); }
+        });
+    }
+}
+
 void RegisterBatch1();  // EventSinks.cpp
 
 void RegisterSinks()
@@ -119,5 +149,6 @@ void RegisterSinks()
     });
     RegisterBatch1();
     RegisterWorldSinks();
+    log::Info("events: sinks attach on demand");
 }
 }

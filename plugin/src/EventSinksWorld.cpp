@@ -132,13 +132,25 @@ void RegisterWorldSinks()
         log::Error(std::string("events: batch 2 not registered: ") + (!holder ? "ScriptEventSourceHolder" : "RE::UI") + " is null");
         return;
     }
-    holder->AddEventSink<RE::TESHitEvent>(&hit);
-    holder->AddEventSink<RE::TESEquipEvent>(&equip);
-    holder->AddEventSink<RE::TESContainerChangedEvent>(&container);
-    holder->AddEventSink<RE::TESCellAttachDetachEvent>(&cell);
-    holder->AddEventSink<RE::TESActivateEvent>(&activate);
-    holder->AddEventSink<RE::TESActorLocationChangeEvent>(&location);
-    ui->AddEventSink<RE::MenuOpenCloseEvent>(&menu);  // its own sink: the lifecycle's MenuSink keeps its single job
+    // Task 44: known and ready to attach; each is added inside an SKSE task while one of its events has a subscriber.
+    Sinks().push_back({ "hit", { "hit" }, [holder] { holder->AddEventSink<RE::TESHitEvent>(&hit); },
+                        [holder] { holder->RemoveEventSink<RE::TESHitEvent>(&hit); } });
+    Sinks().push_back({ "equip", { "equip", "unequip" }, [holder] { holder->AddEventSink<RE::TESEquipEvent>(&equip); },
+                        [holder] { holder->RemoveEventSink<RE::TESEquipEvent>(&equip); } });
+    Sinks().push_back({ "container_changed", { "container_changed" },
+                        [holder] { holder->AddEventSink<RE::TESContainerChangedEvent>(&container); },
+                        [holder] { holder->RemoveEventSink<RE::TESContainerChangedEvent>(&container); } });
+    Sinks().push_back({ "cell", { "cell_attach", "cell_detach" },
+                        [holder] { holder->AddEventSink<RE::TESCellAttachDetachEvent>(&cell); },
+                        [holder] { holder->RemoveEventSink<RE::TESCellAttachDetachEvent>(&cell); } });
+    Sinks().push_back({ "activate", { "activate" }, [holder] { holder->AddEventSink<RE::TESActivateEvent>(&activate); },
+                        [holder] { holder->RemoveEventSink<RE::TESActivateEvent>(&activate); } });
+    Sinks().push_back({ "player_location", { "player_location" },
+                        [holder] { holder->AddEventSink<RE::TESActorLocationChangeEvent>(&location); },
+                        [holder] { holder->RemoveEventSink<RE::TESActorLocationChangeEvent>(&location); } });
+    // Its own sink: the lifecycle's MenuSink keeps its single job and stays registered.
+    Sinks().push_back({ "menu", { "menu_open", "menu_close" }, [ui] { ui->AddEventSink<RE::MenuOpenCloseEvent>(&menu); },
+                        [ui] { ui->RemoveEventSink<RE::MenuOpenCloseEvent>(&menu); } });
     log::Info("events: sinks registered (batch 2)");
 }
 }

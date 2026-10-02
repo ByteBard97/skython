@@ -650,3 +650,27 @@ TEST_CASE("EventHub: epoch is read at push time; unknown events and bad data are
     REQUIRE(got.size() == 1);
     CHECK(got[0]["data"]["channel"].get<std::string>().find("\xEF\xBF\xBD") != std::string::npos);  // U+FFFD
 }
+
+TEST_CASE("event hub: on_wanted reports 0->1 and 1->0 per event, outside the lock")
+{
+    std::vector<std::pair<std::string, bool>> calls;
+    spy::EventHub* self = nullptr;
+    spy::EventHubOptions opts{ .epoch = [] { return 1u; }, .loading = [] { return false; },
+                               .on_wanted = [&](std::string_view e, bool w) {
+                                   (void)self->Wants(e);  // re-entering the hub here must not deadlock
+                                   calls.emplace_back(std::string(e), w);
+                               } };
+    spy::EventHub hub(opts);
+    self = &hub;
+    const auto c = hub.OpenConsumer();
+    const auto s1 = hub.Subscribe(c, { { "event", "activate" } })["sub"].get<spy::SubId>();
+    const auto s2 = hub.Subscribe(c, { { "event", "activate" } })["sub"].get<spy::SubId>();
+    CHECK(calls == std::vector<std::pair<std::string, bool>>{ { "activate", true } });
+    hub.Unsubscribe(c, s1);
+    CHECK(calls.size() == 1);
+    hub.Unsubscribe(c, s2);
+    CHECK(calls.back() == std::pair<std::string, bool>{ "activate", false });
+    hub.Subscribe(c, { { "event", "death" } });
+    hub.CloseConsumer(c);  // drops the death subscription: 1 -> 0
+    CHECK(calls.back() == std::pair<std::string, bool>{ "death", false });
+}
