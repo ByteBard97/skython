@@ -1,4 +1,4 @@
-"""game.save / game.load in the game (Task 41). Starts on s4test; makes one new throwaway save per run."""
+"""game.save / game.load in the game. Starts on s4test; makes one new throwaway save per run."""
 import queue
 import threading
 import time
@@ -12,7 +12,7 @@ from support import LOADABLE, box_save_count, load_save, log_text, new_save_name
 @pytest.fixture(scope="module")
 def saved(session):
     """One new save for the whole module, made from s4test gameplay. game.save returns once the engine started the
-    save; the .ess may not be on disk yet (Contracts). Right then, a second save of that name and a load of it are
+    save; the .ess may not be on disk yet. Right then, a second save of that name and a load of it are
     tried: the save is refused (save_exists, "already in progress" or, if the file is there, "already exists"), and
     the load either finds the file and loads it or answers not_ready with reason "saving". Both outcomes are
     recorded; the test below checks each is one of the allowed ones."""
@@ -66,7 +66,7 @@ def test_saving_the_same_name_again_is_refused(game, saved):
 
 
 def test_bad_save_names_are_refused(game):
-    # Refused by the client (Task 36 may check SAVE_NAME_PATTERN locally: ValueError/EncodeError) or by the plugin
+    # Refused by the client (the client may check SAVE_NAME_PATTERN locally: ValueError/EncodeError) or by the plugin
     # (bad_request); either way nothing is saved.
     for bad in ("", "a" * 65, "has space", "dots.ess", "../up"):
         with pytest.raises((errors.BadRequest, ValueError)):

@@ -1,6 +1,6 @@
-"""Task 46: the native Skython.Send raises `channel` events. Needs Skython.pex on the box (tools/box/box_deploy.sh
---test-pex, owner decision 7) and a save loaded (interactive). Every channel and payload carries a fresh per-test tag:
-Papyrus strings pass through the engine's case-insensitive string pool (R56), so a string some other script interned
+"""The native Skython.Send raises `channel` events. Needs Skython.pex on the test machine (tools/box/box_deploy.sh
+--test-pex) and a save loaded (interactive). Every channel and payload carries a fresh per-test tag:
+Papyrus strings pass through the engine's case-insensitive string pool, so a string some other script interned
 first could come back in that script's casing; a fresh tag cannot collide."""
 import queue
 import uuid
@@ -9,7 +9,7 @@ import pytest
 
 from support import log_text
 
-PAYLOAD_LIMIT = 65536  # max_channel_payload_bytes (protocol.json, Task 33)
+PAYLOAD_LIMIT = 65536  # max_channel_payload_bytes (protocol.json)
 
 
 @pytest.fixture(autouse=True)

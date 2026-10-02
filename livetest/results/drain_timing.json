@@ -28669,6 +28669,6 @@
   "each plugin timing line is written (and flushed: Log.cpp flush_on(info)) right after done, on the thread that called done; that write is a small perturbation of the next call's queue time",
   "frame_ms_estimate: median frame_dt (RE::GetSecondsSinceLastFrame at task start) over the sweep calls; frame_ms_from_task_starts: median gap between task_start of consecutive in-process calls with no pause",
   "non_sweep_timing_lines: 463 plugin timing lines from other requests during the run (tie-back calls, live_dashboard if it was connected)",
-  "the box's scripts/live_dashboard.py (Task 32) runs in-process on every launch and polls about once a second (a seven-step batch plus one call); its Game counts ids from 1, far below IN_BASE and REMOTE_BASE, so its lines never join with the sweep's, but its tasks share the SKSE drains"
+  "the test machine's scripts/live_dashboard.py runs in-process on every launch and polls about once a second (a seven-step batch plus one call); its Game counts ids from 1, far below IN_BASE and REMOTE_BASE, so its lines never join with the sweep's, but its tasks share the SKSE drains"
  ]
 }

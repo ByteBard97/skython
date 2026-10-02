@@ -1,5 +1,5 @@
-"""Spec 8 save/load lifecycle on new throwaway saves (Task 42), Review Focus 3 and 5, and the PackHandle/GetAlias
-save-persistence measurement (record only, R45 stands). Loads only s4test and the saves this module makes."""
+"""Save/load lifecycle on new throwaway saves, and the PackHandle/GetAlias save-persistence measurement (record
+only: an unscripted alias is still never bound on demand). Loads only s4test and the saves this module makes."""
 import json
 import queue
 import subprocess
@@ -14,7 +14,7 @@ from support import (PLAYER, REPO, load_save, log_text, new_save_name, spy_env, 
 IRON_SWORD = "Skyrim.esm|0x012EB7"
 GLASS_BOW = "Skyrim.esm|0x0139A5"
 # Cold base forms: no bound script object on a fresh s4test load. The Steel War Axe (0x013983) and Iron Dagger (0x01397E)
-# the plan named read "bound before call: true" on their first touch (live, Task 42): vanilla script properties point at
+# (tried first) read "bound before call: true" on their first touch (measured live): vanilla script properties point at
 # them, so the VM binds them at load. A probe of 30 base forms picked these two, both "false" on a fresh s4test load.
 STEEL_MACE = "Skyrim.esm|0x013988"      # the cold form, bound before the save
 IRON_MACE = "Skyrim.esm|0x013982"       # the control: a second cold form, first touched only after the save
@@ -42,7 +42,7 @@ def take(q: queue.Queue, timeout: float):
 
 def coc_away(game) -> None:
     """Move the player indoors with a coc (a loading screen, not a save load) so the next save load attaches the
-    exterior cells again: a save loaded in the cell the player stands in raised no cell_attach at all (live, Task 42)."""
+    exterior cells again: a save loaded in the cell the player stands in raised no cell_attach at all (measured live)."""
     closed: queue.Queue = queue.Queue()
     with game.on("menu_close", {"menu": ["Loading Menu"]}, closed.put):
         subprocess.run([str(REPO / "tools" / "box" / "box_console.sh"), "coc WhiterunBanneredMare"], check=True,
@@ -136,14 +136,14 @@ def _bound_lines(desc_part: str) -> list[str]:
 
 
 def test_packhandle_and_getalias_binding_across_a_save(game):
-    """Record only (owner question from Task 29; R45 stands either way)."""
+    """Record only: whether GetAlias binds the plain alias, and whether that survives a save. Nothing depends on it."""
     quest_hex, alias_s = spy_env("SPY_PLAIN_QUEST", "SPY_PLAIN_ALIAS")
     load_save(game, "s4test")
     quest = game.resolve(form_id=int(quest_hex, 16))
     alias = game.alias(quest, int(alias_s))
     cold = game.form(STEEL_MACE)
     if _owning_quest(game, alias) != "type_mismatch":
-        pytest.fail("the plain alias is already bound on a fresh s4test load: STOP and ask the owner")
+        pytest.fail("the plain alias is already bound on a fresh s4test load; this measurement needs it unbound")
     assert isinstance(game.call_method(quest, "Quest", "GetAlias", int(alias_s)), Alias)  # binds an `Alias` object (S7g)
     before_save = _owning_quest(game, alias)
     assert before_save.startswith("works"), before_save

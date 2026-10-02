@@ -9,7 +9,7 @@ KNOWN = ("no-python", "no-core", "no-package", "python-off", "bridge-off", "coll
 
 
 def only(name):
-    return pytest.mark.skipif(VARIANT != name, reason=f"run with SPY_VARIANT={name} (Task 26 Step 7)")
+    return pytest.mark.skipif(VARIANT != name, reason=f"run with SPY_VARIANT={name}")
 
 
 def test_spy_variant_is_known():

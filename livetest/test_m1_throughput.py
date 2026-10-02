@@ -14,13 +14,13 @@ from support import OTHER_CLIENTS_SLACK, diagnostics, raw_connect, read_frame, s
 
 RESULTS = pathlib.Path(__file__).parent / "results" / "throughput.json"
 BURST_RESULTS = pathlib.Path(__file__).parent / "results" / "burst.json"
-BURST_TOTAL = int(os.environ.get("SPY_BURST", "1024"))           # the dev ini's max_inflight_total (Task 25)
+BURST_TOTAL = int(os.environ.get("SPY_BURST", "1024"))           # the dev ini's max_inflight_total
 BURST_PER_CONNECTION = int(os.environ.get("SPY_BURST_PER_CONN", "256"))  # the dev ini's max_inflight_per_connection
-S9_FRAME_MS = float(os.environ.get("SPY_S9_FRAME_MS", "46.1"))   # spikes/RESULTS.md S9 row: baseline median frame, box
-SEQUENTIAL = int(os.environ.get("SPY_SEQ", "500"))   # S9: one drain (~46 ms on the box) per call alone: 500 calls take about 25 s
+S9_FRAME_MS = float(os.environ.get("SPY_S9_FRAME_MS", "46.1"))   # spikes/RESULTS.md S9 row: baseline median frame, test machine
+SEQUENTIAL = int(os.environ.get("SPY_SEQ", "500"))   # S9: one drain (~46 ms on the test machine) per call alone: 500 calls take about 25 s
 SPIN_CALLS = int(os.environ.get("SPY_SPIN_CALLS", "300"))
 CALLS_PER_DEPTH = 2000
-BATCH_STEPS = 100   # the batch figure Task 32's README quotes (ms per step)
+BATCH_STEPS = 100   # the batch figure the README quotes (ms per step)
 DEPTHS = (1, 8, 32, 128, 256)  # 256 is the dev ini's per-connection cap: a few `busy` answers there are data
 
 
@@ -66,7 +66,7 @@ def test_throughput_baseline(game):
         curve.append({"depth": depth, "calls": CALLS_PER_DEPTH, "seconds": round(secs, 3),
                       "per_s": round((CALLS_PER_DEPTH - busy) / secs, 1), "busy": busy})
 
-    # The batch figure: one batch of primitive steps (Task 30), no spinner. Steps run one task each, in order.
+    # The batch figure: one batch of primitive steps, no spinner. Steps run one task each, in order.
     b = game.batch()
     for _ in range(BATCH_STEPS):
         b.call("Utility", "RandomInt", 1, 6)
@@ -109,7 +109,7 @@ def test_throughput_baseline(game):
                           "spin": {k: inproc_spin[k] for k in ("per_s", "p50_ms", "p99_ms")}},
             "spin_loops": spin_off["spin_loops"],
             # One reading from an overlay while the spinner runs (SPY_FPS_SPIN); null if not taken. Not a frame-time
-            # measurement: frame stalls are pinned by spike S9 (Task 5).
+            # measurement: frame stalls are pinned by spike S9.
             "fps_observed_spin": os.environ.get("SPY_FPS_SPIN"),
         },
     }
@@ -119,7 +119,7 @@ def test_throughput_baseline(game):
 
 
 def test_burst_worst_frame(session, game):
-    """R38 (comparison Top 6): max_inflight_total requests at once. Records the longest time our queued task bodies
+    """max_inflight_total requests at once. Records the longest time our queued task bodies
     held the main thread in one frame (Step 3b's drain meter), and the worst frame estimated from it."""
     steady_late_count(session)  # nothing from earlier tests still on its way
     before = diagnostics(session)

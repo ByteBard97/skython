@@ -1,4 +1,4 @@
-"""A console `coc` from the main menu starts a world (Task 48b, ruling R70).
+"""A console `coc` from the main menu starts a world.
 
 SKSE sends kNewGame only from its hook on the CharGen quest's NewGame and kPostLoadGame only for a save load, so a coc
 from the main menu raises neither. Skython's world-start gate (Main Menu closed, then a Loading Menu closed, no save

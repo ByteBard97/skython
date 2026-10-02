@@ -9,20 +9,20 @@ from dataclasses import dataclass
 
 MAX_FRAME = 16 * 1024 * 1024
 REPO = pathlib.Path(__file__).resolve().parent.parent
-# The game runs on the Windows box (Task 1c): out/box-live.env sets SKYTHON_BOX=1, SKSE_LOG_DIR and
+# The game runs on the Windows test machine: out/box-live.env sets SKYTHON_BOX=1, SKSE_LOG_DIR and
 # SKYTHON_LOG to the local mirror out/box-skse, and SKYTHON_SESSION to the tunnel's session file.
 BOX = os.environ.get("SKYTHON_BOX") == "1"
 
 
 def spy_env(*names: str) -> tuple[str, ...]:
-    """The SPY_* values a live test needs (livetest/s4test.env holds the ones for the box's s4test save). Under
+    """The SPY_* values a live test needs (livetest/s4test.env holds the ones for the test machine's s4test save). Under
     SKYTHON_LIVE=1 a missing one FAILS the test: a live run must not pass by skipping. Opt-in tests (SPY_SAVE_TEST,
     SPY_MANUAL, SPY_VARIANT, SPY_LOW_CAP) gate themselves with skipif and do not use this."""
     import pytest
 
     missing = [n for n in names if not os.environ.get(n)]
     if missing:
-        why = f"{', '.join(missing)} not set: source livetest/s4test.env (values for the s4test save on the box)"
+        why = f"{', '.join(missing)} not set: source livetest/s4test.env (values for the s4test save on the test machine)"
         if os.environ.get("SKYTHON_LIVE") == "1":
             pytest.fail(why)
         pytest.skip(why)
@@ -133,7 +133,7 @@ def _box_tool(script: str, *args: str) -> subprocess.CompletedProcess:
 
 
 def box_pull(*names: str) -> None:
-    """Box mode: refresh out/box-skse/<name> with the text written on the box since the last launch (empty if none)."""
+    """Box mode: refresh out/box-skse/<name> with the text written on the test machine since the last launch (empty if none)."""
     r = _box_tool("box_files.sh", "pull", *names)
     if r.returncode != 0:
         raise RuntimeError(f"box_files.sh pull {' '.join(names)} failed: {r.stderr.strip()}")
@@ -153,7 +153,7 @@ def _launch_stamp() -> pathlib.Path:
 
 def fresh(path: pathlib.Path) -> bool:
     """True when the file was written after the last launch stamp (so it belongs to this run). In box mode the mirror
-    out/box-skse holds only text the box wrote since its launch stamp (box_files.sh pull), and is newer than any stamp.
+    out/box-skse holds only text the test machine wrote since its launch stamp (box_files.sh pull), and is newer than any stamp.
     In a live run (SKYTHON_LIVE=1 or box mode) a missing stamp is an error: any old file would otherwise count."""
     stamp = _launch_stamp()
     if not stamp.exists():
@@ -181,7 +181,7 @@ def python_log_text() -> str:
 
 
 def refused(port: int = 45977) -> bool:
-    if BOX:  # through the ssh tunnel a port nobody listens on is accepted locally, then closed: ask the box
+    if BOX:  # through the ssh tunnel a port nobody listens on is accepted locally, then closed: ask the test machine
         r = _box_tool("box_session.sh", "probe", str(port))
         if "NO_LISTENER" in r.stdout:
             return True
@@ -196,7 +196,7 @@ def refused(port: int = 45977) -> bool:
 
 
 def diagnostics(session) -> dict:
-    """game.state's diagnostics over a fresh raw connection (late_results_dropped, in_flight, and Task 31's drain meter)."""
+    """game.state's diagnostics over a fresh raw connection (late_results_dropped, in_flight, and the smoke script's drain meter)."""
     s = raw_connect(session)
     try:
         return rpc(s, "game.state")["result"]["diagnostics"]
@@ -260,7 +260,7 @@ def read_events(sock: socket.socket, n: int, timeout: float) -> list[dict]:
     return out
 
 
-# ---- Task 40: world helpers. Everything here runs on s4test and is never saved. ---------------------------
+# ---- World helpers. Everything here runs on s4test and is never saved. ---------------------------
 from skython import errors as _errors  # noqa: E402
 from skython.values import Form as _Form  # noqa: E402
 
@@ -290,7 +290,7 @@ def neutral_fight(game, a, b, aggression: float = 0.0, health: float = 5000.0) -
     aggression 3 (frenzied: still harmless to a ghost) when no hit arrives.
     Both leave every faction first (s4test is next to Whiterun: guards attacked the wolves as predators and killed
     them in 2-4 s, so they never hit each other) and get `health` (wolves at 22 Health killed each other within
-    about 6 s; the flood test needs 30 s of combat). Live measurement, Task 40."""
+    about 6 s; the flood test needs 30 s of combat). Measured live."""
     game.call_method(PLAYER, "Actor", "SetGhost", True)
     for x in (a, b):
         game.call_method(x, "Actor", "RemoveFromAllFactions")
@@ -301,7 +301,7 @@ def neutral_fight(game, a, b, aggression: float = 0.0, health: float = 5000.0) -
 
 
 def box_menu(action: str, name: str) -> None:
-    """Open or close a menu through DevBench on the box (Task 1c); no player input."""
+    """Open or close a menu through DevBench on the test machine; no player input."""
     body = json.dumps({"action": action, "name": name})
     subprocess.run([str(REPO / "tools" / "box" / "box_console.sh"), "--tool", "menu", body], check=True,
                    capture_output=True, text=True, timeout=90)
@@ -317,14 +317,14 @@ def translate_player(game, dx: float, dy: float, dz: float, speed: float = 3000.
     return x, y, z
 
 
-# ---- Task 41: saves. New names only (skython_*), each checked unused first and recorded for the owner. -------
+# ---- Saves. New names only (skython_*), each checked unused first and recorded for later cleanup. -----------
 import re as _re  # noqa: E402
 
 LOADABLE = _re.compile(r"s4test|spikebase|skythonbase|skython_[A-Za-z0-9_]{1,56}")
 
 
 def box_save_count(name: str) -> int:
-    """How many saves on the box match NAME*.ess (tools/box/box_saves.sh: a prefix match, so no new name may be a
+    """How many saves on the test machine match NAME*.ess (tools/box/box_saves.sh: a prefix match, so no new name may be a
     prefix of another: every name made here ends in a 14-digit timestamp)."""
     r = subprocess.run([str(REPO / "tools" / "box" / "box_saves.sh"), "count", name], check=True,
                        capture_output=True, text=True, timeout=90)
@@ -332,12 +332,12 @@ def box_save_count(name: str) -> int:
 
 
 def new_save_name(tag: str) -> str:
-    """skython_<tag>_<timestamp>, checked unused on the box (count 0) and appended to livetest/results/new_saves.txt
-    for the owner's removal list."""
+    """skython_<tag>_<timestamp>, checked unused on the test machine (count 0) and appended to livetest/results/new_saves.txt
+    so they can be cleaned up later."""
     name = f"skython_{tag}_{time.strftime('%Y%m%d%H%M%S')}"
     assert _re.fullmatch(r"[A-Za-z0-9_]{1,64}", name), name
     n = box_save_count(name)
-    assert n == 0, f"STOP: a save named {name} already exists on the box (count {n}); never save over a save"
+    assert n == 0, f"STOP: a save named {name} already exists on the test machine (count {n}); never save over a save"
     out = REPO / "livetest" / "results" / "new_saves.txt"
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("a", encoding="utf-8") as f:
@@ -346,7 +346,7 @@ def new_save_name(tag: str) -> str:
 
 
 def wait_save_file(name: str, timeout: float = 30.0) -> None:
-    """kSaveGame may come before the .ess is written: poll the box until exactly one file matches."""
+    """kSaveGame may come before the .ess is written: poll the test machine until exactly one file matches."""
     deadline = time.monotonic() + timeout
     while (n := box_save_count(name)) != 1:
         assert n == 0, f"{n} saves match {name}*"
@@ -355,7 +355,7 @@ def wait_save_file(name: str, timeout: float = 30.0) -> None:
 
 
 def load_save(game, name: str, timeout: float = 120.0) -> dict:
-    """Load one of the saves this plan or the M0/M1 spikes made (Global Constraints: Saves) through Game.load and
+    """Load one of the saves these tests or the spikes made (s4test, spikebase, skythonbase, skython_*) through Game.load and
     wait until the game is interactive again with a higher epoch. Returns that state."""
     if not LOADABLE.fullmatch(name):
         raise ValueError(f"tests load only s4test, spikebase, skythonbase or skython_* saves, not {name!r}")

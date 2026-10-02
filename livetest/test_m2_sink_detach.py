@@ -1,4 +1,4 @@
-"""Task 44: the sink register/unregister probe, then either attach-on-demand (probe PASS) or skip-only (FAIL or
+"""The sink register/unregister probe, then either attach-on-demand (probe PASS) or skip-only (FAIL or
 INCONCLUSIVE). Mode is read from the plugin log: 'events: sinks attach on demand' means Part 2 is in. s4test, never
 saved."""
 import queue
@@ -29,7 +29,7 @@ def pick_up(game, n: int, stop: threading.Event | None = None) -> int:
 def toggle_menu_once(windows: list, delay: float) -> None:
     """Open and close the menu once through DevBench, `delay` seconds from now (menu_open/menu_close for the spare UI
     sink). Records (opened_at, closed_at) on time.monotonic(), from before the open call to after the close call, so
-    the window is never shorter than the time the menu was really open (ruling R62)."""
+    the window is never shorter than the time the menu was really open."""
     time.sleep(delay)
     t0 = time.monotonic()
     try:
@@ -66,7 +66,7 @@ COUNTERS = ("cycles", "errors", "delivered", "delivered_any", "menu_delivered", 
 def test_probe_register_unregister_cycles(game):
     """1000 register/unregister cycles in 10 batches of 100 while the player activates swords. The menu is opened and
     closed once during every odd batch and never during an even one, so a step that timed out can be told apart:
-    inside a menu window it is INCONCLUSIVE (the menu pauses the game, ruling R62), in a quiet batch it is FAIL. Each
+    inside a menu window it is INCONCLUSIVE (the menu pauses the game), in a quiet batch it is FAIL. Each
     batch zeroes the probe's counters, so the totals are sums over the batches."""
     hub_seen: queue.Queue = queue.Queue()
     stop = threading.Event()
@@ -101,7 +101,7 @@ def test_probe_register_unregister_cycles(game):
         for row in rows:
             if row["errors"] or row["registered"] is not False or row["cycles"] != PER_BATCH:
                 in_menu = any(a <= row["t1"] and z >= row["t0"] for a, z in windows)
-                bad.append(f"batch {row['batch']}: {'INCONCLUSIVE (menu window, R62)' if in_menu else 'FAIL'} {row}")
+                bad.append(f"batch {row['batch']}: {'INCONCLUSIVE (menu window)' if in_menu else 'FAIL'} {row}")
         time.sleep(2.0)                                       # late activations of the cycling phase land first
         drained = drain(hub_seen)
         try:

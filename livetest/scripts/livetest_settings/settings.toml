@@ -1,4 +1,4 @@
-# Read by skython._host before setup(game) (Task 43). Plain values only: nothing secret ever goes here.
+# Read by skython._host before setup(game). Plain values only: nothing secret ever goes here.
 greeting = "hello from settings.toml"
 limits = [1, 2, 3]
 

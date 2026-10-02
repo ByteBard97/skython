@@ -1,5 +1,5 @@
-"""Task 48: the full SkythonTest.esp loads and holds what Tasks 49-55 expect. Needs testesp/SkythonTest.esp and
-testesp/compiled/*.pex on the box (owner decision 7), the plugins.txt line (tools/box/box_plugins.sh add) and s4test
+"""The full SkythonTest.esp loads and holds what the ESP-based live tests expect. Needs testesp/SkythonTest.esp and
+testesp/compiled/*.pex on the test machine, the plugins.txt line (tools/box/box_plugins.sh add) and s4test
 loaded. The last test moves the player into SkythonTestCell with `coc`. Nothing is saved."""
 import queue
 import subprocess
@@ -11,7 +11,7 @@ from skython import errors
 from support import REPO
 
 ESP = "SkythonTest.esp"
-CHANNEL = "skython_test"  # owner decision 8's channel (Step 1): replace with the owner's name if it differs
+CHANNEL = "skython_test"  # the channel SkythonTestQuest sends on
 QUEST, LOCATION, CELL = f"{ESP}|0x000800", f"{ESP}|0x000801", f"{ESP}|0x000802"
 NPC, MARKER = f"{ESP}|0x000804", f"{ESP}|0x000805"
 PLAYER_ID = 0x14
@@ -40,7 +40,7 @@ def test_plugin_and_records_resolve(game):
 
 
 def test_quest_scripts_are_attached(game, quest):
-    # The fixed initial values (index Contracts, Test ESP) prove both scripts are attached and initialised.
+    # The fixed initial values the test ESP sets prove both scripts are attached and initialised.
     assert game.call_method(quest, "SkythonTestQuest", "GetCounter") == 7
     assert game.call_method(quest, "SkythonTestQuest", "GetBaseCounter") == 3
     assert game.call_method(quest, "SkythonTestQuest", "GetRatio") == 0.5
@@ -53,7 +53,7 @@ def test_stage_fragments_send_on_skython_test(game, quest):
     try:
         for stage in (10, 20, 200):
             assert game.call_method(quest, "Quest", "SetStage", stage) is True
-            # The engine's string pool may change case (R56): compare case-insensitively.
+            # The engine's string pool may change case: compare case-insensitively.
             assert q.get(timeout=15).data["payload"].lower() == f"stage_{stage}"
     finally:
         sub.close()
@@ -99,6 +99,6 @@ def test_coc_into_the_test_cell(game):
     assert parent_cell(game, npc) == CELL.lower()
     assert game.call_method(npc, "ObjectReference", "Is3DLoaded") is True
     assert game.call_method(npc, "Actor", "IsDead") is False
-    assert game.call_method(npc, "Actor", "IsEssential") is False  # Tasks 53 and 55 kill it
+    assert game.call_method(npc, "Actor", "IsEssential") is False  # later live tests kill it
     # The name comes from the WEFarmerMale template (TemplateFlag.BaseData), not from SkythonTestNPCBase: record it.
     print("SkythonTestNPC display name:", game.call_method(npc, "ObjectReference", "GetDisplayName"))

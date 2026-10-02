@@ -1,4 +1,4 @@
-"""Needs a save loaded (interactive): s4test on the box (spikes/RESULTS.md). The property read uses the auto property
+"""Needs a save loaded (interactive): s4test on the test machine (spikes/RESULTS.md). The property read uses the auto property
 spike S7c enumerated:
 SPY_S7C_QUEST=0x001093E4 SPY_S7C_SCRIPT=QF_TGTQ01Handler_001093E4 SPY_S7C_PROPERTY=Alias_TGHandlerSilverMoldAlias
 SPY_S7C_KIND=Alias (optional SPY_S7C_GETTER: a parameterless function returning the same property; unset for this one).
@@ -62,13 +62,13 @@ def test_batch_of_100_steps(game):
     b = game.batch()
     for _ in range(100):
         b.call("Utility", "RandomInt", 1, 6)
-    results = _timed_run(b, 100, timeout=60)  # S9: one drain (~46 ms on the box) per primitive call alone: several seconds
+    results = _timed_run(b, 100, timeout=60)  # S9: one drain (~46 ms on the test machine) per primitive call alone: several seconds
     assert len(results) == 100 and all(1 <= r <= 6 for r in results)
 
 
 def test_batch_without_timeout_gets_time_for_every_step(game):
     # No timeout given: Batch.run sends 5 s per step (capped), not one 5 s default for the whole batch. At one drain
-    # (~46 ms on the box, S9) or more per step, 150 steps need well over 5 s.
+    # (~46 ms on the test machine, S9) or more per step, 150 steps need well over 5 s.
     b = game.batch()
     for _ in range(150):
         b.call("Utility", "RandomInt", 1, 6)
@@ -116,8 +116,8 @@ def _s7c_property():
 
 
 def test_get_property_reads_an_auto_property(game):
-    """Read-only happy path on S7c's auto property. On s4test it holds alias 0 of its own quest (Task 30 launch 2), so
-    the read must decode as that Alias: None is not accepted (it let a broken read pass in Task 30 launch 1)."""
+    """Read-only happy path on S7c's auto property. On s4test it holds alias 0 of its own quest, so
+    the read must decode as that Alias: None is not accepted (an earlier build read None here and the test passed)."""
     quest_id, script, prop, kind = _s7c_property()
     quest = game.resolve(form_id=quest_id)
     first = game.get_property(quest, script, prop)
@@ -134,14 +134,14 @@ def test_get_property_reads_an_auto_property(game):
 
 
 def test_set_property_refuses_a_reference_counted_property(game):
-    """R58: v1 writes only Int, Float and Bool properties. S7c's property is alias-typed (a reference-counted value):
+    """Only Int, Float and Bool properties are written (no lock-free write of a reference-counted value). S7c's property is alias-typed (a reference-counted value):
     writing even the value it already holds is refused `unsupported` before anything is written, and it reads the
     same afterwards."""
     quest_id, script, prop, kind = _s7c_property()
     quest = game.resolve(form_id=quest_id)
     before = game.get_property(quest, script, prop)
     assert type(before) is KINDS[kind], (kind, before)
-    # The same value it holds: the refusal cannot be a type_mismatch, only the R58 rule.
+    # The same value it holds: the refusal cannot be a type_mismatch, only the Int/Float/Bool write rule.
     with pytest.raises(errors.Unsupported, match="v1 writes only Int, Float and Bool"):
         game.set_property(quest, script, prop, before)
     with pytest.raises(errors.Unsupported, match="v1 writes only Int, Float and Bool"):
@@ -162,7 +162,7 @@ def test_get_property_reads_an_int_auto_property(game):
     assert game.get_property(quest, script, prop) == first
 
 
-# PetFramework_ParentQuest (Update.esm, runtime form id 0x01002F1C), always bound (Task 29's probe). Its script declares
+# PetFramework_ParentQuest (Update.esm, runtime form id 0x01002F1C), always bound (checked live). Its script declares
 # `Int Property CurrentPetCount = 0 Auto Hidden` and the bytecode getter `Int Function GetCurrentPetCount()` with body
 # `Return CurrentPetCount`, so Papyrus reads the same auto variable our write lands in.
 PET_QUEST = 0x01002F1C

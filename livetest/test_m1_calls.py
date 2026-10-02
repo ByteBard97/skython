@@ -1,8 +1,8 @@
-"""Needs a save loaded (interactive). Spike S4's recorded quest/alias go in env vars (used by Task 29):
+"""Needs a save loaded (interactive). Spike S4's recorded quest/alias go in env vars:
 SPY_S4_QUEST=0x<quest form id> SPY_S4_ALIAS=<alias id> SPY_S4_REF=0x<expected reference form id>
 SPY_PLAIN_QUEST=0x<quest form id> SPY_PLAIN_ALIAS=<id of an unscripted alias>
 SPY_OWN_QUEST=0x<quest form id> SPY_OWN_SCRIPT=<its attached script> SPY_OWN_FUNCTION=<parameterless bytecode getter>
-Values used on the box (s4test): spikes/RESULTS.md, S4 row and the Task 29 entry; `source livetest/s4test.env`.
+Values used on the test machine (s4test): spikes/RESULTS.md, S4 row; `source livetest/s4test.env`.
 Under SKYTHON_LIVE=1 a missing value fails the test (support.spy_env), it never skips.
 """
 import os
@@ -55,7 +55,7 @@ def test_primitive_result_types(game):
     assert game.call("Game", "IsPluginInstalled", "Skyrim.esm") is True                  # Bool
     assert 0.0 <= game.call("Utility", "RandomFloat", 0.0, 1.0) <= 1.0                   # Float
     # Game strings come back in the casing the engine's string pool already holds (CreateStringArray(2, "x") gave
-    # ['X', 'X'], Task 28), so a string the game built is compared case-insensitively.
+    # ['X', 'X']), so a string the game built is compared case-insensitively.
     s = game.call("StringUtil", "Substring", "hello", 1, 3)                              # String (SKSE)
     assert isinstance(s, str) and s.lower() == "ell"
     assert game.call("StringUtil", "GetLength", "hello") == 5                            # Int
@@ -89,9 +89,9 @@ def test_wrong_argument_type_names_the_parameter(game):
 
 def test_script_defined_global_function(game):
     # ArmorAddon.GetMaskForSlot and Game.GetSkillLegendaryLevel are Papyrus bytecode in SKSE's scripts (no `native`
-    # keyword); Armor.GetMaskForSlot is the SKSE native the first one wraps. (The brief's Game.GetCameraState wraps
+    # keyword); Armor.GetMaskForSlot is the SKSE native the first one wraps. (Game.GetCameraState, the obvious choice, wraps
     # Camera.GetCameraState, which SKSE 2.2.6 never registers: papyrusCamera::RegisterFuncs has no caller, the native
-    # returns None and the wrapper casts it to 0. Substituted in Task 27, recorded in spikes/RESULTS.md.)
+    # returns None and the wrapper casts it to 0. Recorded in spikes/RESULTS.md.)
     assert game.call("ArmorAddon", "GetMaskForSlot", 32) == game.call("Armor", "GetMaskForSlot", 32) == 4
     # The SKSE sources alone say ArmorAddon.GetMaskForSlot is bytecode; the VM says so too: a script-defined function
     # reports its .psc parameter name (`int Function GetMaskForSlot(int slot) global`), a native reports param1.
@@ -162,13 +162,13 @@ def test_static_call_returns_form(game):
 
 def test_form_argument_round_trip(game):
     sword = game.call("Game", "GetFormFromFile", 0x012EB7, "Skyrim.esm")
-    # The VM's GetScriptObjectType(VMTypeID).GetName() gave WEAPON and SPELL on the box (Task 28); the plugin maps
-    # engine class names to their .psc spelling (R56), so type is exact.
+    # The VM's GetScriptObjectType(VMTypeID).GetName() gave WEAPON and SPELL on the test machine; the plugin maps
+    # engine class names to their .psc spelling, so type is exact.
     assert sword.form_key == IRON_SWORD and sword.type == "Weapon"
     assert game.call("Game", "GetFormFromFile", 0x012FCD, "Skyrim.esm").type == "Spell"  # Flames
     # A Form parameter given a Weapon. False is also what a None argument gives; the next line proves the form arrives:
     # SKSE's CreateFormArray fills the array with the argument and returns it (None if the native never ran, which is
-    # what a value typed as WEAPON instead of the declared Form gave before Task 28's fix).
+    # what a value typed as WEAPON instead of the declared Form gave before the plugin mapped the names).
     assert game.call("Game", "IsObjectFavorited", sword) is False
     assert game.call("Utility", "CreateFormArray", 2, sword) == [sword, sword]
 
@@ -305,7 +305,7 @@ def test_object_array_result(game):
 
 
 def test_form_argument_arrives(game):
-    # The proof Task 28 could not give: these counts only change if the Form argument reaches the game as that form
+    # The proof the type checks alone cannot give: these counts only change if the Form argument reaches the game as that form
     # (a None or empty Variable would leave GetItemCount at 0 and AddItem without effect).
     player = Form(form_id=PLAYER_ID)
     sword = game.form(IRON_SWORD)
@@ -315,7 +315,7 @@ def test_form_argument_arrives(game):
         assert game.call_method(player, "ObjectReference", "GetItemCount", sword) == n + 1
     finally:
         # RemoveItem(akItemToRemove, aiCount, abSilent, akOtherContainer): every argument is passed (no defaults), so
-        # akOtherContainer is None, a typed None ObjectReference (Task 28).
+        # akOtherContainer is None, a typed None ObjectReference.
         game.call_method(player, "ObjectReference", "RemoveItem", sword, 1, True, None)
     assert game.call_method(player, "ObjectReference", "GetItemCount", sword) == n
 
@@ -327,8 +327,8 @@ def test_alias_method_calls(game):
     # The converse of the alias-0 test below: a Quest result must decode as a Form of type Quest, not as an alias.
     owner = game.call_method(alias, "Alias", "GetOwningQuest")
     assert isinstance(owner, Form) and not isinstance(owner, Alias) and owner.form_id == quest_id and owner.type == "Quest"
-    # Spec 4.4 names GetRef; ReferenceAlias also has GetReference. Check ReferenceAlias.psc and use whichever
-    # this runtime's script declares (the plan calls GetReference; both return the filled reference).
+    # The docs name GetRef; ReferenceAlias also has GetReference. Check ReferenceAlias.psc and use whichever
+    # this runtime's script declares (this test calls GetReference; both return the filled reference).
     ref = game.call_method(alias, "ReferenceAlias", "GetReference")
     assert ref.form_id == expected_ref
 
@@ -346,7 +346,7 @@ def test_alias_result_is_an_alias_not_its_quest(game):
 
 
 def test_quest_result_is_a_quest_not_an_alias(game):
-    # Measurement for Task 28's decode order: ObjectToJson logs, once, whether a Quest's own handle also passes
+    # Measurement for the handle decode order: ObjectToJson logs, once, whether a Quest's own handle also passes
     # HandleIsType(BGSRefAlias/BGSLocAlias). Record the line in spikes/RESULTS.md; form-first is correct either way.
     quest_id, alias_id, _ = _s4()
     owner = game.call_method(game.alias(game.resolve(form_id=quest_id), alias_id), "Alias", "GetOwningQuest")
@@ -357,7 +357,7 @@ def test_quest_result_is_a_quest_not_an_alias(game):
 
 
 def test_alias_plain_is_not_dispatchable_as_reference_alias(game):
-    # R45: an unscripted alias has no bound ReferenceAlias object, and the server never binds one on demand.
+    # An unscripted alias has no bound ReferenceAlias object, and the server never binds one on demand.
     quest, alias = spy_env("SPY_PLAIN_QUEST", "SPY_PLAIN_ALIAS")  # S7g cand 0: quest 0x0010FDD5, alias 0, plain
     quest_id, alias_id = int(quest, 16), int(alias)
     alias = game.alias(game.resolve(form_id=quest_id), alias_id)

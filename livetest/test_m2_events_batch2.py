@@ -1,4 +1,4 @@
-"""M2 batch 2 and lifecycle events in the game (Task 40). s4test, never saved."""
+"""Batch 2 and lifecycle events in the game. s4test, never saved."""
 import queue
 import subprocess
 import threading
@@ -50,7 +50,7 @@ def test_filters_required_for_hit_and_container_changed(session):
 def test_equip_and_unequip(game):
     sword = game.form(IRON_SWORD)
     if game.call_method(PLAYER, "Actor", "IsEquipped", sword):
-        pytest.fail("STOP: the player already has an Iron Sword equipped on s4test; ask the owner (pick no other item yourself)")
+        pytest.fail("the player already has an Iron Sword equipped on s4test; this test needs it unequipped")
     print(f"equip: iron swords carried before the test = {game.call_method(PLAYER, 'ObjectReference', 'GetItemCount', sword)}")
     q, sub_e = collect(game, "equip", {"actor": [PLAYER], "item": [sword]})
     sub_u = game.on("unequip", {"actor": [PLAYER], "item": [sword]}, q.put)
@@ -122,7 +122,7 @@ def test_menu_open_and_close(game):
 
 def test_cell_attach_and_detach_without_a_loading_screen(game):
     if game.call_method(PLAYER, "ObjectReference", "IsInInterior"):
-        pytest.fail("s4test starts in an interior: this test needs an exterior; STOP and ask the owner")
+        pytest.fail("s4test starts in an interior: this test needs an exterior")
     attach: queue.Queue = queue.Queue()
     detach: queue.Queue = queue.Queue()
     loading: queue.Queue = queue.Queue()
@@ -135,7 +135,7 @@ def test_cell_attach_and_detach_without_a_loading_screen(game):
         game.call_method(PLAYER, "ObjectReference", "StopTranslation")
         a, d = take(attach, 1, 5.0), take(detach, 1, 5.0)
         print(f"cell events: attach>={attach.qsize() + len(a)} detach>={detach.qsize() + len(d)} loading_menus={loading.qsize()}")
-        assert loading.empty(), "TranslateTo opened a Loading Menu: record it in RESULTS and ask the owner"
+        assert loading.empty(), "TranslateTo opened a Loading Menu; the test assumes it does not"
         assert a and d, "no cell_attach or no cell_detach after moving 1.5 cells and back"
         assert a[0].data["reference"].form_id and a[0].suppressed == 0
     finally:
@@ -178,7 +178,7 @@ def test_hit_flood_never_stalls_the_game(game, session):
     frames: list = []
     stop = threading.Event()
     # AND across fields: a hit by or on a guard or anyone else never matches. Both directions, because near Whiterun
-    # the wolves also fight guards and townsfolk, and one direction alone came back empty in a 35 s run (Task 40 live).
+    # the wolves also fight guards and townsfolk, and one direction alone came back empty in a 35 s run (measured live).
     flt = {"target": [to_wire(a), to_wire(b)], "aggressor": [to_wire(a), to_wire(b)]}
     held = None
     try:
@@ -224,7 +224,7 @@ def test_hit_flood_never_stalls_the_game(game, session):
             # Both subscriptions see the same hits; the held one also counts hits after the reader stopped.
             assert released["seqs"][-1] >= drained_total and released["first_dropped"] == released["seqs"][0] - 1
         assert max(during) <= before * 1.15 + 5.0, (before, during)
-        # Task 31 baseline: 2.25 ms at a 1024-request burst; the launch maximum may already be higher (class table).
+        # Baseline: 2.25 ms at a 1024-request burst; the launch maximum may already be higher (class table).
         assert diag["max_task_drain_ms"] <= max(drain_before, 5.0), (drain_before, diag["max_task_drain_ms"])
     finally:
         stop.set()
@@ -240,7 +240,7 @@ def test_hit_flood_never_stalls_the_game(game, session):
 
 def test_coc_delivers_player_location_and_cell_events(game):
     """Runs last: it moves the player indoors. A coc shows a Loading Menu but is not a save load, so nothing is
-    suppressed (ruling R60: the hub suppresses only from kPreLoadGame/kNewGame to the game_loaded push).
+    suppressed (the hub suppresses only from kPreLoadGame/kNewGame to the game_loaded push).
     player_location must arrive with the location Actor.GetCurrentLocation reports after the move, and cell_attach /
     cell_detach must arrive too, none of them with suppressed set."""
     before = game.call_method(PLAYER, "Actor", "GetCurrentLocation")  # a Location Form, or None in the wilderness
@@ -264,13 +264,13 @@ def test_coc_delivers_player_location_and_cell_events(game):
               f"delivered={[(fid(e.data['old_location']), fid(e.data['new_location'])) for e in got]} "
               f"cell attach>={len(a) + attach.qsize()} detach>={len(d) + detach.qsize()} suppressed_rise={rose}")
         assert fid(after) == BANNERED_MARE_LOCATION and fid(before) != fid(after), (before, after)
-        assert got, "no player_location across the coc: a loading screen must not suppress it (R60)"
+        assert got, "no player_location across the coc: a loading screen must not suppress it"
         assert fid(got[0].data["old_location"]) == fid(before)
         assert fid(got[-1].data["new_location"]) == fid(after)
         assert all(e.suppressed == 0 for e in got)
         assert a and d, "no cell_attach or no cell_detach across the coc"
         assert a[0].suppressed == 0 and d[0].suppressed == 0
-        assert rose == 0, f"events_suppressed_total rose by {rose} across a coc, which is not a save load (R60)"
+        assert rose == 0, f"events_suppressed_total rose by {rose} across a coc, which is not a save load"
     finally:
         for x in (sub, sub_a, sub_d, sub_l):
             x.close()

@@ -1,4 +1,4 @@
-"""Linux side of livetest_smoke: its files live next to python.log (SKYTHON_LOG). With the game on the box
+"""Linux side of livetest_smoke: its files live next to python.log (SKYTHON_LOG). With the game on the Windows test machine
 (SKYTHON_BOX=1, out/box-live.env) that is the local mirror out/box-skse/Skython: each read pulls the
 file's text written since the launch stamp, and a command is pushed with tools/box/box_files.sh put-control."""
 import json
@@ -24,7 +24,7 @@ def _read(name: str):
 
 
 def wait_smoke(timeout: float = 180.0) -> dict:
-    """The smoke results of THIS game run (written after the last launch: support.fresh; on the box, box_pull)."""
+    """The smoke results of THIS game run (written after the last launch: support.fresh; in box mode, box_pull)."""
     path = py_dir() / "livetest_smoke.json"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -43,12 +43,12 @@ def command(cmd: str, timeout: float = 300.0, first_poll_after: float = 0.0, **k
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps({"seq": seq, "cmd": cmd, **kw}))
     os.replace(tmp, path)
-    if BOX:  # the only file Linux writes on the box
+    if BOX:  # the only file Linux writes on the test machine
         subprocess.run([str(REPO / "tools" / "box" / "box_files.sh"), "put-control", str(path)], check=True,
                        capture_output=True, text=True, timeout=120)
     deadline = time.monotonic() + timeout
     if first_poll_after > 0:
-        time.sleep(min(first_poll_after, timeout))  # the command cannot be done sooner; do not load the box meanwhile
+        time.sleep(min(first_poll_after, timeout))  # the command cannot be done sooner; do not load the test machine meanwhile
     while time.monotonic() < deadline:
         r = _read("livetest_reply.json")
         if r and r.get("seq") == seq:

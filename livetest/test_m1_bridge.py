@@ -17,7 +17,7 @@ def test_python_is_running_in_the_game():
     assert "python host: running" in log_text(), "the core log has no 'python host: running' line from this run"
     assert "SpyCore_Load returned true" in log_text("SkythonLoader.log")
     assert python_log_text(), "python.log was not written in this run"
-    # The interpreter config (Task 26): the embedded runtime's python.exe and the isolated search path, in order.
+    # The interpreter config: the embedded runtime's python.exe and the isolated search path, in order.
     line = next((ln for ln in log_text().splitlines() if "python host: initialised; sys.executable = " in ln), "")
     assert line, "the core log has no 'python host: initialised' line from this run"
     exe = line.split("sys.executable = ", 1)[1].split("; sys.path = ", 1)[0]

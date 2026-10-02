@@ -15,11 +15,11 @@ PLAYER = Form(form_id=0x14)
 IRON_SWORD = "Skyrim.esm|0x012EB7"
 MANUAL = os.environ.get("SPY_MANUAL") == "1"
 manual = pytest.mark.skipif(not MANUAL, reason="manual test: run with SPY_MANUAL=1 and `pytest -s`, with someone at the keyboard")
-SAVE_TEST = os.environ.get("SPY_SAVE_TEST") == "1"   # opt-in: every run leaves one new save on the box
-save_test = pytest.mark.skipif(not SAVE_TEST, reason="save test (opt-in): run with SPY_SAVE_TEST=1 (game on the Windows box, DevBench answering; leaves one new save)")
+SAVE_TEST = os.environ.get("SPY_SAVE_TEST") == "1"   # opt-in: every run leaves one new save on the test machine
+save_test = pytest.mark.skipif(not SAVE_TEST, reason="save test (opt-in): run with SPY_SAVE_TEST=1 (game on the Windows test machine, DevBench answering; leaves one new save)")
 BOX_CONSOLE = pathlib.Path(__file__).resolve().parent.parent / "tools" / "box" / "box_console.sh"
 BOX_SAVES = pathlib.Path(__file__).resolve().parent.parent / "tools" / "box" / "box_saves.sh"
-# A new save of our own per run, never an existing one (Task 1b deploy safety); list.ps1 lists the prefix.
+# A new save of our own per run, never an existing one; list.ps1 lists the prefix.
 SAVE_DURING_CALL = f"skypy_r38_savecall_{time.strftime('%Y%m%d%H%M%S')}"
 
 
@@ -34,7 +34,7 @@ def test_in_process_smoke_script_passed():
     assert data["status"] == "pass" and not failed, failed
     # The shipping mode really ran: the game's _skython and the in-process transport, not a bridge-backed Game.
     assert data["backend"] == "game" and data["transport"] == "InProcessTransport", data
-    # The host loaded every script in this run: the broken one failed (Task 26's livetest_broken), the smoke one ran.
+    # The host loaded every script in this run: the broken one failed (livetest_broken), the smoke one ran.
     scripts = data["scripts"]
     assert scripts["livetest_broken"].startswith("failed"), scripts
     assert scripts["livetest_smoke"] == "ok", scripts
@@ -72,7 +72,7 @@ def test_disconnect_with_calls_in_flight_drops_the_results(session, game):
                      {"script": "Utility", "function": "Wait", "args": [2.0], "timeout_ms": 30000}, req_id=i)
     time.sleep(0.3)  # let the bridge submit them, so they really are in flight when we close
     assert diagnostics(session)["in_flight"] >= before["in_flight"] + n - OTHER_CLIENTS_SLACK
-    s.close()  # the bridge cancels the connection's tickets (Task 23)
+    s.close()  # the bridge cancels the connection's tickets
     time.sleep(0.5)  # well before the 2 s waits finish in the game
     # Dispatcher::Cancel releases each entry at once: the closed connection holds nothing any more (other clients'
     # own calls may come and go: OTHER_CLIENTS_SLACK).
@@ -93,7 +93,7 @@ def test_many_short_connections(session):
 
 @manual
 def test_paused_game_reports_state_and_honours_require_unpaused(session):
-    """Spec 4.1: a menu that pauses the game. A human opens and closes it."""
+    """A menu that pauses the game. A human opens and closes it."""
     s = raw_connect(session)
     input("\nIn the game, open the INVENTORY or JOURNAL menu (it must pause the game), then press Enter here... ")
     st = rpc(s, "game.state")["result"]
@@ -109,7 +109,7 @@ def test_paused_game_reports_state_and_honours_require_unpaused(session):
 
 
 def box_console(command: str) -> str:
-    # DevBench reroutes `save <name>` and `load <name>` to its game tool; typed raw they would deadlock (Task 1b).
+    # DevBench reroutes `save <name>` and `load <name>` to its game tool; typed raw they would deadlock.
     r = subprocess.run([str(BOX_CONSOLE), command], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, f"box_console.sh {command!r} failed: {r.stdout}{r.stderr}"
     return r.stdout
@@ -123,12 +123,12 @@ def box_save_count(name: str) -> int:
 
 @save_test
 def test_save_during_a_latent_call_then_load(session, game):
-    """R38: a save taken while our Utility.Wait is suspended in the VM must not record our callback. Task 27's
+    """A save taken while our Utility.Wait is suspended in the VM must not record our callback. The callback
     functor returns false from CanSave(); the base class already does at the pin, so this pins the behaviour, not
     the override. Loading that save ends the call NotReady (the load cancels it) or Timeout, never a crash; no late
     result arrives after the load; the game keeps running."""
-    assert box_save_count(SAVE_DURING_CALL) == 0, (f"a save named {SAVE_DURING_CALL}* already exists on the box: never "
-                                                   "save over it; ask the owner")
+    assert box_save_count(SAVE_DURING_CALL) == 0, (f"a save named {SAVE_DURING_CALL}* already exists on the test machine: never "
+                                                   "save over it; pick another name or remove it")
     outcome = {}
 
     def call():

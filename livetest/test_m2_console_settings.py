@@ -1,4 +1,4 @@
-"""Task 43 live: the broken script's failure reaches the in-game console once; a script reads its settings.toml."""
+"""Live: the broken script's failure reaches the in-game console once; a script reads its settings.toml."""
 import datetime
 import re
 import subprocess
@@ -31,7 +31,7 @@ def test_console_screenshot_for_the_record():
 
 def test_a_script_reads_its_settings_file():
     data = _read("livetest_settings.json")
-    # Written by this launch, not left over from an earlier one: compare with the launch stamp (box clock, ISO with offset).
+    # Written by this launch, not left over from an earlier one: compare with the launch stamp (test machine clock, ISO with offset).
     stamp = re.sub(r"(\.\d{6})\d+", r"\1", _launch_stamp().read_text().strip())
     assert data.pop("written_at") >= datetime.datetime.fromisoformat(stamp).timestamp(), "stale livetest_settings.json"
     assert data == {"settings": {"greeting": "hello from settings.toml", "limits": [1, 2, 3], "nested": {"level": 3}},

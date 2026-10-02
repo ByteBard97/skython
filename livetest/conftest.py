@@ -1,5 +1,5 @@
 """Live tests: the game runs with Skython (loader + core), the embedded Python and the dev ini.
-Run from the repo root, the game on the Windows box (Task 1c):
+Run from the repo root, the game on the Windows test machine:
   tools/box/box_session.sh up && source out/box-live.env && SKYTHON_LIVE=1 uv run --project python pytest livetest -q
 Without SKYTHON_LIVE=1 every test is skipped (so a plain pytest run on a machine without the game is clean).
 """
@@ -33,10 +33,9 @@ def game(session):
 
 @pytest.fixture(scope="module")
 def fresh_save(session):
-    """Spec 8 / v1 'After this plan' item 2: load a fixed save before the module runs. skythonbase (Task 49) when it
-    exists on the box, else s4test. Returns {"save": name, "state": the interactive state after the load}.
+    """Load a fixed save before the module runs: skythonbase when it exists on the test machine, else s4test. Returns {"save": name, "state": the interactive state after the load}.
     skythonbase holds SkythonTest.esp, so a launch that may load it is preceded by `tools/box/box_plugins.sh add`
-    (Global Constraints, after Gate 0); the quit/stop tools restore plugins.txt."""
+    ; the quit/stop tools restore plugins.txt."""
     import skython
     from skython import errors
     from support import box_save_count, load_save

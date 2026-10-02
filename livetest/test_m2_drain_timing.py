@@ -1,4 +1,4 @@
-"""Task 38 (record only): why a sequential call through the bridge costs about two frame drains (Task 31: p50
+"""Record only: why a sequential call through the bridge costs about two frame drains (measured p50
 92.39 ms) while one made in the game costs one (46.11 ms). Hypothesis (frame quantization): a request that reaches
 the plugin after this frame's SKSE task drain has started waits for the next frame's drain, and the remote round trip
 (completion poll, writer, tunnel, client, tunnel, reader) is long enough to miss it every time.
@@ -158,7 +158,7 @@ def test_two_drain_experiment(session, game):
                   "frame_ms_from_task_starts: median gap between task_start of consecutive in-process calls with no pause",
                   f"non_sweep_timing_lines: {non_sweep} plugin timing lines from other requests during the run "
                   "(tie-back calls, live_dashboard if it was connected)",
-                  "the box's scripts/live_dashboard.py (Task 32) runs in-process on every launch and polls about once "
+                  "the test machine's scripts/live_dashboard.py runs in-process on every launch and polls about once "
                   "a second (a seven-step batch plus one call); its Game counts ids from 1, far below IN_BASE and "
                   "REMOTE_BASE, so its lines never join with the sweep's, but its tasks share the SKSE drains"],
     }
@@ -167,7 +167,7 @@ def test_two_drain_experiment(session, game):
     z_in, z_re = in_steps[0], re_steps[0]
     print("RESULTS: frame ~{} ms (frame_dt; task-start gaps {} ms); remote arrival_phase p50 at pause 0 {}; in-process total p50 by pause {}; remote client p50 by pause {}; at pause 0: queued "
           "p50 {} ms in-process vs {} ms remote, vm p50 {} vs {}, remote read_to_submit {} / done_to_write {} / tunnel "
-          "and client {}; Game-based tie-back remote {} ms, in-process {} ms (Task 31: 92.39 / 46.11)".format(
+          "and client {}; Game-based tie-back remote {} ms, in-process {} ms (earlier baseline: 92.39 / 46.11)".format(
               frame_ms, frame_from_starts, z_re["arrival_phase"] and z_re["arrival_phase"]["p50"],
               " ".join(f"{s['sleep_ms']}:{s['total_ms']['p50']}" for s in in_steps),
               " ".join(f"{s['sleep_ms']}:{s['client_ms']['p50']}" for s in re_steps),

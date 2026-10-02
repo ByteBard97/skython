@@ -1,4 +1,4 @@
-"""M2 batch 1 events in the game (Task 39): death/dying, quest stage/start/stop, mod events, the channel queue.
+"""Batch 1 events in the game: death/dying, quest stage/start/stop, mod events, the channel queue.
 s4test loaded and never saved. Raw frames check the wire shape; Game.on checks the Python path over the bridge."""
 import queue
 
@@ -12,7 +12,7 @@ from support import raw_connect, read_event, read_events, rpc, subscribe
 PLAYER = Form(form_id=0x14)
 CHICKEN = "Skyrim.esm|0x0A91A0"       # NPC_ EncChicken (checked in Skyrim.esm, 2026-10-02)
 # QUST PerkInvestor: Papyrus Start() starts it (no Story Manager event, ENAM empty), not start-game-enabled, not
-# run-once, no aliases, one stage (10) with no fragment and no log entry; checked on s4test twice in one launch (Task 39 fix round 1)
+# run-once, no aliases, one stage (10) with no fragment and no log entry; checked on s4test twice in one launch
 QUEST = "Skyrim.esm|0x0ABD94"
 CRIME_WHITERUN = "Skyrim.esm|0x0267EA"  # FACT CrimeFactionWhiterun: a chicken killed by the player near Whiterun may be a crime
 
@@ -26,7 +26,7 @@ def no_new_bounty(game, before: int) -> None:
     after = crime_gold(game)
     if after > before:
         pytest.fail(f"STOP: the Whiterun bounty rose from {before} to {after} after Kill(player) on a chicken; "
-                    "ask the owner (s4test is never saved, so only this session is affected)")
+                    "check the save by hand (s4test is never saved, so only this session is affected)")
 
 
 def spawn(game, base_key: str, dx: float = 600.0) -> Form:
@@ -50,8 +50,8 @@ def frames_for(frames: list[dict], sub: int) -> list[dict]:
 
 
 def test_death_and_dying_with_victim_filter(game, session):
-    """Kill(player): both frames carry killer = the player (index Contracts: Task 39 fills killer from
-    TESDeathEvent::actorKiller; Tasks 53-55 rely on it). A null killer here is a sink defect, never loosened."""
+    """Kill(player): both frames carry killer = the player (the death sink fills killer from
+    TESDeathEvent::actorKiller and later tests rely on it). A null killer here is a sink defect, never loosened."""
     bounty = crime_gold(game)
     a, b = spawn(game, CHICKEN, 600.0), spawn(game, CHICKEN, -600.0)
     s = raw_connect(session)
@@ -70,7 +70,7 @@ def test_death_and_dying_with_victim_filter(game, session):
             assert f["data"]["killer"] is not None and f["data"]["killer"]["form_id"] == PLAYER.form_id  # Kill(player)
             assert "dropped" not in f and "suppressed" not in f
         # The event's own reference (with its fingerprint) works in a later call: event fingerprints match the
-        # plugin's live fingerprint end to end (Task 39 review).
+        # plugin's live fingerprint end to end.
         victim = from_wire(frames_for(frames, death)[0]["data"]["victim"])
         assert game.call_method(victim, "Actor", "IsDead") is True
         no_new_bounty(game, bounty)
@@ -95,7 +95,7 @@ def test_death_killer_is_null_for_kill_none(game, session):
 def test_quest_start_stage_stop(game):
     quest = game.form(QUEST)
     if game.call_method(quest, "Quest", "IsRunning") or game.call_method(quest, "Quest", "IsCompleted"):
-        pytest.fail("PerkInvestor is running or completed on this save: STOP and ask the owner")
+        pytest.fail("PerkInvestor is running or completed on this save; this test needs it not started")
     got: queue.Queue = queue.Queue()
     subs = [game.on(name, {"quest": [quest]}, got.put) for name in ("quest_start", "quest_stage", "quest_stop")]
     try:
@@ -166,6 +166,6 @@ def test_in_process_mod_event():
     r = command("mod_event", event="skython_smoke")
     assert len(r["received"]) == 1, r
     got = r["received"][0]
-    # name and str_arg come back through the engine's string pool, which can change case (R56).
+    # name and str_arg come back through the engine's string pool, which can change case.
     assert (got["name"].lower(), got["str_arg"].lower()) == ("skython_smoke", "in-process"), got
     assert (got["num_arg"], got["sender"], got["seq"]) == (2.5, 0x14, 1), got

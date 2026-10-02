@@ -1,6 +1,6 @@
-"""Task 47 (the ESP/VMAD gate): a quest written by Mutagen, with a scripted alias and a QF_ stage fragment, binds in the
+"""The ESP/VMAD check: a quest written by Mutagen, with a scripted alias and a QF_ stage fragment, binds in the
 game. Needs testesp/spike/SkythonTest.esp in Data with its plugins.txt line (tools/box/box_plugins.sh add), Skython.pex
-and the spike's two .pex in Data\\Scripts (owner decision 7), and s4test loaded. Never saves."""
+and the spike's two .pex in Data\\Scripts, and s4test loaded. Never saves."""
 import queue
 import subprocess
 import time
@@ -78,7 +78,8 @@ def test_alias_script_is_bound(game, quest):
     game.call_method(alias, "ReferenceAlias", "ForceRefTo", player)
     try:
         # Gate criteria: dispatch by the alias script's own class name (S7c route) and ReferenceAlias calls, which an
-        # unscripted alias answers with type_mismatch (R45). The Tag read is extra: alias property reads are Task 51's.
+        # unscripted alias answers with type_mismatch (the server never binds one on demand). The Tag read is extra: alias property reads
+        # are tested elsewhere.
         assert game.call_method(alias, "SkythonTestAlias", "GetOwningQuest").form_id == quest.form_id
         assert game.call_method(alias, "ReferenceAlias", "GetReference").form_id == PLAYER_ID
         assert game.get_property(alias, "SkythonTestAlias", "Tag") == 0

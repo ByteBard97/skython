@@ -1,4 +1,4 @@
-"""In-process smoke test and benchmark (Task 31). Deployed to Data/SKSE/Plugins/Skython/scripts/ by
+"""In-process smoke test and benchmark. Deployed to Data/SKSE/Plugins/Skython/scripts/ by
 `tools/box/box_deploy.sh --scripts livetest/scripts`. Development only: never ship it to players.
 
 setup() starts one thread and returns at once. That thread waits for a loaded save, runs the same calls the
@@ -25,7 +25,7 @@ _stop = threading.Event()
 _spin_stop = threading.Event()
 _spin_thread = None
 _spin_loops = 0
-_held: dict = {}  # Task 40: consumer -> sub of the undrained hold_sub subscriptions
+_held: dict = {}  # consumer -> sub of the undrained hold_sub subscriptions
 
 
 def _dir() -> pathlib.Path:
@@ -128,7 +128,7 @@ def _bench(game, calls: int) -> dict:
 
 
 def _sweep(cmd: dict) -> dict:
-    """Task 38: sequential Utility.RandomInt calls, `calls` per pause in `sleeps_ms`, the pause before each call.
+    """Sequential Utility.RandomInt calls, `calls` per pause in `sleeps_ms`, the pause before each call.
     Straight through _skython.call with request ids from id_base, so the plugin's timing lines join with them, and
     stamped with _skython.now_us (the plugin's clock). No Game: its ids would collide with other clients'."""
     calls, base, rows, n = int(cmd.get("calls", 100)), int(cmd["id_base"]), [], 0
