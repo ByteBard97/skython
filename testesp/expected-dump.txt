@@ -1,0 +1,28 @@
+plugin SkythonTest.esp masters=Skyrim.esm
+location SkythonTestLocation 000801:SkythonTest.esp
+npc SkythonTestNPCBase 000803:SkythonTest.esp race=013746:Skyrim.esm template=1034E4:Skyrim.esm
+cell SkythonTestCell 000802:SkythonTest.esp block=0/5 location=000801:SkythonTest.esp
+  persistent SkythonTestNPC 000804:SkythonTest.esp base=000803:SkythonTest.esp
+  persistent SkythonTestMarker 000805:SkythonTest.esp base=00003B:Skyrim.esm
+  temporary - 000806:SkythonTest.esp base=000032:Skyrim.esm
+  temporary - 000807:SkythonTest.esp base=03CB89:Skyrim.esm
+quest SkythonTestQuest 000800:SkythonTest.esp flags=AllowRepeatedStages form_version=0
+  alias 0 SkythonTarget Reference flags=Optional, AllowDead, AllowDisabled, AllowReserved, AllowCleared
+  alias 1 SkythonItem Reference flags=Optional, AllowDead, AllowDisabled, AllowReserved, AllowCleared
+  alias 2 SkythonExtra Reference flags=Optional, AllowDead, AllowDisabled, AllowReserved, AllowCleared
+  alias 3 SkythonPlace Location flags=Optional, AllowCleared
+  stage 10 log_entries=1
+  stage 20 log_entries=1
+  stage 100 log_entries=1
+  stage 200 log_entries=1
+  objective 10 "Skython test: <Alias=SkythonTarget>, <Alias=SkythonItem>, <Alias=SkythonPlace>"
+  vmad version=5 objformat=2 unknown=2 file=QF_SkythonTestQuest_01000800 scripts=SkythonTestQuest,QF_SkythonTestQuest_01000800
+  script-property script=SkythonTestQuest name=Target flags=Edited object=000804:SkythonTest.esp alias=-1
+  fragment stage=10 index=0 unknown2=1 script=QF_SkythonTestQuest_01000800 function=Fragment_0
+  fragment stage=20 index=0 unknown2=1 script=QF_SkythonTestQuest_01000800 function=Fragment_1
+  fragment stage=100 index=0 unknown2=1 script=QF_SkythonTestQuest_01000800 function=Fragment_2
+  fragment stage=200 index=0 unknown2=1 script=QF_SkythonTestQuest_01000800 function=Fragment_3
+  alias-vmad alias=0 quest=000800:SkythonTest.esp scripts=SkythonTestAlias
+  alias-vmad alias=1 quest=000800:SkythonTest.esp scripts=SkythonTestAlias
+  alias-vmad alias=2 quest=000800:SkythonTest.esp scripts=SkythonTestAlias
+  alias-vmad alias=3 quest=000800:SkythonTest.esp scripts=SkythonTestLocationAlias

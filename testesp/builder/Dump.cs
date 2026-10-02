@@ -33,6 +33,11 @@ namespace SkythonTestEsp
                 if (q.VirtualMachineAdapter is IQuestAdapterGetter vm)
                 {
                     Console.WriteLine($"  vmad version={vm.Version} objformat={vm.ObjectFormat} unknown={vm.Unknown} file={vm.FileName} scripts={string.Join(",", vm.Scripts.Select(s => s.Name))}");
+                    foreach (var sc in vm.Scripts)
+                        foreach (var p in sc.Properties)
+                            Console.WriteLine(p is IScriptObjectPropertyGetter op
+                                ? $"  script-property script={sc.Name} name={p.Name} flags={p.Flags} object={op.Object.FormKey} alias={op.Alias}"
+                                : $"  script-property script={sc.Name} name={p.Name} flags={p.Flags} kind={p.GetType().Name}");
                     foreach (var f in vm.Fragments)
                         Console.WriteLine($"  fragment stage={f.Stage} index={f.StageIndex} unknown2={f.Unknown2} script={f.ScriptName} function={f.FragmentName}");
                     foreach (var a in vm.Aliases)
