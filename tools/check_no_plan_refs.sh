@@ -21,7 +21,7 @@ pats=(
 re="$(IFS='|'; echo "${pats[*]}")"
 hits="$(git ls-files -z \
   | grep -zv -E '^(docs/|spikes/|testesp/|tools/box/|third_party/|plugin/extern/|\.superpowers/)' \
-  | xargs -0 grep -n -I -P "$re" 2>/dev/null)"
+  | xargs -0 grep -H -n -I -P "$re" 2>/dev/null)"
 if [ -n "$hits" ]; then
   echo "$hits"
   echo "plan references found: $(echo "$hits" | wc -l) line(s)"
