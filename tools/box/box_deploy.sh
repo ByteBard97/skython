@@ -13,12 +13,19 @@
 #   tools/box/box_deploy.sh --pex path/to/SkyrimPython.pex   -> exactly Data\Scripts\SkyrimPython.pex (Task 7: the spike's
 #                                                               own script, which keeps its name; the only
 #                                                               target outside Plugins; placed only if absent or ours)
+#   tools/box/box_deploy.sh --esp path/to/SkythonTest.esp    -> exactly Data\SkythonTest.esp (owner decision 7, Gate 0;
+#                                                               Task 45). Placed only if absent or ours.
+#   tools/box/box_deploy.sh --test-pex FILE.pex...           -> Data\Scripts\<name> for names on the Gate 0 list only:
+#                                                               Skython.pex, SkythonTestQuestBase.pex, SkythonTestQuest.pex,
+#                                                               SkythonTestAlias.pex, SkythonTestLocationAlias.pex,
+#                                                               QF_SkythonTestQuest_01000800.pex
 #   tools/box/box_deploy.sh --move REL NEWREL                -> moves Plugins\REL to Plugins\NEWREL (Task 26's startup
 #                                                               variants; Task 25 moves the spike DLL aside). REL must be
 #                                                               a recorded target or inside one; NEWREL must be absent.
 #                                                               Move-Item, never a delete. Each move is appended to
 #                                                               out/box-moves.txt and NEWREL is recorded.
-#   BOX_DEPLOY_PRINT_TARGET=1 with --pex, a DLL or --move prints the resolved target(s) and exits before any ssh
+#   BOX_DEPLOY_PRINT_TARGET=1 with --pex, --esp, --test-pex, a DLL or --move prints the resolved target(s) and exits
+#   before any ssh
 #   (offline test).
 # Every target is recorded in out/box-deployed.txt. A target that exists on the box and is not recorded there
 # was not deployed by this tool: the deploy refuses (it never overwrites what it did not put there).
@@ -85,6 +92,9 @@ owned() {  # owned <windows path>: recorded, or inside a recorded folder
   done < "$BOX_DEPLOYED"
   return 1
 }
+# Owner decision 7 (Gate 0): the only Papyrus scripts --test-pex places. These six names are the whole list.
+TEST_PEX_NAMES=(Skython.pex SkythonTestQuestBase.pex SkythonTestQuest.pex SkythonTestAlias.pex SkythonTestLocationAlias.pex QF_SkythonTestQuest_01000800.pex)
+test_pex_ok() { local n; for n in "${TEST_PEX_NAMES[@]}"; do [ "$1" = "$n" ] && return 0; done; return 1; }
 plugins_rel() {  # plugins_rel <REL>: the Windows path under Plugins, or die
   local r="${1//\//\\}"
   case "$r" in ""|*..*|*:*|\\*) box_die "bad path '$1': give it relative to Plugins, without '..' or a drive" ;; esac
@@ -96,6 +106,25 @@ if [ "$1" = --pex ]; then
   [ "$(basename "$PEX")" = SkyrimPython.pex ] || box_die "--pex places only SkyrimPython.pex (got $(basename "$PEX"))"
   PEX_DEST="$BOX_DATA\\Scripts\\SkyrimPython.pex"
   if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then echo "$PEX_DEST"; exit 0; fi
+elif [ "$1" = --esp ]; then
+  [ $# -eq 2 ] || box_die "usage: box_deploy.sh --esp path/to/SkythonTest.esp"
+  ESP="$2"; [ -f "$ESP" ] || box_die "no such file: $ESP"
+  [ "$(basename "$ESP")" = SkythonTest.esp ] || box_die "--esp places only SkythonTest.esp (got $(basename "$ESP"))"
+  ESP_DEST="$BOX_DATA\\SkythonTest.esp"
+  if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then echo "$ESP_DEST"; exit 0; fi
+  need_gate0
+elif [ "$1" = --test-pex ]; then
+  [ $# -ge 2 ] || box_die "usage: box_deploy.sh --test-pex FILE.pex..."
+  TPEX=(); TPEX_DEST=()
+  for f in "${@:2}"; do
+    [ -f "$f" ] || box_die "no such file: $f"
+    b="$(basename "$f")"
+    test_pex_ok "$b" || box_die "--test-pex places only ${TEST_PEX_NAMES[*]} (got $b)"
+    for d in "${TPEX_DEST[@]}"; do [ "$d" != "$BOX_DATA\\Scripts\\$b" ] || box_die "--test-pex: $b given twice"; done
+    TPEX+=("$f"); TPEX_DEST+=("$BOX_DATA\\Scripts\\$b")
+  done
+  if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then printf '%s\n' "${TPEX_DEST[@]}"; exit 0; fi
+  need_gate0
 elif [ "$1" = --move ]; then
   [ $# -eq 3 ] || box_die "usage: box_deploy.sh --move REL NEWREL (both relative to Plugins)"
   MV_SRC="$(plugins_rel "$2")"; MV_DEST="$(plugins_rel "$3")"
@@ -151,6 +180,12 @@ case "$1" in
     ;;
   --pex)
     put_file "$PEX" "$PEX_DEST"
+    ;;
+  --esp)
+    put_file "$ESP" "$ESP_DEST"
+    ;;
+  --test-pex)
+    for i in "${!TPEX[@]}"; do put_file "${TPEX[$i]}" "${TPEX_DEST[$i]}"; done
     ;;
   --move)
     r="$(bps 60 place.ps1 -Mode move -SrcB64 "$(b64 "$MV_SRC")" -DestB64 "$(b64 "$MV_DEST")" | tr -d '\r')"
