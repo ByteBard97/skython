@@ -2,6 +2,7 @@
 #include "Lifecycle.h"
 #include "Log.h"
 #include "Signatures.h"
+#include "spy/papyrus_names.h"
 #include "spy/refs.h"
 #include <cstdint>
 #include <format>
@@ -82,12 +83,14 @@ void BindObject(const void* ptr, RE::VMTypeID type, const std::string& nativeCla
     const std::string want = cls ? cls->GetName() : "";
     if (want.empty() || sig::IsA(nativeClass, want)) {
         RE::BSScript::PackHandle(&out, ptr, type);
+        // A failed PackHandle leaves the value None (kNone), and GetObject() asserts the value is an object.
+        if (!out.IsObject()) throw ProtocolError(ErrorCode::vm_error, "could not bind " + desc + " (a " + nativeClass + ") as " + (want.empty() ? "an object" : canonical_script_name(want)));
         // PackHandle types the value as the form's own class (Actor, WEAPON). Passed as is to a parameter declared as
         // a base class (Form), the native never ran and the call returned None (Task 28, launch 1: IsObjectFavorited,
         // CreateFormArray); an exact class match (IsWordUnlocked's WordOfPower) ran. So give the value the declared
         // parameter type, as the FindBound branch below does; the object keeps its own class.
         auto obj = out.GetObject();
-        if (!obj) throw ProtocolError(ErrorCode::vm_error, "could not bind " + desc + " (a " + nativeClass + ") as " + (want.empty() ? "an object" : want));
+        if (!obj) throw ProtocolError(ErrorCode::vm_error, "could not bind " + desc + " (a " + nativeClass + ") as " + (want.empty() ? "an object" : canonical_script_name(want)));
         if (!want.empty()) out.SetObject(obj, declared.GetRawType());
         return;
     }
@@ -100,7 +103,7 @@ void BindObject(const void* ptr, RE::VMTypeID type, const std::string& nativeCla
         out.SetObject(bound, declared.GetRawType());
         return;
     }
-    throw ProtocolError(ErrorCode::type_mismatch, "parameter " + param + " expects " + want + ", got " + desc + " (a " + nativeClass + ")");
+    throw ProtocolError(ErrorCode::type_mismatch, "parameter " + param + " expects " + canonical_script_name(want) + ", got " + desc + " (a " + nativeClass + ")");
 }
 
 // Task 29 replaces this with the real conversion (it needs DescribeAlias).
@@ -136,7 +139,7 @@ json ObjectToJson(const RE::BSScript::Object& obj)
     if (policy->HandleIsType(RE::BGSRefAlias::VMTYPEID, handle) || policy->HandleIsType(RE::BGSLocAlias::VMTYPEID, handle))
         return AliasObjectToJson(policy, handle);
     const auto* cls = obj.GetTypeInfo();
-    throw ProtocolError(ErrorCode::unsupported, std::string("the result is a ") + (cls ? cls->GetName() : "script") +
+    throw ProtocolError(ErrorCode::unsupported, std::string("the result is a ") + (cls ? canonical_script_name(cls->GetName()) : "script") +
         " object, which protocol v1 cannot return (for example ActiveMagicEffect)");
 }
 }
@@ -149,10 +152,14 @@ json FloatToJson(float f)
     return value_to_json(v);
 }
 
+// The one place a form's class name is made: DescribeForm's type, Fingerprint.type and LiveFingerprint all come from
+// here, so they agree (core's fingerprint comparison is case-sensitive). The VM's GetName() gave WEAPON and SPELL on
+// the box (Task 28): canonical_script_name gives the .psc spelling (R56). Lookups by name (IsA, FindBoundObject,
+// GetScriptObjectType) are case-insensitive and take the names as they are.
 std::string ScriptClassOf(const RE::TESForm* form)
 {
     RE::BSTSmartPointer<RE::BSScript::ObjectTypeInfo> info;
-    if (VM()->GetScriptObjectType(static_cast<RE::VMTypeID>(form->GetFormType()), info) && info) return info->GetName();
+    if (VM()->GetScriptObjectType(static_cast<RE::VMTypeID>(form->GetFormType()), info) && info) return canonical_script_name(info->GetName());
     return "Form";
 }
 
@@ -162,7 +169,9 @@ RE::TESForm* ResolveForm(const FormRef& r)
     const bool runtime = !r.form_key && r.form_id && is_runtime_form_id(*r.form_id);
     if (r.form_key) {
         const auto k = parse_form_key(*r.form_key).value();  // validated when the request was parsed
-        form = RE::TESDataHandler::GetSingleton()->LookupForm(k.local_id, k.plugin);
+        auto* dh = RE::TESDataHandler::GetSingleton();
+        if (!dh) throw ProtocolError(ErrorCode::not_ready, "the game's data handler is not available yet");
+        form = dh->LookupForm(k.local_id, k.plugin);
         if (!form) throw ProtocolError(ErrorCode::not_found, "no form " + *r.form_key + " (is " + k.plugin + " loaded?)");
     } else {
         form = RE::TESForm::LookupByID(*r.form_id);
@@ -193,9 +202,9 @@ std::string TypeName(const TypeInfo& t)
     // S7). The class pointer of an object array is raw & ~1.
     if (t.IsObjectArray()) {
         const auto* cls = reinterpret_cast<const RE::BSScript::ObjectTypeInfo*>(static_cast<std::uintptr_t>(t.GetRawType()) & ~std::uintptr_t{1});
-        return std::string(cls ? cls->GetName() : "Object") + "[]";
+        return (cls ? canonical_script_name(cls->GetName()) : std::string("Object")) + "[]";
     }
-    if (t.IsObject() && t.GetTypeInfo()) return t.GetTypeInfo()->GetName();
+    if (t.IsObject() && t.GetTypeInfo()) return canonical_script_name(t.GetTypeInfo()->GetName());
     switch (t.GetRawType()) {
     case Raw::kInt: return "Int";
     case Raw::kFloat: return "Float";
@@ -291,7 +300,8 @@ json FromVariable(const Variable& v)
         auto arr = v.GetArray();
         if (!arr) return nullptr;
         // Results are not capped at 128 (index Contracts): SKSE and PapyrusUtil natives can return longer arrays.
-        // Verify whether BSScript::Array exposes a lock; if so hold it while copying (a Papyrus thread may resize it).
+        // Copied without the Array's BSSpinLock, which is private in the pinned CommonLib. Acceptable because this
+        // conversion runs inside an SKSE task (R49).
         json items = json::array();
         for (std::uint32_t i = 0; i < arr->size(); ++i) items.push_back(FromVariable((*arr)[i]));
         std::string elem;

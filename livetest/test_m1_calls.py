@@ -49,7 +49,10 @@ def test_static_int_call(game):
 def test_primitive_result_types(game):
     assert game.call("Game", "IsPluginInstalled", "Skyrim.esm") is True                  # Bool
     assert 0.0 <= game.call("Utility", "RandomFloat", 0.0, 1.0) <= 1.0                   # Float
-    assert game.call("StringUtil", "Substring", "hello", 1, 3) == "ell"                  # String (SKSE)
+    # Game strings come back in the casing the engine's string pool already holds (CreateStringArray(2, "x") gave
+    # ['X', 'X'], Task 28), so a string the game built is compared case-insensitively.
+    s = game.call("StringUtil", "Substring", "hello", 1, 3)                              # String (SKSE)
+    assert isinstance(s, str) and s.lower() == "ell"
     assert game.call("StringUtil", "GetLength", "hello") == 5                            # Int
 
 
@@ -154,10 +157,10 @@ def test_static_call_returns_form(game):
 
 def test_form_argument_round_trip(game):
     sword = game.call("Game", "GetFormFromFile", 0x012EB7, "Skyrim.esm")
-    # The VM spells some class names in capitals: GetScriptObjectType(VMTypeID).GetName() gave WEAPON and SPELL on the
-    # box (Actor, ActorBase, Armor, MiscObject, Quest, Ammo, MagicEffect as in the .psc). Task 28 records it; Papyrus
-    # names are case-insensitive.
-    assert sword.form_key == IRON_SWORD and sword.type.lower() == "weapon"
+    # The VM's GetScriptObjectType(VMTypeID).GetName() gave WEAPON and SPELL on the box (Task 28); the plugin maps
+    # engine class names to their .psc spelling (R56), so type is exact.
+    assert sword.form_key == IRON_SWORD and sword.type == "Weapon"
+    assert game.call("Game", "GetFormFromFile", 0x012FCD, "Skyrim.esm").type == "Spell"  # Flames
     # A Form parameter given a Weapon. False is also what a None argument gives; the next line proves the form arrives:
     # SKSE's CreateFormArray fills the array with the argument and returns it (None if the native never ran, which is
     # what a value typed as WEAPON instead of the declared Form gave before Task 28's fix).
@@ -170,6 +173,14 @@ def test_form_of_the_wrong_class_is_rejected_before_dispatch(game):
     sword = game.call("Game", "GetFormFromFile", 0x012EB7, "Skyrim.esm")
     with pytest.raises(errors.TypeMismatch, match="argument 0 of Debug.SendAnimationEvent"):  # natives: param1..N (S7a)
         game.call("Debug", "SendAnimationEvent", sword, "x")
+
+
+def test_actor_for_an_object_reference_parameter(game):
+    # A non-Form ancestor: SendAnimationEvent's parameter is declared ObjectReference and gets an Actor, so BindObject
+    # re-types the value to ObjectReference. No TypeMismatch, no crash; an unknown event does nothing and returns None.
+    player = game.call("Game", "GetPlayer")
+    assert game.call("Debug", "SendAnimationEvent", player, "SkythonNoSuchEvent") is None
+    assert 1 <= game.call("Utility", "RandomInt", 1, 6) <= 6  # the VM and the game carry on
 
 
 def test_none_for_an_object_parameter(game):
@@ -219,3 +230,4 @@ def test_light_plugin_form_key(game):
         pytest.skip(f"{name} is not installed on this game")
     f = game.call("Game", "GetFormFromFile", 0x800, name)
     assert f.form_key == f"{name}|0x000800" and (f.form_id >> 24) == 0xFE
+    assert game.call("Utility", "CreateFormArray", 1, f) == [f]  # a light form as an argument and back

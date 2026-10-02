@@ -11,7 +11,7 @@ RE::TESForm* ResolveForm(const FormRef& ref);            // Task 28. throws not_
 RE::BGSBaseAlias* ResolveAlias(const AliasRef& ref);     // Task 29. throws not_found / type_mismatch
 FormRef DescribeForm(const RE::TESForm* form);           // Task 27
 AliasRef DescribeAlias(const RE::BGSBaseAlias* alias);   // Task 29
-std::string ScriptClassOf(const RE::TESForm* form);      // Task 27. "Actor", "Weapon", ...; "Form" if unknown
+std::string ScriptClassOf(const RE::TESForm* form);      // Task 27. "Actor", "Weapon", ... in the .psc spelling (R56); "Form" if unknown
 
 struct Target
 {
