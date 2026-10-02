@@ -127,6 +127,16 @@ TEST_CASE("event filter: AND across fields, OR within one; forms by id; strings 
     CHECK(spy::filter_matches(stage, "quest_stage", {{"quest", form(1)}, {"stage", 20}}));
     CHECK_FALSE(spy::filter_matches(stage, "quest_stage", {{"quest", form(1)}, {"stage", 30}}));
     CHECK(spy::filter_matches(spy::EventFilter{}, "death", json::object()));  // no filter: everything matches
+
+    // A parsed filter caches its event and field entries; a hand-built one (no cache) matches the same way.
+    CHECK(menu.spec == spy::find_event("menu_open"));
+    REQUIRE(menu.fields.size() == 1);
+    CHECK(menu.fields[0]->name == "menu");
+    spy::EventFilter by_hand;
+    by_hand.any_of.emplace_back("menu", std::vector<json>{"inventory menu"});
+    CHECK(spy::filter_matches(by_hand, "menu_open", {{"menu", "Inventory Menu"}}));
+    CHECK_FALSE(spy::filter_matches(by_hand, "menu_open", {{"menu", "Magic Menu"}}));
+    CHECK_FALSE(spy::filter_matches(menu, "no_such_event", {{"menu", "Inventory Menu"}}));
 }
 
 TEST_CASE("EventHub: Subscribe answers sub, event and max_queue; ids start at 1 and are never reused")
@@ -463,7 +473,7 @@ TEST_CASE("EventHub: Next waits for an event, times out empty, returns at once f
     CHECK(got.empty());
 }
 
-TEST_CASE("EventHub: a Next that starts after Unsubscribe returned never sees that subscription")
+TEST_CASE("EventHub: Unsubscribe while pushers and a reader run: Nexts started after it returned never deliver that subscription; the other keeps delivering")
 {
     spy::EventHub hub({});
     const auto c = hub.OpenConsumer();
@@ -496,6 +506,87 @@ TEST_CASE("EventHub: a Next that starts after Unsubscribe returned never sees th
     reader.join();
     CHECK(violations == 0);
     CHECK(b_after > 0);  // the other subscription kept delivering
+}
+
+namespace {
+// A reader loops Next while a pusher pushes; mid-stream the main thread calls `stop_consumer` (CloseConsumer, or
+// Unsubscribe of every subscription). No crash or hang (TSan build), and every Next started after it returned is empty.
+void close_mid_stream(bool unsubscribe)
+{
+    for (int round = 0; round < 20; ++round) {
+        spy::EventHub hub({});
+        const auto c = hub.OpenConsumer();
+        const auto other = hub.OpenConsumer();  // its own subscription is left alone
+        const spy::SubId subs[2] = {subscribe(hub, c, "channel", nullptr, 32), subscribe(hub, c, "channel", {{"channel", json::array({"a"})}})};
+        subscribe(hub, other, "death");
+        std::atomic<bool> stop{false}, stopped{false};
+        std::atomic<int> before{0}, after_nonempty{0}, after_calls{0};
+        std::thread pusher([&] {
+            while (!stop) hub.Push("channel", channel("a"));
+        });
+        std::thread reader([&] {
+            while (!stop) {
+                const bool after = stopped.load();
+                const auto got = hub.Next(c, 1ms);
+                if (!after) before += static_cast<int>(got.size());
+                else {
+                    ++after_calls;
+                    if (!got.empty()) ++after_nonempty;
+                }
+            }
+        });
+        while (before.load() == 0) std::this_thread::yield();  // mid-stream: the reader is receiving
+        if (unsubscribe)
+            for (auto id : subs) hub.Unsubscribe(c, id);
+        else
+            hub.CloseConsumer(c);
+        stopped = true;
+        while (after_calls.load() < 5) std::this_thread::yield();
+        stop = true;
+        pusher.join();
+        reader.join();
+        CHECK(after_nonempty == 0);
+        CHECK(hub.Next(c, 0ms).empty());
+        CHECK(hub.Subscriptions() == 1);  // only the other consumer's
+        hub.CloseConsumer(c);             // idempotent after a CloseConsumer
+        hub.CloseConsumer(other);
+        CHECK(hub.Consumers() == 0);
+        CHECK(hub.Subscriptions() == 0);
+        CHECK_FALSE(hub.Wants("channel"));
+    }
+}
+}
+
+TEST_CASE("EventHub: CloseConsumer mid-stream while a reader loops Next and a pusher pushes: no crash or hang, later Nexts are empty")
+{
+    close_mid_stream(false);
+}
+
+TEST_CASE("EventHub: Unsubscribe mid-stream while a reader loops Next and a pusher pushes: no crash or hang, later Nexts are empty")
+{
+    close_mid_stream(true);
+}
+
+TEST_CASE("EventHub: Next with milliseconds::max() is clamped: it does not overflow and still returns when an event arrives")
+{
+    spy::EventHub hub({});
+    const auto c = hub.OpenConsumer();
+    subscribe(hub, c, "channel");
+    std::vector<std::string> got;
+    std::thread waiter([&] { got = hub.Next(c, std::chrono::milliseconds::max()); });
+    std::this_thread::sleep_for(50ms);
+    const auto t0 = std::chrono::steady_clock::now();
+    hub.Push("channel", channel("late"));
+    waiter.join();
+    CHECK(std::chrono::steady_clock::now() - t0 < 1s);
+    REQUIRE(got.size() == 1);  // an overflowed deadline would have returned empty at once, before the push
+    CHECK(json::parse(got[0])["data"]["channel"] == "late");
+
+    std::thread closed([&] { got = hub.Next(c, std::chrono::milliseconds::max()); });
+    std::this_thread::sleep_for(50ms);
+    hub.CloseConsumer(c);
+    closed.join();
+    CHECK(got.empty());
 }
 
 TEST_CASE("EventHub: 8 pushers x 100000 with 2 consumers draining: no deadlock, delivered + dropped = accepted")

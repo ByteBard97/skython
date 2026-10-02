@@ -24,7 +24,15 @@ using ConsumerId = std::uint64_t;  // from a counter, never reused, starts at 1;
 
 // A validated filter (PROTOCOL.md, Events): every listed field's value must be one of its values. Values are
 // normalised by parse_event_filter: form fields hold form ids, int fields Papyrus Ints, string fields ASCII-lowercased text.
-struct EventFilter { std::vector<std::pair<std::string, std::vector<json>>> any_of; };  // validated; empty = match all
+struct EventFilter
+{
+    std::vector<std::pair<std::string, std::vector<json>>> any_of;  // validated; empty = match all
+    // Set by parse_event_filter so a push never looks them up: the event's table entry and, parallel to any_of, each
+    // field's entry (both point into the static protocol tables). A filter built by hand leaves them empty and
+    // filter_matches looks the fields up instead.
+    const EventSpec* spec = nullptr;
+    std::vector<const EventField*> fields;
+};
 // `filter` null means no filter. Checks field names against the event's table entry, value types, at most
 // kMaxFilterValues values per field, and filter_required_any_of.
 EventFilter parse_event_filter(std::string_view event, const json& filter);  // throws ProtocolError(bad_request)

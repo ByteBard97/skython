@@ -35,6 +35,15 @@ std::string lower(std::string_view s)
     return out;
 }
 
+// a equals b ignoring ASCII case, where b is already lowercase; allocates nothing.
+bool equals_lowered(std::string_view a, std::string_view lowered)
+{
+    if (a.size() != lowered.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i)
+        if (ascii_lower(a[i]) != lowered[i]) return false;
+    return true;
+}
+
 std::string join(std::span<const std::string_view> names, std::string_view last_sep)
 {
     std::string out;
@@ -91,6 +100,7 @@ EventFilter parse_event_filter(std::string_view event, const json& filter)
             norm.reserve(values.size());
             for (const auto& v : values) norm.push_back(normalise(s, *f, v));
             out.any_of.emplace_back(field, std::move(norm));
+            out.fields.push_back(f);
         }
     }
     if (!s.filter_required_any_of.empty()) {
@@ -98,16 +108,21 @@ EventFilter parse_event_filter(std::string_view event, const json& filter)
                                        [&](const auto& p) { return contains(s.filter_required_any_of, p.first); });
         if (!named) bad(std::string(s.name) + " needs a filter on " + join(s.filter_required_any_of, " or "));
     }
+    out.spec = &s;
     return out;
 }
 
-bool filter_matches(const EventFilter& filter, std::string_view event, const json& data)
+namespace {
+// filter_matches with the event's table entry already looked up (Push does it once per call, not per subscription).
+// Uses the filter's cached field entries when it was parsed for this event; looks them up for a hand-built filter.
+bool filter_matches_spec(const EventFilter& filter, const EventSpec& s, const json& data)
 {
     if (filter.any_of.empty()) return true;
-    const EventSpec* s = find_event(event);
-    if (s == nullptr || !data.is_object()) return false;
-    for (const auto& [field, values] : filter.any_of) {
-        const EventField* f = field_of(*s, field);
+    if (!data.is_object()) return false;
+    const bool cached = filter.spec == &s && filter.fields.size() == filter.any_of.size();
+    for (std::size_t i = 0; i < filter.any_of.size(); ++i) {
+        const auto& [field, values] = filter.any_of[i];
+        const EventField* f = cached ? filter.fields[i] : field_of(s, field);
         const auto it = data.find(field);
         if (f == nullptr || it == data.end() || it->is_null()) return false;
         bool hit = false;
@@ -126,8 +141,9 @@ bool filter_matches(const EventFilter& filter, std::string_view event, const jso
             break;
         case EventFieldType::string:
             if (it->is_string()) {
-                const std::string text = lower(it->get_ref<const std::string&>());
-                hit = std::any_of(values.begin(), values.end(), [&](const json& v) { return v.get_ref<const std::string&>() == text; });
+                const std::string& text = it->get_ref<const std::string&>();
+                hit = std::any_of(values.begin(), values.end(),
+                                  [&](const json& v) { return equals_lowered(text, v.get_ref<const std::string&>()); });
             }
             break;
         default:
@@ -136,6 +152,18 @@ bool filter_matches(const EventFilter& filter, std::string_view event, const jso
         if (!hit) return false;
     }
     return true;
+}
+}
+
+bool filter_matches(const EventFilter& filter, std::string_view event, const json& data)
+{
+    if (filter.any_of.empty()) return true;
+    const EventSpec* s = find_event(event);
+    return s != nullptr && filter_matches_spec(filter, *s, data);
+}
+
+namespace {
+constexpr std::chrono::milliseconds kMaxNextWait = std::chrono::hours(1);  // Next's longest single wait
 }
 
 EventHub::EventHub(EventHubOptions options) : options_(std::move(options)) {}
@@ -281,16 +309,22 @@ void EventHub::Push(std::string_view event, json data)
                 const auto it = subs_.find(id);
                 if (it == subs_.end()) continue;
                 Sub& s = it->second;
-                if (!filter_matches(s.filter, event, *shared)) continue;
+                if (!filter_matches_spec(s.filter, *spec, *shared)) continue;
                 if (suppress) {
                     ++s.suppressed;
                     ++suppressed_total_;
                     continue;
                 }
                 Consumer& c = consumers_.at(s.consumer);
-                ++s.seq;
                 if (s.queue.size() >= s.max_queue) DropOldestLocked(s, c);  // drop-oldest
-                s.queue.push_back({order, s.seq, epoch, bytes, shared});
+                ++s.seq;  // accepted: delivered, or counted in dropped (so the seq gap always equals dropped)
+                try {
+                    s.queue.push_back({order, s.seq, epoch, bytes, shared});
+                } catch (...) {  // allocation failure: this subscription loses this event, counted like a drop
+                    ++s.dropped;
+                    ++dropped_total_;
+                    continue;
+                }
                 ++c.queued;
                 c.bytes += bytes;
                 // R61: the consumer's byte budget. The pushed subscription's oldest go first; when it has nothing
@@ -324,10 +358,13 @@ std::vector<std::string> EventHub::Next(ConsumerId consumer, std::chrono::millis
         const auto found = consumers_.find(consumer);
         if (found == consumers_.end()) return {};
         const std::shared_ptr<std::condition_variable> cv = found->second.cv;  // outlives an erase by CloseConsumer
-        cv->wait_for(lk, max_wait, [&] {
+        // Clamped: wait_for adds max_wait to steady_clock::now(), which overflows for milliseconds::max().
+        cv->wait_for(lk, std::min(max_wait, kMaxNextWait), [&] {
             const auto c = consumers_.find(consumer);
             return c == consumers_.end() || c->second.queued > 0;
         });
+        // queued can be 0 after a wake-up with time left: another Next on this consumer took the events first (or the
+        // clamp elapsed). Returning empty early is allowed; callers loop on Next.
         const auto c = consumers_.find(consumer);
         if (c == consumers_.end() || c->second.queued == 0) return {};
         drain = c->second.drain;
