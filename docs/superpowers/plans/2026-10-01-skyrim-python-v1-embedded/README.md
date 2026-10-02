@@ -237,6 +237,7 @@ Fixed paths:
 | 0 | [Repository bootstrap, vendored headers, pinned CPython](task-00-repository-bootstrap.md) | Linux | - |
 | 1 | [Build tooling and a spike DLL that loads](task-01-build-tooling-and-spike-dll.md) | Windows box + game | 0 |
 | 1b | [Game harness on the Windows box](task-01b-box-game-harness.md) | Windows box + game | 1 |
+| 1c | [Part C on the Windows box (substitutions for Tasks 25-32)](task-01c-part-c-on-the-box.md) | (table only) | 1b |
 | 2 | [Spike S1: Linux reaches a socket inside Proton (spike harness)](task-02-spike-s1-harness-socket.md) | Windows box + game | 1 |
 | 3 | [Spike S8: two-DLL load and CPython embedded in the game; Python socket from Linux](task-03-spike-s8-embedded-cpython.md) | Windows box + game | 2 |
 | 4 | [Spike S2: VM callback thread, nested dispatch, argument ownership](task-04-spike-s2-vm-callback-thread.md) | Windows box + game | 3 |
@@ -267,6 +268,8 @@ Fixed paths:
 | 24 | [`skyrim._host`: logging, script loader, reload, bridge startup](task-24-python-host.md) | Linux | 23 |
 
 ### Part C: M1 plugin
+
+Tasks 25-32 run the game on the Windows box through Task 1c's substitution table: the box tools (`tools/box/box_deploy.sh`, `box_launch.sh`, `box_stop.sh`, `box_wait_log.sh`, `box_session.sh`, `box_files.sh`, `box_saves.sh`) replace `tools/deploy.sh`, `launch_game.sh`, `wait_for_log.sh` and `env.sh`; Linux live tests reach the dev bridge through `box_session.sh` (an ssh tunnel and a local `out/box-session.json`, mode 600, which holds the runtime token and is never committed) with `SKYRIM_PYTHON_BOX=1` for `livetest/support.py`'s box mode. Run `tools/box/box_setup.sh` once before the first Part C step. Every box tool refuses to reach the box when `BOX_OFFLINE=1` (the offline tests set it).
 
 | # | Task | Runs on | Depends on |
 |---|---|---|---|
