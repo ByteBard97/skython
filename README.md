@@ -102,16 +102,29 @@ The source in this repository is MIT (`LICENSE`).
 
 ### Third-party software
 
-Compiled into the plugin DLLs:
+Vendored in this repository:
 
-| Component | Where it comes from | Licence |
-|---|---|---|
-| CommonLibSSE-NG 10.1.0 (commit `39f9d07`) | `plugin/extern/CommonLibSSE-NG` (submodule), statically linked into both DLLs | GPL-3.0-or-later with the Modding Exception and GPL-3.0 Linking Exception in its `EXCEPTIONS.md` (its `COPYING.txt`, `README.md`, `vcpkg.json`; earlier versions were MIT) |
-| pybind11 3.1.0 | `third_party/pybind11` (headers), in `SkythonCore.dll` | BSD-3-Clause (`third_party/pybind11/LICENSE`) |
-| nlohmann/json 3.11.3 | `third_party/nlohmann/json.hpp`, in `SkythonCore.dll` | MIT (SPDX header in the file) |
-| spdlog | vcpkg (CommonLibSSE-NG's logging) | MIT upstream; not checked against a local copy |
-| fmt, DirectXTK, DirectXMath, rapidcsv, SimpleIni | vcpkg, pulled in by CommonLibSSE-NG and `plugin/vcpkg.json` | not checked locally |
+| Component | Where | Used in | Licence |
+|---|---|---|---|
+| CommonLibSSE-NG 10.1.0 (commit `39f9d07`) | `plugin/extern/CommonLibSSE-NG` (git submodule) | statically linked into both DLLs | GPL-3.0-or-later with the Modding Exception and GPL-3.0 Linking Exception in its `EXCEPTIONS.md` (its `COPYING.txt`, `README.md`, `vcpkg.json`; earlier versions were MIT) |
+| pybind11 3.1.0 | `third_party/pybind11` (headers) | `SkythonCore.dll`, the Linux test module | BSD-3-Clause (`third_party/pybind11/LICENSE`) |
+| nlohmann/json 3.11.3 | `third_party/nlohmann/json.hpp` | `SkythonCore.dll`, core tests | MIT (`third_party/nlohmann/LICENSE.MIT`) |
+| doctest 2.4.11 | `third_party/doctest/doctest.h` | core tests only, never shipped | MIT (`third_party/doctest/LICENSE.txt`) |
 
-Bundled with the mod: the CPython 3.14.8 embeddable runtime, under the PSF License Agreement, shipped with its own `LICENSE.txt` as `Skython/python/LICENSE.txt` (that file also covers components the Windows build bundles, such as libffi and Zstandard).
+Fetched at build time:
 
-Because both DLLs statically link CommonLibSSE-NG, they are a combined work with a GPL-3.0-or-later library. Under which terms the built DLLs may be distributed is an open question for the project owner; until it is settled, this README makes no claim that the compiled plugin is MIT.
+| Component | Where | Used in | Licence |
+|---|---|---|---|
+| CPython 3.14.8 embeddable runtime and NuGet headers | `tools/fetch_python.sh` into `third_party/cpython/` (gitignored, SHA-256s in `docs/PINS.md`) | bundled with the mod as `Skython/python/` | PSF License Agreement, shipped as `Skython/python/LICENSE.txt` (that file also covers components the Windows build bundles, such as libffi and Zstandard) |
+| spdlog | vcpkg (`plugin/vcpkg.json`, CommonLibSSE-NG) | both DLLs | MIT |
+| fmt | vcpkg (CommonLibSSE-NG, spdlog) | both DLLs | MIT |
+| rapidcsv | vcpkg (`plugin/vcpkg.json`, CommonLibSSE-NG) | CommonLibSSE-NG | BSD-3-Clause |
+| DirectXTK, DirectXMath | vcpkg (`plugin/vcpkg.json`, CommonLibSSE-NG) | CommonLibSSE-NG | MIT |
+| SimpleIni | vcpkg (CommonLibSSE-NG) | CommonLibSSE-NG, where it uses it | MIT |
+| toml11 | vcpkg (CommonLibSSE-NG) | CommonLibSSE-NG, where it uses it | MIT |
+| xbyak | vcpkg (CommonLibSSE-NG) | CommonLibSSE-NG, where it uses it | BSD-3-Clause |
+| nlohmann-json (vcpkg copy) | vcpkg (CommonLibSSE-NG) | CommonLibSSE-NG, where it uses it | MIT |
+
+The vcpkg licences are the upstream projects' licences; vcpkg installs each package's licence file under `share/<package>/copyright`.
+
+Both DLLs statically link CommonLibSSE-NG, so they are a combined work with a GPL-3.0-or-later library. The terms for distributing the built DLLs are not settled yet, so this README does not claim that the compiled plugin is MIT. The source is MIT.
