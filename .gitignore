@@ -38,3 +38,6 @@ plugin/build-options.local
 testesp/builder/bin/
 testesp/builder/obj/
 .playwright-mcp/
+OWNER-DECISIONS-*.md
+QUESTIONS-*.md
+.claude/
