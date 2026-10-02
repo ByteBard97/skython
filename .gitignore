@@ -46,3 +46,4 @@ QUESTIONS-*.md
 .claude/
 # the Windows test box's machine settings (host, user, game folders); see tools/box/box.local.env.example
 tools/box/box.local.env
+KIMI-*.md
