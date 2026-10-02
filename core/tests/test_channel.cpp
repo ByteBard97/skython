@@ -60,6 +60,18 @@ TEST_CASE("channel: the cut never splits a UTF-8 sequence")
     }
 }
 
+TEST_CASE("channel: a lead byte at the limit and stray continuation bytes at the cut")
+{
+    // A sequence that starts exactly at the limit is cut whole: everything before it stays.
+    auto lead = make_channel_event("c", std::string(spy::kMaxChannelPayloadBytes, 'a') + "\xC3\xA9");
+    CHECK(payload_of(lead).size() == spy::kMaxChannelPayloadBytes);
+    CHECK((*lead)["truncated"] == true);
+    // Invalid UTF-8 (a run of continuation bytes) across the cut: it backs up at most 3 bytes, never further.
+    auto stray = make_channel_event("c", std::string(spy::kMaxChannelPayloadBytes - 5, 'a') + std::string(10, '\x80'));
+    CHECK(payload_of(stray).size() == spy::kMaxChannelPayloadBytes - 3);
+    CHECK((*stray)["truncated"] == true);
+}
+
 TEST_CASE("channel: an empty or over-long channel is dropped")
 {
     CHECK_FALSE(make_channel_event("", "x"));

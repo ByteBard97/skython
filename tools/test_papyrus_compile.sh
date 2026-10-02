@@ -6,7 +6,7 @@ PC="$ROOT/tools/papyrus_compile.sh"
 fail=0
 ok()  { echo "ok   $*"; }
 bad() { echo "FAIL $*"; fail=1; }
-T="$(mktemp -d)"
+T="$ROOT/out/papyrus-compile-test"; mkdir -p "$T"  # gitignored, overwritten each run
 
 # 1. never a window on the owner's desktop: both display variables unset on the compiler's command line
 grep -qF 'env -u DISPLAY -u WAYLAND_DISPLAY' "$PC" && ok "the compiler runs with DISPLAY and WAYLAND_DISPLAY unset" \
@@ -28,6 +28,9 @@ printf 'ScriptName Broken\nFunction X(\n' > "$T/Broken.psc"
 # 5. argument checks
 if "$PC" "$ROOT/plugin/papyrus/Skython.psc" >/dev/null 2>&1; then bad "accepted no -o"; else ok "refuses without -o"; fi
 if "$PC" "$T/nope.psc" -o "$T/x" >/dev/null 2>&1; then bad "accepted a missing source"; else ok "refuses a missing source"; fi
+mkdir -p "$T/dup"; cp "$T/Broken.psc" "$T/dup/Broken.psc"
+dup="$("$PC" "$T/Broken.psc" "$T/dup/Broken.psc" -o "$T/x" 2>&1)"; rc=$?
+if [ "$rc" != 0 ] && grep -q 'two sources named Broken.psc' <<< "$dup"; then ok "refuses two sources with one name"; else bad "accepted two sources named Broken.psc"; fi
 if "$PC" --stable-hash "$T/Broken.psc" >/dev/null 2>&1; then bad "--stable-hash accepted a non-.pex"; else ok "--stable-hash refuses a non-.pex"; fi
 # 6. the vanilla script sources live only under out/ (gitignored, never committed)
 d="$("$PC" --vanilla-dir 2>/dev/null)"

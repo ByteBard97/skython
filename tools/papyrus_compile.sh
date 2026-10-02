@@ -71,7 +71,9 @@ while [ $# -gt 0 ]; do
     -o) out="${2:?-o needs a directory}"; shift 2 ;;
     -i) [ -d "${2:?-i needs a directory}" ] || die "no such import dir: $2"; imports+=("$(cd "$2" && pwd)"); shift 2 ;;
     -*) die "unknown option $1" ;;
-    *.psc) [ -f "$1" ] || die "no such source: $1"; sources+=("$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"); shift ;;
+    *.psc) [ -f "$1" ] || die "no such source: $1"
+           for s in "${sources[@]}"; do [ "$(basename "$s")" != "$(basename "$1")" ] || die "two sources named $(basename "$1") (the second .pex would replace the first)"; done
+           sources+=("$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"); shift ;;
     *) die "not a .psc: $1" ;;
   esac
 done
@@ -81,7 +83,8 @@ done
 [ -x "$PAPYRUS_WINE" ] || die "no wine64 at $PAPYRUS_WINE"
 vanilla
 mkdir -p "$out"; out="$(cd "$out" && pwd)"
-start="$(mktemp)"; log="$(mktemp)"
+# Fixed, gitignored scratch files overwritten on every run (no temp files left behind); one compile at a time.
+work="$ROOT/out/papyrus-compile"; mkdir -p "$work"; start="$work/start"; log="$work/compiler.log"; touch "$start"
 for src in "${sources[@]}"; do
   # The compiler takes ONE -i (a second -i replaces the first): join the import dirs with ';'.
   dirs=("$(dirname "$src")" "${imports[@]}" "$ROOT/plugin/papyrus" "$VANILLA")
