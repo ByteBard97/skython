@@ -16,6 +16,26 @@ DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 "$PC" "$ROOT/plugin/papyrus/Skython.psc" -o
 magic="$(head -c4 "$T/out/Skython.pex" 2>/dev/null | od -An -tx1 | tr -d ' \n')"
 [ "$rc" = 0 ] && [ -s "$T/out/Skython.pex" ] && [ "$magic" = fa57c0de ] && ok "Skython.psc -> non-empty Skython.pex" \
   || { bad "compiling Skython.psc: rc=$rc magic=$magic"; tail -5 "$T/log"; }
+# 2b. the fresh .pex names no real user or machine: its header carries the fixed "skython" / "build", and no string in
+#     the file is this account's name or this machine's host name
+hdr="$(python3 - "$T/out/Skython.pex" <<'PY' 2>/dev/null
+import struct, sys
+b = open(sys.argv[1], "rb").read(); pos = 16; out = []
+for _ in range(3):
+    (n,) = struct.unpack_from(">H", b, pos); out.append(b[pos + 2:pos + 2 + n].decode("latin-1")); pos += 2 + n
+print(out[1], out[2])
+PY
+)"
+[ "$hdr" = "skython build" ] && ok "fresh .pex header: user skython, machine build" || bad "fresh .pex header user/machine: '$hdr'"
+me="$(id -un)"; host="$(hostname)"
+if strings -n 3 "$T/out/Skython.pex" | grep -qixF -e "$me" -e "$host"; then
+  bad "the fresh .pex contains the account name '$me' or host name '$host'"
+else
+  ok "the fresh .pex contains neither the account name nor the host name"
+fi
+for f in "$ROOT/plugin/papyrus/compiled/"*.pex "$ROOT/testesp/compiled/"*.pex; do
+  if strings -n 3 "$f" | grep -qixF -e "$me" -e "$host"; then bad "${f#$ROOT/} contains the account or host name"; fi
+done
 # 3. a fresh build has the committed file's stable hash, and docs/PINS.md records it
 a="$("$PC" --stable-hash "$T/out/Skython.pex" 2>/dev/null | cut -d' ' -f1)"
 b="$("$PC" --stable-hash "$ROOT/plugin/papyrus/compiled/Skython.pex" 2>/dev/null | cut -d' ' -f1)"

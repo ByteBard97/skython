@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Rebuild the test plugin and its Papyrus scripts, then compare them with the pins in docs/PINS.md (Task 48).
+# Rebuild the test plugin and its Papyrus scripts, then compare them with the pins in docs/PINS.md.
 # Usage: testesp/build.sh               build into testesp/ (SkythonTest.esp, compiled/*.pex) and compare
 #        testesp/build.sh --check       build into out/testesp-check/ and compare; the committed files are untouched
 #        testesp/build.sh --print-pins  build into out/testesp-check/ and print the pin lines for docs/PINS.md
 # Pins are lines "- pin <path> sha256 <hex>" (the ESP: Mutagen's output is byte-identical across builds) and
 # "- pin <path> stable <hex>" (a .pex: tools/papyrus_compile.sh --stable-hash). Exit 0 only when every pin matches and
-# Mutagen's read-back equals testesp/expected-dump.txt. A mismatch without a source change that explains it is a STOP.
+# Mutagen's read-back equals testesp/expected-dump.txt. If a pin differs and no source changed, something in the
+# toolchain changed; find out what before re-pinning.
 # Offline only: dotnet restores from ~/.nuget/packages and never from the network. The full build copies a cell record
 # and a location record from the installed Skyrim.esm (path: SKYTHON_SKYRIM_ESM, else TestEsp.DefaultSkyrimEsm).
 set -euo pipefail

@@ -3,8 +3,8 @@ using System.IO;
 
 namespace SkythonTestEsp
 {
-    // Usage: SkythonTestEspBuilder spike <out_dir>   -> <out_dir>/SkythonTest.esp (Task 47: the VMAD spike)
-    //        SkythonTestEspBuilder full <out_dir>    -> <out_dir>/SkythonTest.esp (Task 48: the test plugin; reads
+    // Usage: SkythonTestEspBuilder spike <out_dir>   -> <out_dir>/SkythonTest.esp (the VMAD spike)
+    //        SkythonTestEspBuilder full <out_dir>    -> <out_dir>/SkythonTest.esp (the test plugin; reads
     //                                                  Skyrim.esm, path in SKYTHON_SKYRIM_ESM or TestEsp.DefaultSkyrimEsm)
     //        SkythonTestEspBuilder dump <file.esp>    -> a text summary of the plugin (offline tests)
     //        SkythonTestEspBuilder verify-esm <Skyrim.esm>  -> checks the Skyrim.esm FormKeys TestEsp uses

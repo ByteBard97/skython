@@ -6,4 +6,4 @@ This folder is a development tool, not part of Skython.
 - It is never distributed: `bin/` and `obj/` are gitignored and no binary built from it is committed.
 - No product code (`core/`, `plugin/`, `pyglue/`, `python/`) references this folder or Mutagen.
 - Its output, `SkythonTest.esp`, is test data written from the record values in these sources; it is committed with its SHA-256 in `docs/PINS.md`.
-- No code in this folder was copied from Mutagen, from Chronicle's patcher (AGPL, read only to see which package version works offline) or from any other project.
+- No code in this folder was copied from Mutagen or from any other project.

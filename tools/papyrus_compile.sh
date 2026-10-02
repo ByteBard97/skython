@@ -12,8 +12,13 @@
 # ("<n> succeeded, 0 failed") and from each .pex existing and being newer than this run's start.
 # A .pex holds the compile time (header bytes 8..15) and, in its debug info, the source file's modification time, so a
 # rebuild never matches a recorded raw SHA-256. --stable-hash zeroes both; it is the value docs/PINS.md compares across
-# rebuilds. The header also holds the source file name, user name and machine name, so the stable hash holds only for
-# the same file name, machine and account that built the recorded file.
+# rebuilds. The header also holds the user name and machine name of whoever compiled it. The compiler takes the user
+# from $USER (run here as USER=skython), and Wine takes the machine name from the host name, which no environment
+# variable changes. So after each compile this script rewrites both fields to fixed values (user "skython", machine
+# "build"), so a .pex never carries a personal name. USER matters beyond the header too: the order of the compiler's
+# string table changes with the user name it sees. With USER fixed, a build under a different host name gave the same
+# stable hash, so the pins do not depend on the account or machine. They do depend on the source file name, which is
+# also in the header.
 # Env (set in your shell or in tools/local.env, which is gitignored and read if present):
 #   PAPYRUS_COMPILER    PapyrusCompiler.exe (default: $SKYRIM_GAME_DIR/Papyrus Compiler/PapyrusCompiler.exe)
 #   PAPYRUS_WINEPREFIX  a Wine prefix to run it in (default: $SKYRIM_PREFIX)
@@ -51,6 +56,24 @@ def stable(path):
         b[pos + 1:pos + 9] = bytes(8)
     return hashlib.sha256(b).hexdigest()
 print(stable(sys.argv[1]))
+PY
+}
+NEUTRAL_USER=skython NEUTRAL_MACHINE=build
+neutral_header() {  # neutral_header <file.pex>: set the header's user and machine names to the fixed values, in place
+  python3 - "$1" "$NEUTRAL_USER" "$NEUTRAL_MACHINE" <<'PY'
+import struct, sys
+path, user, machine = sys.argv[1], sys.argv[2].encode(), sys.argv[3].encode()
+b = open(path, "rb").read()
+if b[:4] != bytes.fromhex("fa57c0de"):
+    sys.exit(f"not a Skyrim .pex: {path}")
+pos = 16
+(n,) = struct.unpack_from(">H", b, pos); pos += 2 + n          # source file name: kept
+start = pos
+for _ in range(2):                                             # user name, machine name: replaced
+    (n,) = struct.unpack_from(">H", b, pos); pos += 2 + n
+# Strings are length-prefixed and nothing later in the file holds an offset, so the fields can change length.
+new = struct.pack(">H", len(user)) + user + struct.pack(">H", len(machine)) + machine
+open(path, "wb").write(b[:start] + new + b[pos:])
 PY
 }
 vanilla() {  # extract the vanilla sources and the flags file once
@@ -99,13 +122,15 @@ for src in "${sources[@]}"; do
   dirs=("$(dirname "$src")" "${imports[@]}" "$ROOT/plugin/papyrus" "$VANILLA")
   imp=""; for d in "${dirs[@]}"; do imp+="${imp:+;}$(winpath "$d")"; done
   name="$(basename "$src")"
-  # env -u DISPLAY -u WAYLAND_DISPLAY: so no Wine window pops up (S5). WINEDEBUG=-all: quiet.
-  ( cd "$(dirname "$src")" && timeout 300 env -u DISPLAY -u WAYLAND_DISPLAY WINEPREFIX="$PAPYRUS_WINEPREFIX" WINEDEBUG=-all \
+  # env -u DISPLAY -u WAYLAND_DISPLAY: so no Wine window pops up (S5). USER: the name the compiler writes into the
+  # header (neutral_header sets it again, with the machine name, below). WINEDEBUG=-all: quiet.
+  ( cd "$(dirname "$src")" && timeout 300 env -u DISPLAY -u WAYLAND_DISPLAY USER="$NEUTRAL_USER" WINEPREFIX="$PAPYRUS_WINEPREFIX" WINEDEBUG=-all \
       "$PAPYRUS_WINE" "$PAPYRUS_COMPILER" "$name" -i="$imp" -o="$(winpath "$out")" -f=TESV_Papyrus_Flags.flg ) > "$log" 2>&1 || true
   tr -d '\r' < "$log" | grep -v '^wineserver:' || true
   pex="$out/${name%.psc}.pex"
   if ! tr -d '\r' < "$log" | grep -qE '^Batch compile of 1 files finished\. 1 succeeded, 0 failed\.$' || [ ! "$pex" -nt "$start" ]; then
     die "FAILED: $src (see the compiler output above)"
   fi
+  neutral_header "$pex" || die "could not rewrite the header of $pex"
   echo "compiled $src -> $pex ($(stat -c %s "$pex") bytes)"
 done

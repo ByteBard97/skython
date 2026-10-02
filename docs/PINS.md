@@ -1,21 +1,20 @@
 # Pins
 
-Recorded 2026-10-01 (Task 0). Later tasks cite this file instead of re-deriving.
+Exact versions and hashes the build and tests depend on. Recorded 2026-10-01; updated when a pin changes.
 
 ## CommonLibSSE-NG
 
 - Repository `https://github.com/alandtse/CommonLibSSE-NG`, branch `ng`, submodule `plugin/extern/CommonLibSSE-NG`.
 - Commit `39f9d07a6ffabea8fb559eee87ab7d27cd463e8a` (2026-09-30, `chore(release): 10.1.0 [skip ci]`), project version 10.1.0.
 - CHANGELOG mentions AE 1.7.99 and Address Library format 5; it does not mention 1.7.104 (support for 1.7.104 is unverified).
-- CMake options: `ENABLE_SKYRIM_SE`, `ENABLE_SKYRIM_AE`, `ENABLE_SKYRIM_VR`, `BUILD_TESTS` (as printed by Task 0 Step 3).
-- vcpkg packages the build needs (box tree 2026-08-24): `spdlog`, `rapidcsv`, `directxtk`.
-- Full signature notes: `docs/superpowers/plans/2026-10-01-skyrim-python-v1-embedded/API-VERIFICATION.md`.
+- CMake options: `ENABLE_SKYRIM_SE`, `ENABLE_SKYRIM_AE`, `ENABLE_SKYRIM_VR`, `BUILD_TESTS` (as printed by its CMake configure).
+- vcpkg packages the build needs (the Windows build machine's vcpkg tree, 2026-08-24): `spdlog`, `rapidcsv`, `directxtk`.
 
-### API names checked in the pinned checkout (Task 0 Step 5)
+### API names checked in the pinned checkout
 
 - `IVirtualMachine::FindBoundObject(VMHandle a_handle, const char* a_className, BSTSmartPointer<Object>& a_result) const` (IVirtualMachine.h:99, 3 parameters).
 - `DispatchStaticCall(const BSFixedString&, const BSFixedString&, IFunctionArguments*, BSTSmartPointer<IStackCallbackFunctor>&)` (IVirtualMachine.h:109, VirtualMachine.h:121); `DispatchMethodCall1(BSTSmartPointer<Object>&, fn, args, result&)` and `DispatchMethodCall2(VMHandle, className, fn, args, result&)` (virtual slots 27/28), plus non-virtual `DispatchMethodCall(...)` wrappers with both argument shapes (IVirtualMachine.h:130, 132).
-- `void PackHandle(Variable* a_dst, const void* a_src, VMTypeID a_typeID)` (PackUnpack.h:16; the literal `void PackHandle` grep misses it because the header column-aligns with spaces, `PackHandle` alone matches). A PackHandle value is typed as the form's own class; a native parameter declared as an ancestor class needs `SetObject(obj, declared.GetRawType())` (Task 28).
+- `void PackHandle(Variable* a_dst, const void* a_src, VMTypeID a_typeID)` (PackUnpack.h:16; the literal `void PackHandle` grep misses it because the header column-aligns with spaces, `PackHandle` alone matches). A PackHandle value is typed as the form's own class; a native parameter declared as an ancestor class needs `SetObject(obj, declared.GetRawType())`.
 - `BGSSaveLoadManager::Load(const char* a_fileName)` and `Load(const char* a_fileName, bool a_checkForMods)` (BGSSaveLoadManager.h:123-124).
 - `VMTYPEID`: `BGSBaseAlias` 139, `BGSRefAlias` 140, `BGSLocAlias` 141; `BGSBaseAlias::GetVMTypeID() const` exists (BGSBaseAlias.h:68).
 - `TESObjectREFR* BGSRefAlias::GetReference() const` (BGSRefAlias.h:150).
@@ -26,11 +25,11 @@ Recorded 2026-10-01 (Task 0). Later tasks cite this file instead of re-deriving.
 - `bool UI::GameIsPaused()` (UI.h:84).
 - `TaskInterface::AddTask(TaskDelegate*)`, `AddTask(std::function<void()>)`, `AddUITask(UIDelegate_v1*)`, `AddUITask(std::function<void()>)` (Interfaces.h:393-396).
 
-### S7 signatures checked in the pinned checkout (Task 9 Step 0, 2026-10-01)
+### Spike S7 signatures checked in the pinned checkout (2026-10-01)
 
-All calls in Task 9's S7 code match the pinned headers; no call had to change.
+Every call in the S7 spike code matches the pinned headers; no call had to change.
 - `FindBoundObject(VMHandle, const char* a_className, BSTSmartPointer<Object>& a_result) const` (IVirtualMachine.h:99, VirtualMachine.h:111): 3 parameters, as above.
-- `PackHandle(Variable*, const void*, VMTypeID)` (PackUnpack.h:16). A PackHandle value is typed as the form's own class; a native parameter declared as an ancestor class needs `SetObject(obj, declared.GetRawType())` (Task 28).
+- `PackHandle(Variable*, const void*, VMTypeID)` (PackUnpack.h:16). A PackHandle value is typed as the form's own class; a native parameter declared as an ancestor class needs `SetObject(obj, declared.GetRawType())`.
 - `DispatchMethodCall(BSTSmartPointer<Object>&, const BSFixedString& fn, IFunctionArguments*, BSTSmartPointer<IStackCallbackFunctor>&)` and `DispatchMethodCall(VMHandle, const BSFixedString& className, const BSFixedString& fn, IFunctionArguments*, BSTSmartPointer<IStackCallbackFunctor>&)` (IVirtualMachine.h:130, 132; virtual slots `DispatchMethodCall1/2` 27/28).
 - `BGSBaseAlias::GetVMTypeID() const` (BGSBaseAlias.h:68); `VMTYPEID` BGSBaseAlias 139, BGSRefAlias 140, BGSLocAlias 141.
 - `IFunction`: `GetReturnType() const -> TypeInfo` (04), `GetParamCount()` (05), `GetParam(std::uint32_t, BSFixedString&, TypeInfo&) const` (06), `GetIsNative()` (08), `GetIsStatic()` (09) (IFunction.h:51-56).
@@ -42,10 +41,10 @@ All calls in Task 9's S7 code match the pinned headers; no call had to change.
 - `TESForm::GetAllForms()` (static, returns the map pointer and its lock, TESForm.h:192).
 - `RE::Main` (Main.h): `REX::W32::HWND wnd` (+0x18), `std::uint32_t threadID` (+0x28); REX has `GetCurrentThreadId` (REX/W32/KERNEL32.h:455) but no `GetWindowThreadProcessId` wrapper, so the tid probe uses `<windows.h>`.
 
-Runtime findings from S7 on the box (2026-10-01; details in the S7 row of `spikes/RESULTS.md`):
-- `TypeInfo::GetTypeInfo()` on an OBJECT-ARRAY type is wrong in this commit: it masks the raw value with `~kObjectArray` (~0xB), which also clears bit 3 of the class pointer. ObjectTypeInfo pointers were observed only 8-byte aligned (Form 0x...ea8, Form[] 0x...ea9 -> GetTypeInfo 0x...ea0). It read a garbage name in one launch and crashed the game in the next (AV in ucrtbase strlen); DevBench's papyrus `describe` crashed the same way. For an object array the class pointer is `raw & ~1`; call `GetTypeInfo()` only when `IsObject()`.
+Runtime findings from S7 on the Windows test machine (2026-10-01; details in the S7 row of `spikes/RESULTS.md`):
+- `TypeInfo::GetTypeInfo()` on an OBJECT-ARRAY type is wrong in this commit: it masks the raw value with `~kObjectArray` (~0xB), which also clears bit 3 of the class pointer. ObjectTypeInfo pointers were observed only 8-byte aligned (Form 0x...ea8, Form[] 0x...ea9 -> GetTypeInfo 0x...ea0). It read a garbage name in one launch and crashed the game in the next (AV in ucrtbase strlen); DevBench's (alandtse's console tool) papyrus `describe` crashed the same way. For an object array the class pointer is `raw & ~1`; call `GetTypeInfo()` only when `IsObject()`.
 - `Array::type_info()` (the element type) reads 0 (None) on arrays returned by SKSE's Utility natives (CreateFormArray, ResizeFormArray); use the Variable's own type (`array_raw & ~1`) for the element class. An array built with `CreateArray(TypeInfo(array_raw & ~1), n)` is accepted as a Form[] argument; one built from a copied `type_info()` (0) is not.
-- `ObjectTypeInfo::GetName()` returns `utility` (lowercase) for Utility; Actor/ObjectReference/Form/Quest keep their case. `GetScriptObjectType("actor")` finds Actor. Engine natives report parameter names `param1..N` from `IFunction::GetParam`; script-defined functions report their .psc parameter names (Task 27 in `spikes/RESULTS.md`: ArmorAddon.GetMaskForSlot).
+- `ObjectTypeInfo::GetName()` returns `utility` (lowercase) for Utility; Actor/ObjectReference/Form/Quest keep their case. `GetScriptObjectType("actor")` finds Actor. Engine natives report parameter names `param1..N` from `IFunction::GetParam`; script-defined functions report their .psc parameter names (seen on ArmorAddon.GetMaskForSlot).
 - `GetScriptObjectType` on an unknown name: the first call returns false; the second returns true with an empty stub (0 member/global functions, 0 properties, no parent, linkedValid 2); `GetScriptObjectTypeNoLoad` stays false.
 - `DispatchMethodCall(handle, className, ...)` returns false (no crash) when the form has no bound object (e.g. a quest with no attached script); `PackHandle` binds it (FindBoundObject true afterwards) and the `BSTSmartPointer<Object>&` overload dispatches. `FindBoundObject` accepts a parent class of the bound object (player: Actor, ObjectReference, Form true; Quest false).
 
@@ -54,8 +53,8 @@ Runtime findings from S7 on the box (2026-10-01; details in the S7 row of `spike
 - Version 3.14.8, standard (GIL) build, x64.
 - Runtime: `python-3.14.8-embed-amd64.zip` from python.org, unmodified; ships `python314.dll`, `python314.zip`, `python314._pth`, `vcruntime140.dll`, `vcruntime140_1.dll`, `LICENSE.txt`. The `._pth` file is ignored once `PyConfig.module_search_paths_set = 1`.
 - Build inputs: NuGet package `python` 3.14.8, `tools/include/` and `tools/libs/python314.lib`.
-- Linux test interpreters (uv): `/home/geoff/.local/share/uv/python/cpython-3.14-linux-x86_64-gnu/bin/python3.14` (`Python 3.14.7`), `/home/geoff/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu/bin/python3.12` (`Python 3.12.13`). uv offered no 3.14.8 build on 2026-10-01; any 3.14.x has the same ABI.
-- Caution: on the dev host a plain `uv python find 3.12` resolves to anaconda's `/home/geoff/anaconda3/bin/python3` (3.12.2), not the uv-managed build; use `uv python find --managed-python 3.12` to get the path above. `uv python find 3.14` resolves to the uv-managed 3.14.7 either way. The 3.14 include dir is `/home/geoff/.local/share/uv/python/cpython-3.14.7-linux-x86_64-gnu/include/python3.14`.
+- Linux test interpreters: uv-managed CPython 3.14.7 and 3.12.13 (`uv run --managed-python --python 3.12 ...`). uv offered no 3.14.8 build on 2026-10-01; any 3.14.x has the same ABI.
+- Use `--managed-python` (or `uv python find --managed-python 3.12`): without it, uv may pick another Python 3.12 already on the machine, such as a conda one.
 
 ## pybind11
 
@@ -71,25 +70,25 @@ a1cc06b524ab3edca51f8ad3895f9c4fa20b8b19283173dff4ae781449dc9639  pybind11-3.1.0
 44faa038e9c3f9728efbda143748d01124ea0a27f4bf78f35a15d8fab2e039fb  doctest.h
 ```
 
-## Plugin notes (Task 25)
+## Plugin notes
 - The core DLL's SKSEPluginInfo is not needed by CommonLib: SKSE::Init reads PluginVersionData only for name/author/version and falls back to the module file name. Kept as harmless.
 - The core's RegisterListener uses the loader's plugin handle (GetPluginHandle() is captured during the loader's load call). SKSE may drop a second listener for the same handle and sender, so the loader registers nothing beyond SKSE::Init; every registration happens in the core.
 
-## Papyrus (Task 46)
-- Compiler: SimpleSkyrim `Stock Game/Papyrus Compiler/PapyrusCompiler.exe` sha256 f441afa877ce0b315c6b613db7fe700a7bbc66b71a72fc4d0d8bc94577ceb0ce, run headless by `tools/papyrus_compile.sh` (GE-Proton10-14 `wine64`, prefix `compatdata/4190904831`, DISPLAY and WAYLAND_DISPLAY unset; spike S5).
+## Papyrus
+- Compiler: the Creation Kit's `Papyrus Compiler/PapyrusCompiler.exe` sha256 f441afa877ce0b315c6b613db7fe700a7bbc66b71a72fc4d0d8bc94577ceb0ce, run headless by `tools/papyrus_compile.sh` (GE-Proton10-14 `wine64` in the game's Proton prefix, DISPLAY and WAYLAND_DISPLAY unset; spike S5).
 - Imports and flags: the game's `Data/Scripts.zip` sha256 45ff21e55be76f3bce86385770cba878ec8dacabb8df4cd3e86976fbdf3ebdc6, `Source/Scripts/*.psc` and `TESV_Papyrus_Flags.flg` extracted to `out/papyrus-import/vanilla` (gitignored; vanilla sources are never committed).
-- `.pex` hashes: "raw" is the committed file; "stable" is `tools/papyrus_compile.sh --stable-hash` (compile time and source modification time zeroed). A rebuild is checked against the stable hash; it holds for the same source file name, machine and user (`geoff` on this machine).
-- pin plugin/papyrus/compiled/Skython.pex stable 36082f6c01b9f9e125fe2a239e4a7d8afc787c7d2b3424182cecbdbcaad22341
-  (informational only, never compared: the committed file's raw sha256 03738c8307c2681327e0f1d1f32b63d10b83dd4fe16bd141aa2b6a93343da3fe)
+- `.pex` hashes: "raw" is the committed file; "stable" is `tools/papyrus_compile.sh --stable-hash` (compile time and source modification time zeroed). A rebuild is checked against the stable hash. `tools/papyrus_compile.sh` runs the compiler as user `skython` and then sets the header's user and machine names to `skython` and `build`, so the stable hash does not depend on who builds it or where; it does depend on the source file name.
+- pin plugin/papyrus/compiled/Skython.pex stable 33d2e4d23153e11518c482cbb0d33d47c643e6acd4b6723a9f8190ea7df57278
+  (informational only, never compared: the committed file's raw sha256 d60e4428d94c2a6766159e23ea5abea1a0c03bcd562cea394f7066fe80f78e48)
 
-## Test ESP (Tasks 47-48)
+## Test ESP
 - Builder: `testesp/builder` (development tool, GPL-3.0-only through Mutagen, never distributed; see its LICENSE-NOTE.md), .NET SDK 8.0.424 at `~/.dotnet/dotnet`, target `net8.0`, restored offline from `~/.nuget/packages`.
 - Mutagen 23.4.0 nupkg sha256: Skyrim 4bdec615ae07c8ac9066f62d8a6420f0355e76c94db69e730a46bfc296856696, Core fa50598700a836dfef6639fbc1893aaf276d3f9383d51437cc8d6b8f6c254313, Kernel 07f9fbd65c846f2071a3c752671c5860409766715bab0ed9450796331a774b55.
-- `testesp/spike/SkythonTest.esp` (Task 47 spike) sha256 00a11e2e3481e87d02f38d8ff23d0b8a42ce9df6fbd6bde0aca66c288479cbce (deterministic: rebuilds are byte-identical).
-- Full plugin and scripts (Task 48), checked by testesp/build.sh (the plugin is built from the installed Skyrim.esm 1.6.1170, whose WhiterunBreezehome cell record and WhiterunBreezehomeLocation location record it copies):
+- `testesp/spike/SkythonTest.esp` (the VMAD spike) sha256 00a11e2e3481e87d02f38d8ff23d0b8a42ce9df6fbd6bde0aca66c288479cbce (deterministic: rebuilds are byte-identical).
+- Full plugin and scripts, checked by testesp/build.sh (the plugin is built from the installed Skyrim.esm 1.6.1170, whose WhiterunBreezehome cell record and WhiterunBreezehomeLocation location record it copies):
 - pin testesp/SkythonTest.esp sha256 23b0b90e0eeac79cd7a4a57ca5552ec65c7c4dc21072a36aebcae5e9e252baa4
-- pin testesp/compiled/SkythonTestQuestBase.pex stable e69dcf4e0050bb3165a181f1ae973a9b61c5138f35e8f1a4f0168f1c18def7f0
-- pin testesp/compiled/SkythonTestQuest.pex stable b0dd3830b1df1f78f95792ebdfe7bc213374488f9cba88cb42196880da915375
-- pin testesp/compiled/SkythonTestAlias.pex stable 38d784264a2ee52e9f4ed54930066ee2ee6f525a229b2879f6ce6f11f65a6ed9
-- pin testesp/compiled/SkythonTestLocationAlias.pex stable 8328c710eb765e058f37349f0191c9ea6c850eb1a3b74e5c19afaca994280fad
-- pin testesp/compiled/QF_SkythonTestQuest_01000800.pex stable a7df67748249d5e59e1c163922aab79db4d7406321edf2a4a91959039bbf0de5
+- pin testesp/compiled/SkythonTestQuestBase.pex stable cc8a53906fb4bdbd3bc31b2f4c88b0c9524b4d4585f5cb9be422165969729213
+- pin testesp/compiled/SkythonTestQuest.pex stable f0ea0761147bc3a64ea7c965cadc4c820294653c80b24e932eb0d09126f831da
+- pin testesp/compiled/SkythonTestAlias.pex stable 2985c5da915b259c5fa45d5de579349e7d0d9437ca70b53ffbbaccc4582ab551
+- pin testesp/compiled/SkythonTestLocationAlias.pex stable a536a0dfd4ac008bd7fb2d5528ef7b7f15d97d0acbaab9b62317ff9b3a25d64c
+- pin testesp/compiled/QF_SkythonTestQuest_01000800.pex stable 712923a293c56ec469c1922b259674dc2a2d396c9dee7beee615ea59cadea9e1

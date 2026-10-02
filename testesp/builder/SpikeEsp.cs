@@ -3,7 +3,7 @@ using Mutagen.Bethesda.Skyrim;
 
 namespace SkythonTestEsp
 {
-    // Task 47: one quest, one optional reference alias carrying SkythonTestAlias, one stage (10) whose QF_ fragment
+    // The VMAD spike: one quest, one optional reference alias carrying SkythonTestAlias, one stage (10) whose QF_ fragment
     // calls Skython.Send. No masters (nothing from Skyrim.esm is referenced).
     public static class SpikeEsp
     {

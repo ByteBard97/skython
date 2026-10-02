@@ -1,6 +1,6 @@
 namespace SkythonTestEsp
 {
-    // Names fixed by the plan's Contracts (Papyrus section). Changing one breaks the box allowlist and the tests.
+    // Fixed names. The tests and tools/box/win/place.ps1's list of allowed files use them, so changing one breaks both.
     public static class Names
     {
         public const string PluginFile = "SkythonTest.esp";

@@ -3,7 +3,7 @@ Scriptname SkythonTestQuest extends SkythonTestQuestBase
 1 SkythonItem, 2 SkythonExtra (reference aliases with SkythonTestAlias), 3 SkythonPlace (location alias with
 SkythonTestLocationAlias).}
 
-; Initial values are fixed (index Contracts, Test ESP). Target has no Papyrus initializer: the quest's VMAD sets it to
+; Initial values are fixed so the tests can assert them. Target has no Papyrus initializer: the quest's VMAD sets it to
 ; SkythonTestNPC (SkythonTest.esp|0x000804), see TestEsp.cs.
 Int Property Counter = 7 Auto
 Float Property Ratio = 0.5 Auto
@@ -11,14 +11,14 @@ Bool Property Flag = True Auto
 String Property Label = "initial label" Auto
 Actor Property Target Auto
 
-; A full (non-auto) property: Skython refuses get/set_property on it before anything runs (R57/R58).
+; A full (non-auto) property: Skython refuses get/set_property on it before anything runs.
 Int Property Computed
 	Int Function Get()
 		Return Counter * 2
 	EndFunction
 EndProperty
 
-; The generic scenario (owner decision 8): start the quest, fill the aliases, show the objective.
+; The test scenario: start the quest, fill the aliases, show the objective.
 Function SetupScenario(Actor akTarget, ObjectReference akItem, Location akPlace, String asLabel)
 	If !IsRunning()
 		Start()
@@ -40,7 +40,7 @@ Int Function GetBaseCounter()
 	Return BaseCounter
 EndFunction
 
-; Papyrus-side reads of the Float and Bool properties (Task 51 checks set_property through them, not only through
+; Papyrus-side reads of the Float and Bool properties (the tests check set_property through them, not only through
 ; get_property, which reads the same variable index it wrote).
 Float Function GetRatio()
 	Return Ratio
@@ -64,7 +64,7 @@ String Function DescribeAlias(ReferenceAlias akAlias)
 	Return "filled"
 EndFunction
 
-; The same four answers for a location alias argument (Task 50: the alias-argument path with a LocationAlias).
+; The same four answers for a location alias argument (the alias-argument path with a LocationAlias).
 String Function DescribeLocationAlias(LocationAlias akAlias)
 	If akAlias == None
 		Return "none"
@@ -78,7 +78,7 @@ String Function DescribeLocationAlias(LocationAlias akAlias)
 	Return "filled"
 EndFunction
 
-; An argument typed as our own alias script: returns its Tag (Task 50 reads 5 on alias 0; Task 51 reads a write back).
+; An argument typed as our own alias script: returns its Tag (5 on alias 0, or the value a test wrote).
 Int Function AliasTag(SkythonTestAlias akAlias)
 	Return akAlias.Tag
 EndFunction
