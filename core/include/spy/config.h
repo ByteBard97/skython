@@ -20,7 +20,7 @@ struct Config
     std::uint32_t max_inflight_per_connection = config_defaults::kMaxInflightPerConnection;  // dev bridge; at least 1
     std::uint32_t max_inflight_total = config_defaults::kMaxInflightTotal;  // dispatcher; at least 1
     bool enable_console = config_defaults::kEnableConsole;
-    std::vector<std::string> ignored_keys;  // unrecognised keys and lines without '=' (log them: "Port" instead of "port" is silent otherwise)
+    std::vector<std::string> ignored_keys;  // unrecognised keys and lines without '=', as ignored_entry_label gives them (log them: "Port" instead of "port" is silent otherwise)
 };
 
 // INI subset, UTF-8 (a leading byte order mark is skipped).
@@ -28,10 +28,16 @@ struct Config
 //  - An inline comment starts at whitespace followed by ';' ("port = 1 ; dev"). A ';' with no whitespace before it stays in
 //    the value, and '#' is never an inline comment.
 //  - Keys and the boolean values (true/false/1/0) are case-sensitive and lower case. An unrecognised key, including one
-//    with the wrong case, is ignored but listed in Config::ignored_keys. So is a line without '=' (clipped to 64 bytes).
+//    with the wrong case, is ignored but listed in Config::ignored_keys. So is a line without '='. Both are listed as
+//    ignored_entry_label gives them: never a value.
 //    A repeated key: the last one wins.
 //  - Every bad value throws std::invalid_argument, including numbers too large for 64 bits.
 Config parse_config(std::string_view text);
+
+// What an ignored ini entry is logged and listed as: only its key part (up to the first space, tab, ':' or '='),
+// clipped to 64 bytes, or "<redacted>" when the entry mentions "token" in any case (a mistyped fixed_token line must
+// never put the token in the log).
+std::string ignored_entry_label(std::string_view entry);
 
 // Every Config field under its ini key name, plus "ignored_keys" (an array). _skython.config() (Task 19) starts from this.
 json config_to_json(const Config& c);

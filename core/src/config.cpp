@@ -47,6 +47,21 @@ bool is_token(const std::string& val)
 }
 }
 
+std::string ignored_entry_label(std::string_view entry)
+{
+    static constexpr std::string_view kToken = "token";
+    for (std::size_t i = 0; i + kToken.size() <= entry.size(); ++i) {
+        bool match = true;
+        for (std::size_t j = 0; j < kToken.size() && match; ++j) {
+            char ch = entry[i + j];
+            if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');  // ASCII only: no locale
+            match = ch == kToken[j];
+        }
+        if (match) return "<redacted>";
+    }
+    return clip_text(entry.substr(0, entry.find_first_of(" \t:=")), 64);
+}
+
 Config parse_config(std::string_view text)
 {
     if (text.substr(0, 3) == "\xEF\xBB\xBF") text.remove_prefix(3);
@@ -60,14 +75,14 @@ Config parse_config(std::string_view text)
         if (line.empty() || line[0] == ';' || line[0] == '#' || line[0] == '[') continue;
         auto eq = line.find('=');
         if (eq == std::string::npos) {  // "bridge_enabled true": a typo must not be silent
-            c.ignored_keys.push_back(clip_text(line, 64));
+            c.ignored_keys.push_back(ignored_entry_label(line));
             continue;
         }
         auto key = trim(line.substr(0, eq));
         auto val = trim(strip_inline_comment(std::string_view(line).substr(eq + 1)));
         const ConfigKey* spec = find_config_key(key);  // names, ranges and defaults come from protocol.json
         if (spec == nullptr) {
-            if (!key.empty()) c.ignored_keys.push_back(key);
+            if (!key.empty()) c.ignored_keys.push_back(ignored_entry_label(key));
             continue;
         }
         if (key == "python_enabled") c.python_enabled = to_bool(key, val);

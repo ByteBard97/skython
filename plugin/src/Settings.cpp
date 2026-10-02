@@ -50,7 +50,7 @@ void Load()
         Cfg() = Config{};
     }
     const auto& c = Cfg();
-    for (const auto& k : c.ignored_keys) log::Warn("settings: unknown key '" + k + "' ignored");
+    for (const auto& k : c.ignored_keys) log::Warn("settings: ignored entry '" + k + "' (unknown key, or a line without '=')");  // key part only, never a value
     log::Info("settings: " + U8(path) + " python_enabled=" + (c.python_enabled ? "true" : "false") +
               " scripts_enabled=" + (c.scripts_enabled ? "true" : "false") +
               " bridge_enabled=" + (c.bridge_enabled ? "true" : "false") + " port=" + std::to_string(c.port) +

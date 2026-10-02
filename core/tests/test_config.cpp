@@ -35,15 +35,32 @@ TEST_CASE("parses keys, ignores sections, comments and unknown keys")
     CHECK(c.ignored_keys[0] == "unknown_key");
 }
 
-TEST_CASE("a line without '=' is reported in ignored_keys, clipped")
+TEST_CASE("a line without '=' is reported in ignored_keys by its key part only, clipped")
 {
-    auto c = spy::parse_config("bridge_enabled true\nport: 45990\n" + std::string(500, 'k') + "\n");
+    auto c = spy::parse_config("bridge_enabled true\nport: 45990\n" + std::string(500, 'k') + "\nsession_file\tC:/x\n");
     CHECK_FALSE(c.bridge_enabled);  // the typo does not set the key, but it is no longer silent
     CHECK(c.port == 45977);
-    REQUIRE(c.ignored_keys.size() == 3);
-    CHECK(c.ignored_keys[0] == "bridge_enabled true");
-    CHECK(c.ignored_keys[1] == "port: 45990");
+    REQUIRE(c.ignored_keys.size() == 4);
+    CHECK(c.ignored_keys[0] == "bridge_enabled");  // the value never reaches the log
+    CHECK(c.ignored_keys[1] == "port");
     CHECK(c.ignored_keys[2] == std::string(64, 'k') + "...");
+    CHECK(c.ignored_keys[3] == "session_file");
+}
+
+TEST_CASE("an ignored entry that mentions a token is redacted entirely, so a token never reaches the log")
+{
+    const std::string token = "0123456789abcdef0123456789abcdef";
+    auto c = spy::parse_config("fixed_token " + token + "\nFixed_Token = " + token + "\nfixed_token:" + token + "\n" +
+                               token + " FIXED_TOKEN\n");
+    REQUIRE(c.ignored_keys.size() == 4);
+    for (const auto& k : c.ignored_keys) {
+        CHECK(k == "<redacted>");
+        CHECK(k.find(token) == std::string::npos);
+    }
+    CHECK(c.fixed_token.empty());
+    CHECK(spy::ignored_entry_label("fixed_token 0123456789abcdef0123456789abcdef") == "<redacted>");
+    CHECK(spy::ignored_entry_label("prt=5") == "prt");
+    CHECK(spy::ignored_entry_label("") == "");
 }
 
 TEST_CASE("the old allow_external_clients key is no longer recognised")
