@@ -32,7 +32,7 @@ std::string not_ready_message(const std::string& reason)
     return "the game is not ready";
 }
 
-// paused and menus from a BaseState() snapshot, for every not_ready and timeout detail (spec 4.1).
+// paused and menus from a BaseState() snapshot, for every not_ready and timeout detail.
 json game_detail(const json& base)
 {
     json d = json::object();
@@ -46,7 +46,7 @@ std::string error_text(std::uint64_t id, ErrorCode code, std::string_view messag
     return dump_json(make_error(id, code, message, std::move(detail)));
 }
 
-// events.subscribe / events.unsubscribe, answered here by the hub (index Contracts, dispatcher.h changes).
+// events.subscribe / events.unsubscribe, answered here by the hub.
 std::string event_op_text(EventHub* hub, const Request& req, ConsumerId consumer)
 {
     if (hub == nullptr) return error_text(req.id, ErrorCode::unsupported, "this build has no event hub");
@@ -408,7 +408,7 @@ void Dispatcher::StartReaper(std::chrono::milliseconds period)
             try {
                 Tick();
             } catch (...) {
-                // Never let an exception end the process from this thread (Global Constraints).
+                // Never let an exception end the process from this thread: an escaped exception terminates the game.
             }
             rl.lock();
         }

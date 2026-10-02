@@ -44,9 +44,9 @@ struct Value
     std::variant<std::monostate, bool, std::int32_t, float, std::string, FormRef, AliasRef, ArrayValue> v;
 };
 
-bool is_valid_form_key(std::string_view s);  // implemented in refs.cpp (Task 15)
+bool is_valid_form_key(std::string_view s);  // implemented in refs.cpp
 // True when `key` can name `form_id`: same local id (low 24 bits, low 12 for a 0xFE light form id), and `form_id`
-// is not a runtime-created (0xFF) id, which has no form key. Implemented in refs.cpp (Task 15).
+// is not a runtime-created (0xFF) id, which has no form key. Implemented in refs.cpp.
 bool form_key_matches_id(std::string_view key, std::uint32_t form_id);
 // True for a JSON integer in [0, max]. JSON built in C++ stores small non-negative ints as signed, so is_number_unsigned() is not enough.
 bool is_uint(const json& j, std::uint64_t max);

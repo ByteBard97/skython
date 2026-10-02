@@ -3,7 +3,7 @@
 #include <cstdint>
 
 namespace spy {
-// Microseconds on std::chrono::steady_clock: the one clock of every trace_timing stamp (Task 38): GameBackend, the VM
+// Microseconds on std::chrono::steady_clock: the one clock of every trace_timing stamp: GameBackend, the VM
 // callback, and Python through _skython.now_us (the bridge), so stamps taken in any of them can be subtracted.
 inline std::int64_t NowUs() noexcept
 {

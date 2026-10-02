@@ -348,8 +348,9 @@ void EventHub::Push(std::string_view event, json data)
                 }
                 ++c.queued;
                 c.bytes += bytes;
-                // R61: the consumer's byte budget. The pushed subscription's oldest go first; when it has nothing
-                // older, the new event itself goes (its seq is taken, so the gap still equals dropped).
+                // The consumer's byte budget, so one consumer cannot hold all the memory. The pushed subscription's
+                // oldest go first; when it has nothing older, the new event itself goes (its seq is taken, so the gap
+                // still equals dropped).
                 while (c.bytes > options_.max_queued_bytes_per_consumer && !s.queue.empty()) DropOldestLocked(s, c);
                 if (!s.queue.empty() && std::find(wake.begin(), wake.end(), c.cv) == wake.end()) wake.push_back(c.cv);
             }

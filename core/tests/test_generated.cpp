@@ -222,7 +222,7 @@ TEST_CASE("fixtures use only ops, argument names and error codes that the genera
         for (const auto& c : fx["invalid"]) codes.insert(c["error"].get<std::string>());
     }
     const auto hello = load("hello.json");
-    for (const auto& c : hello["check"])  // the dev bridge's handshake checks (Task 23); their codes must exist here too
+    for (const auto& c : hello["check"])  // the dev bridge's handshake checks; their codes must exist here too
         if (!c["result"].is_null()) codes.insert(c["result"].get<std::string>());
     const auto responses = load("responses.json");
     for (const auto& r : responses["valid"]) {

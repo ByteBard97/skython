@@ -292,7 +292,7 @@ TEST_CASE("a quit to the main menu ends in-flight game calls not_ready, with the
     ManualBackend b;
     spy::Dispatcher d(b, {});
     auto call = d.Submit(call_text(19));
-    b.loads++;              // LifecycleState counts a quit to the Main Menu as a world reset (Task 17)
+    b.loads++;              // LifecycleState counts a quit to the Main Menu as a world reset
     b.not_ready = "no_game";
     d.Tick();
     auto r = wait_json(d, call);
@@ -627,7 +627,7 @@ TEST_CASE("golden: not_ready with dispatched, after a save load and after a quit
     CHECK(canon(*text) == spy::dump_json(golden(44)));
 }
 
-// ---- Task 35: events.* answered by the EventHub, the consumer beside the request text ----------------------------
+// ---- events.* answered by the EventHub, the consumer beside the request text ----------------------------
 namespace {
 std::string sub_text(std::uint64_t id, json args)
 {
@@ -679,7 +679,7 @@ TEST_CASE("events.* without a consumer is bad_request, with no hub unsupported, 
     spy::Dispatcher plain(b, {});
     CHECK(code_of(wait_json(plain, plain.Submit(sub_text(6, {{"event", "death"}}), c))) == "unsupported");
     CHECK(code_of(wait_json(plain, plain.Submit(unsub_text(7, 1), c))) == "unsupported");
-    // Consumer 0 with no hub (Task 37's bridge fallback, Review A#1): unsupported is checked before the consumer.
+    // Consumer 0 with no hub (the bridge's fallback for a build without events): unsupported comes before the consumer.
     CHECK(code_of(wait_json(plain, plain.Submit(sub_text(8, {{"event", "death"}})))) == "unsupported");
     CHECK(code_of(wait_json(plain, plain.Submit(unsub_text(9, 1)))) == "unsupported");
     CHECK(b.count() == 0);
@@ -722,7 +722,7 @@ TEST_CASE("every other op ignores the consumer")
     CHECK(hub.Subscriptions() == 0);
 }
 
-TEST_CASE("CurrentRequestId is the request's id inside Backend::Run and 0 outside it (Task 38)")
+TEST_CASE("CurrentRequestId is the request's id inside Backend::Run and 0 outside it")
 {
     struct IdBackend : spy::Backend
     {

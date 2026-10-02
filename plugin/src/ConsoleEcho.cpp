@@ -8,7 +8,7 @@
 
 namespace spy::console {
 namespace {
-// Lines that arrived before the console existed. Touched only inside our SKSE tasks (serialized, observed: R49).
+// Lines that arrived before the console existed. Touched only inside our SKSE tasks (serialized, as observed).
 std::deque<std::string>& Held() { static auto* d = new std::deque<std::string>; return *d; }
 
 // Inside an SKSE task only.

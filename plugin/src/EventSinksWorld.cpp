@@ -132,7 +132,7 @@ void RegisterWorldSinks()
         log::Error(std::string("events: batch 2 not registered: ") + (!holder ? "ScriptEventSourceHolder" : "RE::UI") + " is null");
         return;
     }
-    // Task 44: known and ready to attach; each is added inside an SKSE task while one of its events has a subscriber.
+    // Known and ready to attach; each is added inside an SKSE task while one of its events has a subscriber.
     Sinks().push_back({ "hit", { "hit" }, [holder] { holder->AddEventSink<RE::TESHitEvent>(&hit); },
                         [holder] { holder->RemoveEventSink<RE::TESHitEvent>(&hit); } });
     Sinks().push_back({ "equip", { "equip", "unequip" }, [holder] { holder->AddEventSink<RE::TESEquipEvent>(&equip); },

@@ -9,15 +9,15 @@
 #include <utility>
 
 namespace spy::ops {
-// true while this thread runs a task this plugin queued (R52). Every AddTask lambda in the plugin starts with `ops::InTask in;`.
+// true while this thread runs a task this plugin queued (a flag, never a thread-id test). Every AddTask lambda in the plugin starts with `ops::InTask in;`.
 inline thread_local bool t_inTask = false;
 struct InTask { InTask() : prev_(std::exchange(t_inTask, true)) {} ~InTask() { t_inTask = prev_; }
                 InTask(const InTask&) = delete; InTask& operator=(const InTask&) = delete; private: bool prev_; };
 
-// Task 31 (ruling R38): how long our queued task bodies hold the main thread in one frame. Bodies that start less than
+// How long our queued task bodies hold the main thread in one frame. Bodies that start less than
 // kGap after the previous one ended belong to the same run (one frame's drain). A run is folded into the maxima
 // when the next run starts, so the latest run shows up after one more task. Written only from inside our SKSE tasks,
-// which are serialized (observed, R49), on varying threads; the maxima are atomics because BaseState() reads them
+// which are serialized (observed, not proven), on varying threads; the maxima are atomics because BaseState() reads them
 // from any thread. No I/O, no allocation.
 class DrainMeter
 {
@@ -72,7 +72,7 @@ struct Measured
     ~Measured() { Meter().End(); }
 };
 
-// Task 38 (trace_timing, dev only, record only): one request's stamps, spy::NowUs() microseconds. GameBackend makes one
+// trace_timing (dev only, record only): one request's stamps, spy::NowUs() microseconds. GameBackend makes one
 // per request when trace_timing is on and sets t_timing while its task body runs; a Callback built in that body keeps
 // it and stamps `callback` when the VM calls back (on whatever thread). Null when trace_timing is off: nothing is taken.
 struct Timing
@@ -96,18 +96,19 @@ private:
 };
 
 // Inside an SKSE task only. Validation failures become Err results; nothing throws out of Run.
-// `done` may be called inside an SKSE task or on a VM thread; the Dispatcher accepts either (Task 18).
+// `done` may be called inside an SKSE task or on a VM thread; the Dispatcher accepts either.
 void Run(const std::string& op, const json& args, Done done, Cancelled cancelled, Progress progress);
 
 // papyrus.call_static's validated path (inside an SKSE task only): FindFunction (throws unknown_function or
 // bad_request), BindArgs (throws type_mismatch), then DispatchStaticCall; `done` gets the converted result from the VM
-// callback, or vm_error when the VM refuses the dispatch (R37). game.save uses it for SKSE's Game.SaveGame (R63).
+// callback, or vm_error when the VM refuses the dispatch (the args are then leaked, see KeptOnRefusal). game.save uses
+// it for SKSE's Game.SaveGame, because a direct Save_Impl call from an SKSE task deadlocks the game.
 void DispatchStatic(const std::string& script, const std::string& function, const std::vector<Value>& args, const Done& done);
 
 // Fills `player` and `game_days_passed` (inside an SKSE task; only when a game is loaded and not loading).
 void AddStateExtras(json& state);
 
-// Adds `paused` and `menus` to an error detail (spec 4.1).
+// Adds `paused` and `menus` to an error detail.
 json WithGameState(json detail = json::object());
 OpResult NotReady(const std::string& reason);
 }

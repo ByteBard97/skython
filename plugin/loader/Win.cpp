@@ -82,7 +82,7 @@ std::string StartCore(const void* skse, LogFn log) noexcept
         const fs::path core = own / L"SkythonCore.dll";
 
 #ifdef SPY_TEST_HOOKS
-        // Test-only (Task 26, collision variant): stand in for another mod that loaded its own CPython first.
+        // Test only (the collision variant): stand in for another mod that loaded its own CPython first.
         wchar_t pre[4096];
         const DWORD n = GetEnvironmentVariableW(L"SKYTHON_TEST_PRELOAD", pre, 4096);
         if (n > 0 && n < 4096) {

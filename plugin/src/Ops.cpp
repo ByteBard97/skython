@@ -15,12 +15,12 @@ namespace spy::ops {
 namespace {
 using RE::BSScript::Variable;
 
-// No stored "main thread" id (R49): SKSE tasks run on varying BSJobs worker threads, so an id comparison is meaningless.
+// No stored "main thread" id: SKSE tasks run on varying BSJobs worker threads, so an id comparison is meaningless.
 
 RE::BSScript::Internal::VirtualMachine* VM() { return RE::BSScript::Internal::VirtualMachine::GetSingleton(); }
 
-// Arguments for one dispatch. The VM never frees them (spike S2, Task 4): the Callback owns this object and deletes
-// it after reading the result. On a false Dispatch*Call return it is kept (R37), see KeptOnRefusal.
+// Arguments for one dispatch. The VM never frees them (spike S2): the Callback owns this object and deletes
+// it after reading the result. On a false Dispatch*Call return it is kept, see KeptOnRefusal.
 class DynArgs final : public RE::BSScript::IFunctionArguments
 {
 public:
@@ -62,14 +62,14 @@ void Convert(const Done& done, const Variable& result)
     }
 }
 
-// A refused dispatch (Dispatch*Call returned false): the args are NOT freed, because the callback might still fire
-// (unmeasured, R37); if it does, it frees them. With FindFunction and BindArgs first, a refusal is not expected.
+// A refused dispatch (Dispatch*Call returned false): the args are not freed, because the callback might still fire
+// (unmeasured); if it does, it frees them. With FindFunction and BindArgs first, a refusal is not expected.
 void KeptOnRefusal(const std::string& qualified)
 {
     static std::once_flag once;
     std::call_once(once, [&] {
-        log::Warn("ops: the VM refused a dispatch (" + qualified + "); its arguments are kept, not freed (R37). "
-                  "Logged once; later refusals leak silently.");
+        log::Warn("ops: the VM refused to dispatch " + qualified + "; leaking its arguments rather than risk a double "
+                  "free (logged once, later refusals leak silently)");
     });
 }
 
@@ -81,15 +81,15 @@ public:
     {
         // Nothing may escape into the VM: AddTask, the copies or the unique_ptr could still throw (bad_alloc).
         try {
-            if (timing_) timing_->callback.store(NowUs());  // Task 38: before anything else the callback does
+            if (timing_) timing_->callback.store(NowUs());  // trace_timing: before anything else the callback does
             // This call's arguments (S2: the VM never frees them). Freed when this scope ends, after the result was
-            // read and converted or queued; `result` is our own copy. The destructor does not free them (Known limits).
+            // read and converted or queued; `result` is our own copy. The destructor does not free them, so a callback
+            // the VM never calls leaks them.
             std::unique_ptr<DynArgs> owned{std::exchange(args_, nullptr)};
             // Primitives and None touch no engine state: convert here, on whatever thread the VM called us on.
             // Objects and arrays (forms, aliases, any array: copying its elements reads engine-owned storage) are
             // converted inside an SKSE task: here if the VM called us synchronously from inside one of our tasks
-            // (t_inTask), else one more AddTask. Never test the thread id instead: tasks run on varying job threads
-            // (R49). R52.
+            // (t_inTask), else one more AddTask. Never test the thread id instead: tasks run on varying job threads.
             if (!pv::NeedsMainThread(result) || t_inTask) return Convert(done_, result);
             auto done = done_;
             SKSE::GetTaskInterface()->AddTask([done, result] { ops::InTask in; ops::Measured measured; Convert(done, result); });
@@ -103,13 +103,13 @@ public:
     }
     void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
     // Never written into a save (as SkyrimPlatform does): a save during a latent call does not record this functor,
-    // and after loading that save the call ends NotReady or Timeout (Task 31 tests it). R38.
+    // and after loading that save the call ends NotReady or Timeout (a live test checks this).
     bool CanSave() const override { return false; }
 
 private:
     Done done_;
     DynArgs* args_;  // owned; freed in operator()
-    std::shared_ptr<Timing> timing_;  // Task 38: set only with trace_timing, from the task body that built us
+    std::shared_ptr<Timing> timing_;  // set only with trace_timing, from the task body that built us
 };
 
 // The view from inside the task; life::Paused() is what the Dispatcher saw at submit.
@@ -135,7 +135,7 @@ json Resolve(const json& args)
         const auto eid = args["editor_id"].get<std::string>();
         // Verified at the pinned commit: LookupByEditorID tests its map pointer and returns nullptr, so no guard is
         // needed. The game keeps editor ids for only some form types: quests resolve without an editor-id-caching mod
-        // (live finding, Task 29: CWCampaign), most other types need one (powerofthree's Tweaks), so null is common.
+        // (seen live with CWCampaign), most other types need one (powerofthree's Tweaks), so null is common.
         form = RE::TESForm::LookupByEditorID(eid);
         if (!form)
             throw ProtocolError(ErrorCode::not_found, "no form with editor id " + eid +
@@ -161,22 +161,22 @@ void CallMethod(const CallArgs& c, const Done& done)
     auto* args = new DynArgs(std::move(vars));
     RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{new Callback(done, args)};  // cb owns args (S2)
     if (!VM()->DispatchMethodCall(target.object, RE::BSFixedString(c.function), args, cb)) {
-        KeptOnRefusal(qualified);  // never `delete args` here (R37); same rule as CallStatic
+        KeptOnRefusal(qualified);  // never `delete args` here: the callback may still fire; same rule as CallStatic
         done(OpResult::Err(ErrorCode::vm_error, "the VM refused the call to " + qualified + " on " + target.desc));
     }
 }
 
 // v1 serves auto properties only. Their value is the property's auto variable in the bound script object, found by
-// its absolute index into Object::variables (parents' variables first; sig::FindPropertySlot). The plan's route, the
+// its absolute index into Object::variables (parents' variables first; sig::FindPropertySlot). The obvious route, the
 // VM's own GetPropertyValue, returned true and left the value None for every auto property it read on AE 1.6.1170
-// (Task 30, launch 1: CWCampaignScript.currentAttackDelta, an Int, read None; ruling R57), so it is not used; nor
+// (CWCampaignScript.currentAttackDelta, an Int, read None in game), so it is not used; nor
 // SetPropertyValue, its vtable neighbour. Object::GetProperty is not used either: at the pin it indexes variables[]
 // with the declaring class's own index and ignores the parents' variables.
 // Reads go through the engine's own VirtualMachine::GetVariableValue (vfunc GetVariableValue1) by that index; whether
 // it takes the object's lock is unverified. If it fails (false, or None while the slot holds a value), an Int, Float
 // or Bool property falls back to reading the slot directly (logged once); a String, Object or Array property gets
-// vm_error instead (ruling R58: no lock-free read of a reference-counted value). Writes are direct and limited to Int,
-// Float and Bool properties (R58): a write to a String, Object (form or alias) or Array property would release and
+// vm_error instead (a reference-counted value is never read lock-free). Writes are direct and limited to Int,
+// Float and Bool properties: a write to a String, Object (form or alias) or Array property would release and
 // take references while a Papyrus thread may be doing the same, so it is refused `unsupported` (call a Papyrus setter
 // with call_method). The Int/Float/Bool writes and fallback reads take no lock: the worst case is a torn or stale
 // value if Papyrus writes the same property at the same moment. A full property (Papyrus get/set code) is refused:
@@ -216,7 +216,8 @@ RE::BSScript::Variable& BackingVariable(const AutoProperty& a, const pv::Target&
     return obj->variables[a.index];
 }
 
-// Int, Float and Bool are the only types v1 writes, and the only ones it reads from the slot without the engine (R58).
+// Int, Float and Bool are the only types written, and the only ones read from the slot without the engine: they hold no
+// references, so a lock-free access cannot corrupt a reference count.
 bool IsPlainValueType(const RE::BSScript::TypeInfo& t) { return t.IsInt() || t.IsFloat() || t.IsBool(); }
 
 std::uintptr_t RawType(const Variable& v) { return static_cast<std::uintptr_t>(v.GetType().GetRawType()); }
@@ -249,7 +250,7 @@ json GetProperty(const PropertyArgs& p)
     const bool engineNone = engine.GetType().GetRawType() == RE::BSScript::TypeInfo::RawType::kNone;
     const bool slotNone = slot.GetType().GetRawType() == RE::BSScript::TypeInfo::RawType::kNone;
     if (!engineOk || (engineNone && !slotNone)) {
-        if (!IsPlainValueType(a.type)) {  // R58: a reference-counted value is never read lock-free
+        if (!IsPlainValueType(a.type)) {  // a reference-counted value is never read lock-free
             static std::once_flag refOnce;
             std::call_once(refOnce, [&] {
                 log::Warn(std::format("ops: GetVariableValue failed for {}.{} on {} (a {} property): returned={} "
@@ -271,7 +272,7 @@ json GetProperty(const PropertyArgs& p)
     return pv::FromVariable(engine);  // inside this SKSE task (Run), so an object value is converted here
 }
 
-// Direct write of an Int, Float or Bool property (R58); every other type is refused before the object is resolved.
+// Direct write of an Int, Float or Bool property; every other type is refused before the object is resolved.
 // Lock-free: a Papyrus thread writing the same property at the same moment can leave a torn or stale value. No
 // OnPropertyChanged-style event fires.
 void SetProperty(const PropertyArgs& p)
@@ -300,15 +301,15 @@ struct BatchState
 // A step's `done` can run on a VM thread (primitive results are converted there) or inside an SKSE task. BatchState is
 // safe by ordering, not by thread: the next step is only queued from the previous step's `done`, so at most one step
 // is in flight and each access happens-before the next (the AddTask queue hand-off). No single "main thread" touches
-// it: SKSE tasks run on varying job threads (R49).
-// Measured (Task 30): 46.4-46.8 ms per RandomInt step, one drain per step (S9), so a step queued during a drain runs
+// it: SKSE tasks run on varying job threads.
+// Measured: 46.4-46.8 ms per RandomInt step, one drain per step (S9), so a step queued during a drain runs
 // in the next drain, not the same one.
 
 void BatchStep(const std::shared_ptr<BatchState>& st);
 
 void QueueBatchStep(const std::shared_ptr<BatchState>& st)
 {
-    SKSE::GetTaskInterface()->AddTask([st] { ops::InTask in; ops::Measured measured; BatchStep(st); });  // one task per step (spec 4.5)
+    SKSE::GetTaskInterface()->AddTask([st] { ops::InTask in; ops::Measured measured; BatchStep(st); });  // one task per step
 }
 
 void BatchStep(const std::shared_ptr<BatchState>& st)
@@ -323,7 +324,7 @@ void BatchStep(const std::shared_ptr<BatchState>& st)
             try {
                 st->results.push_back(r.ok ? json{{"ok", true}, {"result", r.result}}
                                            : json{{"ok", false}, {"error", {{"code", to_string(r.code)}, {"message", r.message}, {"detail", r.detail}}}});
-                // Tell the Dispatcher (Task 18) how far we got, so a timeout can report it (the steps' side effects already happened).
+                // Tell the Dispatcher how far we got, so a timeout can report it (the steps' side effects already happened).
                 if (st->progress) st->progress(json{{"completed", st->results.size()}, {"results", st->results}});
                 if (!r.ok && st->args.stop_on_error) return st->done(OpResult::Ok({{"results", st->results}}));
                 QueueBatchStep(st);
@@ -335,7 +336,7 @@ void BatchStep(const std::shared_ptr<BatchState>& st)
     } catch (const std::exception& e) {
         try { log::Error(std::string("ops: batch step threw: ") + e.what()); } catch (...) {}
         DoneNoThrow(st->done, OpResult::Err(ErrorCode::internal, "internal error in a batch step"));
-    } catch (...) {  // a main-thread task never lets an exception escape (Global Constraints)
+    } catch (...) {  // an exception escaping an SKSE task would crash the game
         try { log::Error("ops: batch step threw an unknown exception"); } catch (...) {}
         DoneNoThrow(st->done, OpResult::Err(ErrorCode::internal, "internal error in a batch step"));
     }
@@ -357,7 +358,7 @@ void DispatchStatic(const std::string& script, const std::string& function, cons
     auto* args = new DynArgs(std::move(vars));
     RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{new Callback(done, args)};  // cb owns args
     if (!VM()->DispatchStaticCall(RE::BSFixedString(script), RE::BSFixedString(function), args, cb)) {
-        KeptOnRefusal(qualified);  // never `delete args` here (R37)
+        KeptOnRefusal(qualified);  // never `delete args` here: the callback may still fire
         done(OpResult::Err(ErrorCode::vm_error, "the VM refused the call to " + qualified));
     }
 }

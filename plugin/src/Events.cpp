@@ -19,8 +19,8 @@
 namespace spy::events {
 spy::EventHub& Hub()
 {
-    // Designated initializers: EventHubOptions gains members after these (Task 34's byte budget, Task 44's on_wanted).
-    // loading is a save load or new game only, never a door or coc loading screen (R60).
+    // Designated initializers: EventHubOptions has more members after these (the byte budget, on_wanted).
+    // loading is a save load or new game only, never a door or coc loading screen.
     static spy::EventHub* hub = new spy::EventHub(spy::EventHubOptions{
         .epoch = [] { return life::Epoch(); },
         .loading = [] { return life::SaveLoadInProgress(); },
@@ -96,7 +96,7 @@ void NoteFirstEvent(const char* event) noexcept
         if (!spec || g_firstSeen[EventIndex(spec)].exchange(true)) return;
         std::ostringstream tid;
         tid << std::this_thread::get_id();
-        // A note for RESULTS only (S5 style). Nothing in the plugin keys on a thread id (R49).
+        // Diagnostic only. Nothing in the plugin keys on a thread id: SKSE tasks run on varying job threads.
         log::Info(std::format("events: first {} event on thread {} (inside our SKSE task: {})", event, tid.str(),
                               ops::t_inTask ? "yes" : "no"));
     } catch (...) {}

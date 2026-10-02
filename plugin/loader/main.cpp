@@ -33,7 +33,7 @@ void OpenLog()
 // Spec 6: on a runtime that has not been verified, nothing starts. Add a version only after a live run on it.
 bool RuntimeSupported()
 {
-    if (spy::loader::TestUnverifiedRuntime(&Log)) return false;  // SPY_TEST_HOOKS builds only (Step 10)
+    if (spy::loader::TestUnverifiedRuntime(&Log)) return false;  // SPY_TEST_HOOKS builds only
     static const REL::Version kVerified[] = { REL::Version{ 1, 6, 1170, 0 } };
     const auto v = REL::Module::get().version();
     for (const auto& ok : kVerified)
@@ -54,7 +54,7 @@ SKSE_PLUGIN_LOAD(const SKSE::LoadInterface* skse)
             return true;
         }
         // Address Library for SKSE Plugins: CommonLib's REL::ID needs it and stops the game with a message box if it
-        // is missing, so the core is not started without it. File name as the box has it: versionlib-1-6-1170-0.bin.
+        // is missing, so the core is not started without it. For 1.6.1170 the file is versionlib-1-6-1170-0.bin.
         if (const auto lib = "versionlib-" + REL::Module::get().version().string("-") + ".bin";
             !spy::loader::PluginsFileExists(lib)) {
             Log("Address Library for SKSE Plugins not found (" + lib + "); Python stays off");

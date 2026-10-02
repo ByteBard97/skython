@@ -6,7 +6,7 @@
 #include "SaveLoad.h"
 #include "Settings.h"
 #include "spy/clock.h"
-#include <RE/Skyrim.h>  // RE::GetSecondsSinceLastFrame (RE/M/Misc.h), Task 38
+#include <RE/Skyrim.h>  // RE::GetSecondsSinceLastFrame (RE/M/Misc.h), for trace_timing
 #include <SKSE/SKSE.h>
 #include <memory>
 #include <mutex>
@@ -22,7 +22,7 @@ public:
     {
         if (op == "game.save" || op == "game.load") return saveload::Run(op, args, std::move(done), std::move(cancelled));
         if (op == "game.state") return State(std::move(done), std::move(cancelled));
-        std::shared_ptr<ops::Timing> timing;  // Task 38: only with trace_timing (dev); null costs nothing
+        std::shared_ptr<ops::Timing> timing;  // only with trace_timing (dev); null costs nothing
         if (settings::Get().trace_timing) {
             timing = std::make_shared<ops::Timing>();
             timing->id = spy::CurrentRequestId();
@@ -32,7 +32,7 @@ public:
         // Exactly one AddTask; never block the submitting Python thread.
         SKSE::GetTaskInterface()->AddTask([op, args, done, cancelled, progress, timing] {
             ops::InTask in;
-            ops::Measured measured;  // Task 31 drain meter: before the cancelled() check, a cancelled body still ran
+            ops::Measured measured;  // drain meter: before the cancelled() check, a cancelled body still ran
             if (timing) {
                 timing->task_start.store(NowUs());
                 timing->frame_dt.store(static_cast<std::int64_t>(RE::GetSecondsSinceLastFrame() * 1'000'000.0f));
@@ -51,7 +51,7 @@ public:
         });
     }
 
-    // No player / game_days_passed here: BaseState never blocks, so it cannot queue a task and wait (index Contracts).
+    // No player / game_days_passed here: BaseState never blocks, so it cannot queue a task and wait.
     json BaseState() override { return WithDiagnostics(life::BaseState()); }
 
     std::optional<std::string> NotReadyReason(bool require_unpaused) override { return life::NotReadyReason(require_unpaused); }
@@ -59,7 +59,7 @@ public:
     std::uint32_t LoadsStarted() override { return life::LoadsStarted(); }
 
 private:
-    // Task 38: stamp `done`, hand the result on, then write the request's one line. The line is written after done so
+    // trace_timing: stamp `done`, hand the result on, then write the request's one line. The line is written after done so
     // the log write is not inside the measured path; Log.cpp flushes every info line (a synchronous write on this
     // thread, which may be inside an SKSE task: a small, recorded perturbation of the next request's queue time).
     static Done Traced(Done done, std::shared_ptr<ops::Timing> t)
@@ -84,7 +84,7 @@ private:
         s["diagnostics"]["event_subscriptions"] = hub.Subscriptions();
         s["diagnostics"]["events_dropped_total"] = hub.DroppedTotal();
         s["diagnostics"]["events_suppressed_total"] = hub.SuppressedTotal();
-        s["diagnostics"]["events_skipped_null_total"] = events::SkippedNullTotal();  // Task 40 (Task 39 review)
+        s["diagnostics"]["events_skipped_null_total"] = events::SkippedNullTotal();
         return s;
     }
 
@@ -98,7 +98,7 @@ private:
         if (!life::GameLoaded() || life::Loading()) return done(OpResult::Ok(std::move(s)));
         SKSE::GetTaskInterface()->AddTask([done, cancelled, s = std::move(s)]() mutable {
             ops::InTask in;
-            ops::Measured measured;  // Task 31 drain meter: before the cancelled() check, a cancelled body still ran
+            ops::Measured measured;  // drain meter: before the cancelled() check, a cancelled body still ran
             if (cancelled()) return;
             try {
                 ops::AddStateExtras(s);
@@ -128,7 +128,7 @@ spy::Dispatcher& GetDispatcher()
         opts.default_timeout_ms = cfg.default_timeout_ms;
         opts.max_inflight_total = cfg.max_inflight_total;
         opts.on_late = [](const std::string& line) { log::Warn("game backend: " + line); };  // a result nobody waits for
-        opts.events = &events::Hub();  // events.subscribe / events.unsubscribe are answered by the hub (Task 35)
+        opts.events = &events::Hub();  // events.subscribe / events.unsubscribe are answered by the hub
         auto* d = new spy::Dispatcher(Backend(), opts);
         d->StartReaper();
         log::Info("game backend: dispatcher ready (default timeout " + std::to_string(cfg.default_timeout_ms) +

@@ -69,8 +69,9 @@ void ConsoleEcho::Worker()
             if (pending_ > 0) cv_.wait_for(lk, opts_.refill / 4);  // wake when a token may be free for the summary
             else cv_.wait(lk);
         } catch (...) {
-            // No exception may end this thread (Global Constraints). An allocation failure (the summary text) drops
-            // the pending summary, so the loop cannot spin on it; the lock is held again, as at the top of the loop.
+            // No exception may end this thread: it would terminate the game. An allocation failure (the summary
+            // text) drops the pending summary, so the loop cannot spin on it; the lock is held again, as at the top
+            // of the loop.
             if (!lk.owns_lock()) lk.lock();
             pending_ = 0;
         }

@@ -1,5 +1,5 @@
 #include "spy/channel.h"
-#include "spy/protocol_generated.h"  // kMaxChannelBytes, kMaxChannelPayloadBytes (protocol.json limits, Task 33)
+#include "spy/protocol_generated.h"  // kMaxChannelBytes, kMaxChannelPayloadBytes (protocol.json limits)
 
 namespace spy {
 std::size_t utf8_prefix_len(std::string_view s, std::size_t max)

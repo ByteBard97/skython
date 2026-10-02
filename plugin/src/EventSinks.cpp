@@ -81,7 +81,7 @@ void RegisterBatch1()
         log::Error(std::string("events: batch 1 not registered: ") + (!holder ? "ScriptEventSourceHolder" : "ModCallbackEvent source") + " is null");
         return;
     }
-    // Task 44: known and ready to attach; each is added inside an SKSE task while one of its events has a subscriber.
+    // Known and ready to attach; each is added inside an SKSE task while one of its events has a subscriber.
     Sinks().push_back({ "death", { "death", "dying" }, [holder] { holder->AddEventSink<RE::TESDeathEvent>(&death); },
                         [holder] { holder->RemoveEventSink<RE::TESDeathEvent>(&death); } });
     Sinks().push_back({ "quest_stage", { "quest_stage" }, [holder] { holder->AddEventSink<RE::TESQuestStageEvent>(&stage); },

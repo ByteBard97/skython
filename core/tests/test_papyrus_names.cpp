@@ -8,9 +8,9 @@
 
 TEST_CASE("engine class names get their .psc spelling in any casing")
 {
-    CHECK(spy::canonical_script_name("WEAPON") == "Weapon");  // seen on the box (Task 28)
-    CHECK(spy::canonical_script_name("SPELL") == "Spell");    // seen on the box (Task 28)
-    CHECK(spy::canonical_script_name("utility") == "Utility"); // seen on the box (S7a)
+    CHECK(spy::canonical_script_name("WEAPON") == "Weapon");  // seen in game
+    CHECK(spy::canonical_script_name("SPELL") == "Spell");    // seen in game
+    CHECK(spy::canonical_script_name("utility") == "Utility"); // seen in game (S7a)
     CHECK(spy::canonical_script_name("weapon") == "Weapon");
     CHECK(spy::canonical_script_name("Weapon") == "Weapon");
     CHECK(spy::canonical_script_name("actor") == "Actor");

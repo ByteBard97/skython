@@ -74,7 +74,7 @@ void InstallModuleHost(ModuleHost host)
 void DefineModule(py::module_& m)
 {
     const ModuleHost& h = Host();
-    m.doc() = "Skython's boundary between Python and the game: request and response JSON text (spec 4.2).";
+    m.doc() = "Skython's boundary between Python and the game: request and response JSON text.";
     m.attr("BACKEND") = std::string(h.backend != nullptr ? h.backend : "game");
     m.attr("PROTOCOL") = py::make_tuple(kProtocolMajor, kProtocolMinor);
 
@@ -118,7 +118,7 @@ void DefineModule(py::module_& m)
           "summarised). Never blocks, never raises for rate limiting.");
     m.def("in_flight", [] { return Disp().InFlight(); }, release(), "Calls submitted and not yet finished.");
     m.def("now_us", [] { return NowUs(); },
-          "steady_clock microseconds: the clock of the plugin's trace_timing stamps (Task 38).");
+          "steady_clock microseconds: the clock of the plugin's trace_timing stamps.");
     m.def("open_consumer",
           [] {
               if (Host().events == nullptr) throw std::runtime_error("_skython: this build has no event hub");

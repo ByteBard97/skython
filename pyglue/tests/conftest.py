@@ -1,4 +1,4 @@
-"""Shared setup for the _skython module tests (Task 19).
+"""Shared setup for the _skython module tests.
 
 The module under test is the real C++ extension, built by pyglue/linux/CMakeLists.txt against uv's CPython 3.14 with
 the fake backend. Its build directory goes on sys.path; SKYTHON_PYGLUE_BUILD overrides where it is.

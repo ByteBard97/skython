@@ -39,7 +39,7 @@ using Done = std::function<void(OpResult)>;  // call exactly once, from any thre
 using Cancelled = std::function<bool()>;     // true once the request timed out, was cancelled, or a world reset started
 using Progress = std::function<void(json)>;  // batch: {"completed": n, "results": [...]} so far, any thread
 
-// What runs ops: the game (plugin, Task 27) or the fake (Linux tests, below in fake_backend.h).
+// What runs ops: the game (the plugin) or the fake (Linux tests, below in fake_backend.h).
 class Backend
 {
 public:
@@ -52,7 +52,7 @@ public:
 };
 
 using Ticket = std::uint64_t;
-// The id of the request whose Backend::Run is running on this thread; 0 anywhere else (Task 38: GameBackend's
+// The id of the request whose Backend::Run is running on this thread; 0 anywhere else (GameBackend's
 // trace_timing line names it, so it can be joined with the bridge's line). Backend::Run itself gets no id.
 std::uint64_t CurrentRequestId() noexcept;
 struct DispatcherOptions
@@ -64,8 +64,8 @@ struct DispatcherOptions
     EventHub* events = nullptr;  // answers events.subscribe / events.unsubscribe; null -> those ops are unsupported
 };
 
-// Turns request text into backend calls and backend results into response text (spec 4.2, 4.5). Thread-safe.
-// Rules (index Contracts): bad text -> bad_request at once; a needs_game op while NotReadyReason() has a value ->
+// Turns request text into backend calls and backend results into response text. Thread-safe.
+// Rules: bad text -> bad_request at once; a needs_game op while NotReadyReason() has a value ->
 // not_ready at once; more than max_inflight_total in flight -> busy; past its deadline -> timeout; a world reset
 // (LoadsStarted() differs from its value at Submit) -> not_ready for that needs_game call, reason from
 // NotReadyReason(false) (else "loading"), detail.dispatched = true if it had reached Backend::Run; an exception from

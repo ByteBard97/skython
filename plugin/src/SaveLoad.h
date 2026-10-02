@@ -4,8 +4,9 @@
 #include <string>
 #include <string_view>
 
-// game.save / game.load (Contracts). Run is called on the submitting thread. game.save requests the save through SKSE's
-// Papyrus Game.SaveGame from one AddTask (R63); game.load calls the engine's load in one AddUITask (spike S6).
+// game.save / game.load. Run is called on the submitting thread. game.save requests the save through SKSE's
+// Papyrus Game.SaveGame from one AddTask (calling Save_Impl from an SKSE task deadlocks); game.load calls the
+// engine's load in one AddUITask (spike S6).
 namespace spy::saveload {
 void Run(const std::string& op, const json& args, spy::Done done, spy::Cancelled cancelled);
 void OnSaveGame(std::string_view name);  // from life::OnMessage on kSaveGame; completes the pending game.save of that name

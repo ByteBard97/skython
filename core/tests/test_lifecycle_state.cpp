@@ -113,9 +113,9 @@ TEST_CASE("new game bumps the epoch and is interactive once the Loading Menu clo
     CHECK(s.interactive());
 }
 
-TEST_CASE("new game before the Loading Menu opens: interactive for that window (Task 25 logs the real order)")
+TEST_CASE("new game before the Loading Menu opens: interactive for that window")
 {
-    // Pins today's behaviour. If Task 25 or 31 finds kNewGame fires before the Loading Menu opens, add a pending
+    // Pins today's behaviour. If kNewGame turns out to fire fires before the Loading Menu opens, add a pending
     // flag that on_new_game sets and the Loading Menu closing clears, and change this test.
     AtMainMenu s;
     s.on_menu(MM, false);
@@ -201,7 +201,7 @@ TEST_CASE("paused is reported, but is a not-ready reason only when the caller as
     s.on_new_game();
     s.set_paused(true);
     CHECK(s.paused());
-    CHECK(s.interactive());                                  // a paused game is still interactive (spec 4.1)
+    CHECK(s.interactive());                                  // a paused game is still interactive
     CHECK_FALSE(s.not_ready_reason().has_value());
     CHECK_FALSE(s.not_ready_reason(false).has_value());
     CHECK(s.not_ready_reason(true) == "paused");
@@ -280,7 +280,7 @@ TEST_CASE("events and queries from several threads at once do not race (run unde
     CHECK(s.epoch() == 2000u);
 }
 
-// Task 48b (ruling R70): a world started from the main menu without kNewGame or a save load (a console coc). SKSE
+// A world started from the main menu without kNewGame or a save load (a console coc). SKSE
 // sends kNewGame only from its hook on the CharGen quest's NewGame, so a coc never raises it. The plugin asks
 // world_start_pending() after each menu event and, while it is true, checks the player's parent cell on the main
 // thread and calls on_player_in_world().
@@ -332,7 +332,7 @@ TEST_CASE("the startup Loading Menu that closes under the Main Menu does not ope
     LifecycleState s;
     s.on_data_loaded();
     s.on_menu(MM, true);
-    s.on_menu(LM, false);  // Task 48 R69 launch 1: 'Main Menu opened' then 'Loading Menu closed'
+    s.on_menu(LM, false);  // order seen in a live launch: 'Main Menu opened' then 'Loading Menu closed'
     CHECK_FALSE(s.world_start_pending());
     CHECK_FALSE(s.on_player_in_world());
     CHECK(s.epoch() == 0);

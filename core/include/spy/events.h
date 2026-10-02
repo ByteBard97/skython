@@ -45,16 +45,16 @@ inline constexpr std::size_t kEventFrameOverheadBytes = 96;
 struct EventHubOptions
 {
     std::function<std::uint32_t()> epoch;   // LifecycleState::epoch (life::Epoch) in the plugin; a counter in tests (empty: 0)
-    std::function<bool()> loading;          // life::SaveLoadInProgress in the plugin (Task 39); a switch in tests (empty: false)
-    std::size_t max_queued_bytes_per_consumer = kMaxQueuedEventBytesPerConsumer;  // R61; tests lower it
-    // Task 44 (its sink-detach probe passed): called when an event's subscriber count goes 0->1 (wanted = true) or
+    std::function<bool()> loading;          // life::SaveLoadInProgress in the plugin; a switch in tests (empty: false)
+    std::size_t max_queued_bytes_per_consumer = kMaxQueuedEventBytesPerConsumer;  // caps one consumer's memory; tests lower it
+    // Called when an event's subscriber count goes 0->1 (wanted = true) or
     // 1->0 (wanted = false), from Subscribe, Unsubscribe and CloseConsumer, always after the hub's locks are released
     // (it may call back into the hub). An exception it throws is swallowed. Empty: never called. Optional and last: an
     // initializer that sets it uses designated initializers (.epoch = ..., .loading = ..., .on_wanted = ...).
-    std::function<void(std::string_view event, bool wanted)> on_wanted{};  // Task 44: subscriber count 0->1 (true) / 1->0 (false); optional
+    std::function<void(std::string_view event, bool wanted)> on_wanted{};  // subscriber count 0->1 (true) / 1->0 (false); optional
 };
 
-// Event consumers, subscriptions and their bounded queues (spec 4.6). Pure C++: no game, no Python. Thread-safe.
+// Event consumers, subscriptions and their bounded queues. Pure C++: no game, no Python. Thread-safe.
 // Locking: one hub mutex for every queue and table plus one condition variable per consumer (notified after the hub
 // mutex is released); and one drain mutex per consumer, held by Next while it takes events and builds their frames,
 // and taken by Unsubscribe and CloseConsumer before they purge (lock order: drain, then hub). Push reads epoch() and

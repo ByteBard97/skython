@@ -14,7 +14,7 @@
 #include <vector>
 
 namespace spy {
-// A Backend with no game, for Linux tests of the Dispatcher, the _skython module (Task 19) and everything above it.
+// A Backend with no game, for Linux tests of the Dispatcher, the _skython module and everything above it.
 // papyrus.call_static on script "Fake":
 //   Echo(x) -> x          Sleep(ms) -> ms, after ms milliseconds (other calls are not held up)
 //   Fail(code, message) -> that error (an unknown code is internal)

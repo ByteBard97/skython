@@ -24,7 +24,7 @@ struct InProcess
     InProcess()
     {
         g_inProcess.fetch_add(1);
-        if (!ops::t_inTask) g_outside.fetch_add(1);  // R52 flag, never a thread-id test (R49)
+        if (!ops::t_inTask) g_outside.fetch_add(1);  // the InTask flag, never a thread-id test
     }
     ~InProcess() { g_inProcess.fetch_sub(1); }
     InProcess(const InProcess&) = delete;

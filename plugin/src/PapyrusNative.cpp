@@ -15,7 +15,7 @@ namespace spy::native {
 namespace {
 std::atomic_bool g_badChannelLogged{false};
 
-// Runs on a Papyrus VM thread (or inside an SKSE task: never assume either, R49). Copies, pushes, returns.
+// Runs on a Papyrus VM thread (or inside an SKSE task: never assume either). Copies, pushes, returns.
 void Send(RE::StaticFunctionTag*, RE::BSFixedString channel, RE::BSFixedString payload)
 {
     try {
@@ -35,7 +35,7 @@ void Send(RE::StaticFunctionTag*, RE::BSFixedString channel, RE::BSFixedString p
         if (!data) return;  // unreachable after the check above (make_channel_event applies the same rule)
         spy::events::Push("channel", std::move(*data));
     } catch (...) {
-        // nothing may escape into the VM (Global Constraints); Push itself never throws
+        // nothing may escape into the VM; Push itself never throws
     }
 }
 

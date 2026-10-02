@@ -15,7 +15,7 @@
 namespace spy::life {
 namespace {
 // Immortal: read from Python threads (through the Dispatcher) that can outlive static destruction.
-// Task 17's default menu names are "Loading Menu" and "Main Menu" (RE::LoadingMenu/MainMenu::MENU_NAME).
+// The default menu names are "Loading Menu" and "Main Menu" (RE::LoadingMenu/MainMenu::MENU_NAME).
 LifecycleState& State()
 {
     static LifecycleState& s = *new LifecycleState();
@@ -23,15 +23,15 @@ LifecycleState& State()
 }
 
 std::atomic_bool g_lastInteractive{ false };
-std::atomic_bool g_saveLoadInProgress{ false };  // Task 39 (R60): see SaveLoadInProgress in Lifecycle.h
+std::atomic_bool g_saveLoadInProgress{ false };  // see SaveLoadInProgress in Lifecycle.h
 // game_loaded waits for the interactive transition (S6: kPostLoadGame comes before the Loading Menu closes).
 // 0 = nothing pending, 1 = a save load succeeded, 2 = a new game started, 3 = the world-start gate started a world
-// (Task 48b: a console coc from the main menu, which raises neither kPostLoadGame nor kNewGame).
+// (a console coc from the main menu, which raises neither kPostLoadGame nor kNewGame).
 std::atomic_int g_pendingLoaded{ 0 };
 
-// Task 48b (R70): the world-start check. While core's gate is open, one SKSE task at a time checks that the player
-// has a parent cell and 3D. A task never re-queues itself (Global Constraints; SKSE drains its queue until it is
-// empty, so it would spin): if the player is not in the world yet, a short-lived thread queues the next check
+// The world-start check. While core's gate is open, one SKSE task at a time checks that the player
+// has a parent cell and 3D. A task never re-queues itself (SKSE drains its queue until it is empty, so it would
+// spin): if the player is not in the world yet, a short-lived thread queues the next check
 // kWorldCheckDelay later, at most kWorldCheckAttempts times per gate opening. Any later menu event also queues one.
 constexpr auto kWorldCheckDelay = std::chrono::milliseconds(100);
 constexpr int kWorldCheckAttempts = 100;  // about 10 s
@@ -46,7 +46,7 @@ void NoteInteractive()
     log::Info(std::string("lifecycle: interactive = ") + (now ? "true" : "false") + ", epoch " + std::to_string(State().epoch()));
     if (!now) return;
     const int pending = g_pendingLoaded.exchange(0);
-    g_saveLoadInProgress.store(false);  // R60: the save load / new game ends here, right before game_loaded is pushed
+    g_saveLoadInProgress.store(false);  // the save load / new game ends here, right before game_loaded is pushed
     if (pending == 0) return;
     // No lifecycle lock is held here (Lifecycle.cpp has none): Push takes only the hub's mutex.
     // A gate start (3) has no save behind it either, so it reports new_game true; it raises no new_game event (that
@@ -124,17 +124,17 @@ struct MenuSink final : RE::BSTEventSink<RE::MenuOpenCloseEvent>
             if (!e) return RE::BSEventNotifyControl::kContinue;
             const std::string name = e->menuName.c_str();
             State().on_menu(name, e->opening);
-            // Task 31's menu test checks this is not stale (GameIsPaused may update after the event returns).
+            // A live menu test checks this is not stale (GameIsPaused may update after the event returns).
             if (auto* ui = RE::UI::GetSingleton()) State().set_paused(ui->GameIsPaused());
             if (name == RE::LoadingMenu::MENU_NAME)
                 log::Info(std::string("lifecycle: Loading Menu ") + (e->opening ? "opened" : "closed"));
             else if (name == RE::MainMenu::MENU_NAME && e->opening) {
                 log::Info("lifecycle: Main Menu opened; no game loaded");
-                console::FlushHeld();  // queues one SKSE task for lines held before the console existed (Task 43)
+                console::FlushHeld();  // queues one SKSE task for lines held before the console existed
             } else if (name == RE::MainMenu::MENU_NAME)
                 log::Info("lifecycle: Main Menu closed");
             NoteInteractive();
-            QueueWorldCheck();  // Task 48b: no-op unless the world-start gate is open
+            QueueWorldCheck();  // no-op unless the world-start gate is open
         } catch (...) {
             log::Error("lifecycle: menu sink threw");
         }
@@ -168,23 +168,23 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
     }
     case SKSE::MessagingInterface::kPreLoadGame:
         g_pendingLoaded.store(0);
-        g_saveLoadInProgress.store(true);  // Task 39 (R60)
+        g_saveLoadInProgress.store(true);
         State().on_pre_load_game();
         log::Info("lifecycle: loading a save");
         break;
     case SKSE::MessagingInterface::kPostLoadGame: {
         const bool ok = reinterpret_cast<std::uintptr_t>(m->data) != 0;  // a packed bool, not a pointer
         g_pendingLoaded.store(ok ? 1 : 0);
-        if (!ok) g_saveLoadInProgress.store(false);  // Task 39 (R60): a failed load raises no game_loaded
+        if (!ok) g_saveLoadInProgress.store(false);  // a failed load raises no game_loaded
         State().on_post_load_game(ok);
         log::Info(std::string("lifecycle: save load ") + (ok ? "succeeded" : "FAILED") + ", epoch " + std::to_string(State().epoch()));
         break;
     }
     case SKSE::MessagingInterface::kNewGame:
         g_pendingLoaded.store(2);
-        g_saveLoadInProgress.store(true);  // Task 39 (R60)
+        g_saveLoadInProgress.store(true);
         if (!State().on_new_game()) {
-            // The world-start gate already started this world and pushed its game_loaded (Task 48b): undo.
+            // The world-start gate already started this world and pushed its game_loaded: undo.
             int expected = 2;
             g_pendingLoaded.compare_exchange_strong(expected, 0);
             g_saveLoadInProgress.store(false);
@@ -195,7 +195,7 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
         break;
     case SKSE::MessagingInterface::kSaveGame: {
         // SKSE sends the save's name as data (dataLen bytes, maybe NUL-terminated). Logged raw once per launch so the
-        // RESULTS entry can confirm the payload (Task 41 matches pending saves on it).
+        // payload can be checked (saveload matches pending saves on it).
         std::string name;
         if (m->data && m->dataLen > 0) name.assign(static_cast<const char*>(m->data), strnlen(static_cast<const char*>(m->data), m->dataLen));
         static std::atomic_bool logged{ false };

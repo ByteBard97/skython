@@ -102,7 +102,7 @@ TEST_CASE("a request without args is accepted, with empty args (fixture valid_wi
 
 TEST_CASE("responses built by the plugin match the fixture shapes")
 {
-    // responses.json also holds the dev bridge's welcome and handshake_error; those are built in Python (Task 23).
+    // responses.json also holds the dev bridge's welcome and handshake_error; those are built in Python.
     auto fx = load("responses.json");
     REQUIRE(fx["valid"].size() >= 3);
     CHECK(same_text(spy::make_ok(1, 6), fx["valid"][0]));

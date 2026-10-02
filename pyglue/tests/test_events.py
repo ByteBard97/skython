@@ -1,4 +1,4 @@
-"""_skython's event functions (index Contracts, Task 35) against the fake backend and core's EventHub."""
+"""_skython's event functions against the fake backend and core's EventHub."""
 import json
 import threading
 import time

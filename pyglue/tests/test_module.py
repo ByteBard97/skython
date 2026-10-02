@@ -1,4 +1,4 @@
-"""The _skython module API (index Contracts), against the fake backend."""
+"""The _skython module API, against the fake backend."""
 import json
 import math
 import os

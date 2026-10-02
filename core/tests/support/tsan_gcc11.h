@@ -1,4 +1,4 @@
-// Force-included (-include) into the ThreadSanitizer build only (Task 18 Step 6).
+// Force-included (-include) into the ThreadSanitizer build only.
 // GCC 11's libstdc++ waits on a condition_variable with a steady_clock deadline through pthread_cond_clockwait, which
 // GCC 11's libtsan does not intercept. TSan then misses the unlock inside the wait and reports false "double lock of a
 // mutex" and "data race" warnings for every timed wait. Turning the macro off makes libstdc++ use

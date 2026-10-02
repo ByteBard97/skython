@@ -11,8 +11,8 @@ void OnMessage(SKSE::MessagingInterface::Message* m);  // from the core's messag
 bool DataReady();
 bool GameLoaded();
 bool Loading();
-// Task 39 (R60): true from kPreLoadGame or kNewGame until that load or new game is over (the interactive signal; Task
-// 40 clears it right before the game_loaded push) or a failed kPostLoadGame. Never true for a door, fast-travel or coc
+// True from kPreLoadGame or kNewGame until that load or new game is over (the interactive signal; it is cleared
+// right before the game_loaded push) or a failed kPostLoadGame. Never true for a door, fast-travel or coc
 // loading screen. The event hub's `loading` source (Events.cpp).
 bool SaveLoadInProgress() noexcept;
 bool Interactive();

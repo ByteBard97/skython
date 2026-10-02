@@ -20,8 +20,8 @@ struct Config
     std::uint32_t max_inflight_per_connection = config_defaults::kMaxInflightPerConnection;  // dev bridge; at least 1
     std::uint32_t max_inflight_total = config_defaults::kMaxInflightTotal;  // dispatcher; at least 1
     bool enable_console = config_defaults::kEnableConsole;
-    bool trace_timing = config_defaults::kTraceTiming;               // dev only: GameBackend logs per-request timestamps (Task 38)
-    bool console_echo_errors = config_defaults::kConsoleEchoErrors;  // a player script failure echoes one console line (Task 43)
+    bool trace_timing = config_defaults::kTraceTiming;               // dev only: GameBackend logs per-request timestamps
+    bool console_echo_errors = config_defaults::kConsoleEchoErrors;  // a player script failure echoes one console line
     std::vector<std::string> ignored_keys;  // unrecognised keys and lines without '=', as ignored_entry_label gives them (log them: "Port" instead of "port" is silent otherwise)
 };
 
@@ -41,6 +41,6 @@ Config parse_config(std::string_view text);
 // never put the token in the log).
 std::string ignored_entry_label(std::string_view entry);
 
-// Every Config field under its ini key name, plus "ignored_keys" (an array). _skython.config() (Task 19) starts from this.
+// Every Config field under its ini key name, plus "ignored_keys" (an array). _skython.config() starts from this.
 json config_to_json(const Config& c);
 }

@@ -23,7 +23,7 @@ namespace fs = std::filesystem;
 using Clock = std::chrono::steady_clock;
 namespace {
 // Legal access to the protected bool-returning Load_Impl (a pointer to member named through a derived class). Saving
-// does not use the save manager directly (R63): a synchronous Save_Impl from an SKSE task deadlocked the game.
+// does not use the save manager directly: a synchronous Save_Impl from an SKSE task deadlocked the game.
 struct Access : RE::BGSSaveLoadManager
 {
     using RE::BGSSaveLoadManager::Load_Impl;
@@ -175,10 +175,10 @@ void Save(const std::string& name, Done done, Cancelled cancelled)
         return done(OpResult::Err(ErrorCode::bad_request, "a save named " + name + " already exists",
                                   json{ { "reason", "save_exists" } }));
     if (refused) return done(InProgress(name));
-    // R63: the save is requested through SKSE's Papyrus native Game.SaveGame(name), dispatched like papyrus.call_static
+    // The save is requested through SKSE's Papyrus native Game.SaveGame(name), dispatched like papyrus.call_static
     // from one AddTask. A synchronous BGSSaveLoadManager Save_Impl from an SKSE task deadlocks against the main
-    // thread's Papyrus VM lock (Task 41, first live run). The VM call returns once the save is requested; the request
-    // completes on kSaveGame (OnSaveGame), as before.
+    // thread's Papyrus VM lock (seen in game). The VM call returns once the save is requested; the request
+    // completes on kSaveGame (OnSaveGame).
     // A cancel before the dispatch drops the request; after it, the name stays reserved (DropCancelledLocked).
     auto task = [name, id, done, cancelled] {
         ops::InTask in;
@@ -226,7 +226,7 @@ void Save(const std::string& name, Done done, Cancelled cancelled)
 
 void Load(const std::string& name, Done done, Cancelled cancelled)
 {
-    // needs_game is false for game.load (Contracts), so this is the only readiness check: a main menu is fine.
+    // needs_game is false for game.load, so this is the only readiness check: a main menu is fine.
     if (auto why = life::NotReadyReason(false); why && (*why == "starting" || *why == "loading")) return done(ops::NotReady(*why));
     if (SaveDir().empty()) return done(NoSaveFolder());
     const std::string key = Fold(name);
@@ -335,7 +335,7 @@ void OnSaveGame(std::string_view raw)
     }
     for (auto& p : hit) {  // outside the lock
         if (p.cancelled()) continue;
-        log::Info("saveload: saved " + p.name);  // the engine started the save (Contracts); the file may follow
+        log::Info("saveload: saved " + p.name);  // the engine started the save; the file may follow
         p.done(OpResult::Ok(json{ { "name", p.name } }));
     }
 }

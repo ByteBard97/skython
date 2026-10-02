@@ -22,7 +22,7 @@ namespace {
 namespace fs = std::filesystem;
 namespace py = pybind11;
 
-// Immortal (Global Constraints): never static objects, so process exit cannot destroy them under a waiting thread.
+// Immortal: never static objects, so process exit cannot destroy them under a waiting thread.
 std::mutex& Mx() { static std::mutex& m = *new std::mutex(); return m; }
 std::string& StateText() { static std::string& s = *new std::string("disabled: not started"); return s; }
 std::atomic_bool g_started{ false };
@@ -97,14 +97,14 @@ sys.stderr = _SpyStream("error")
 
 [[noreturn]] void ParkForever()
 {
-    static std::mutex& m = *new std::mutex();                         // immortal (Global Constraints)
+    static std::mutex& m = *new std::mutex();                         // immortal, as Mx()
     static std::condition_variable& cv = *new std::condition_variable();
     std::unique_lock l(m);
     for (;;) cv.wait(l);  // never notified; spurious wake-ups just wait again
 }
 
 // Releases the GIL when the scope that owns it ends, by any path: the normal end, or an exception thrown inside one
-// of Run's catch handlers. noexcept, so the host thread can never end holding the GIL (spec 4.5 rule 2).
+// of Run's catch handlers. noexcept, so the host thread can never end holding the GIL.
 struct GilRelease
 {
     GilRelease() = default;
@@ -148,7 +148,7 @@ void Run(const Config cfg)
     };
     host.console_echo = [](const std::string& m) { console::Echo(m); };
     if (cfg.trace_timing) host.probe_sink_cycles = [](int n) { return probe::SinkCycles(n); };
-    // _skython talks to the game dispatcher (GameBackend, Task 27).
+    // _skython talks to the game dispatcher (GameBackend).
     InstallModuleHost(std::move(host));
     if (PyImport_AppendInittab("_skython", &PyInit__skython) == -1) throw std::runtime_error("PyImport_AppendInittab failed");
 

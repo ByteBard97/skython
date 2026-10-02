@@ -286,7 +286,7 @@ TEST_CASE("stress: Wait, WaitAny, cancels, timeouts and loads racing on the same
     CHECK(d.Abandoned() == 0);
 }
 
-// ---- Task 35: game.save and game.load on the fake ----------------------------------------------------------------
+// ---- game.save and game.load on the fake ----------------------------------------------------------------
 namespace {
 std::string op_text(std::uint64_t id, const std::string& op, json args)
 {

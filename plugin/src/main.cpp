@@ -17,7 +17,7 @@
 using namespace std::literals;
 
 // The core is never loaded by SKSE itself (it sits in Plugins/Skython/), but CommonLib looks up this
-// declaration in the calling module (Step 2), so it is declared here as well.
+// declaration in the calling module, so it is declared here as well.
 SKSEPluginInfo(
     .Version = { 0, 1, 0, 0 },
     .Name = "SkythonCore"sv,
@@ -70,7 +70,7 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
         spy::life::OnMessage(m);
         if (m->type == SKSE::MessagingInterface::kDataLoaded) {
             spy::game::GetDispatcher();      // the dispatcher (and through it the hub) exists first
-            spy::events::RegisterSinks();    // before Python starts: no subscription can race the sink setup (Task 44 relies on it)
+            spy::events::RegisterSinks();    // before Python starts: no subscription can race the sink setup (on-demand attach needs this)
             spy::saveload::SaveDir();        // read the INI once, in the kDataLoaded handler, and log the folder
             spy::host::Start(spy::settings::Get());
         }
@@ -95,7 +95,7 @@ extern "C" __declspec(dllexport) bool SpyCore_Load(const SKSE::LoadInterface* sk
             spy::settings::GetRuntime().game_version, spy::settings::GetRuntime().runtime,
             spy::host::LinkedPythonVersion()));
         spy::settings::Load();
-        spy::native::Register();  // Skython.Send; the VM calls back when it is ready (Task 46)
+        spy::native::Register();  // Skython.Send; the VM calls back when it is ready
         auto* messaging = SKSE::GetMessagingInterface();
         if (!messaging || !messaging->RegisterListener(OnMessage)) {
             spy::log::Error("messaging listener registration failed");

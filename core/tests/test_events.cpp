@@ -391,7 +391,7 @@ TEST_CASE("EventHub: max_subscriptions counts every consumer; beyond it Subscrib
     CHECK(hub.Subscriptions() == spy::kMaxSubscriptions - spy::kMaxSubscriptionsPerConsumer + 1);
 }
 
-TEST_CASE("EventHub: one consumer holds at most max_subscriptions_per_consumer; other consumers still subscribe (R61)")
+TEST_CASE("EventHub: one consumer holds at most max_subscriptions_per_consumer; other consumers still subscribe")
 {
     spy::EventHub hub({});
     const auto c1 = hub.OpenConsumer();
@@ -408,7 +408,7 @@ TEST_CASE("EventHub: one consumer holds at most max_subscriptions_per_consumer; 
     CHECK(hub.Subscriptions() == spy::kMaxSubscriptionsPerConsumer + 1);
 }
 
-TEST_CASE("EventHub: a consumer's queued bytes stay within its budget; the pushed subscription's oldest go first (R61)")
+TEST_CASE("EventHub: a consumer's queued bytes stay within its budget; the pushed subscription's oldest go first")
 {
     const json big_a = channel("a", std::string(1000, 'x'));
     const json big_b = channel("b", std::string(1000, 'x'));

@@ -73,7 +73,7 @@ PYBIND11_MODULE(_skython, m)
         return d;
     }();
     // Named fields (C++20 designated initializers), never positional: later tasks append ModuleHost fields
-    // (console_echo in Task 43, probe_sink_cycles in Task 44), each with a default.
+    // (console_echo, probe_sink_cycles), each with a default.
     static spy::ConsoleEcho* echo = new spy::ConsoleEcho([](const std::string& line) { Log("info", "console: " + line); });  // leaked like the fake
     spy::InstallModuleHost({.dispatcher = dispatcher, .backend = "fake", .config_json = ConfigJson, .log = Log,
                             .fake = fake, .events = hub,

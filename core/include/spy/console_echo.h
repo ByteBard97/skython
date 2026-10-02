@@ -10,10 +10,11 @@
 #include <thread>
 
 namespace spy {
-// Rate-limited one-line messages (R38 item 2). A token bucket: `burst` lines at once, then one per `refill`. Lines over
-// the rate are counted, and when a token is free again one summary line "Skython: N more script errors; see
-// python.log" is emitted. Echo never blocks beyond one short mutex section and never throws; the sink runs on this
-// object's own worker thread (never the caller's), so a slow or throwing sink cannot hold anyone up.
+// Rate-limited one-line messages, so a script failing in a loop cannot flood the console. A token bucket: `burst`
+// lines at once, then one per `refill`. Lines over the rate are counted, and when a token is free again one summary
+// line "Skython: N more script errors; see python.log" is emitted. Echo never blocks beyond one short mutex section
+// and never throws; the sink runs on this object's own worker thread (never the caller's), so a slow or throwing
+// sink cannot hold anyone up.
 class ConsoleEcho
 {
 public:

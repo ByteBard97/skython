@@ -1,5 +1,5 @@
-# Linux build of the _skython extension module with the fake backend (Task 19). The game build of the same module
-# source is part of the plugin core (Task 26).
+# Linux build of the _skython extension module with the fake backend. The game build of the same module
+# source is part of the plugin core.
 cmake_minimum_required(VERSION 3.21)
 project(skython_pyglue_linux LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)

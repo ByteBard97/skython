@@ -30,7 +30,7 @@ RE::BSScript::Internal::VirtualMachine* VM() { return RE::BSScript::Internal::Vi
 // The plugin that owns a non-runtime form's load-order index, so a form key names the plugin its FormID belongs to.
 // The index comes first: GetFile(0) is the first file that defines the record, which for a record another plugin
 // injects into a master's index (or overrides) is not the plugin of the index. GetFile(0) is only the fallback when the
-// index has no loaded file. (GetFile(0) is also null for some forms, the player 0x14, Task 27.) Runtime ids: null.
+// index has no loaded file. (GetFile(0) is also null for some forms, the player 0x14.) Runtime ids: null.
 const RE::TESFile* SourceFile(const RE::TESForm* form)
 {
     const auto id = form->GetFormID();
@@ -61,7 +61,7 @@ Fingerprint LiveFingerprint(const RE::TESForm* form)
     return {KeyOrId(base), ScriptClassOf(form)};
 }
 
-// Task 39: written once inside an SKSE task, then published; sinks read it from any thread without a lock.
+// Written once inside an SKSE task, then published; sinks read it from any thread without a lock.
 using ClassTable = std::array<std::string, 256>;
 std::atomic<const ClassTable*> g_classTable{ nullptr };
 
@@ -95,14 +95,14 @@ TypeInfo ElementType(const TypeInfo& arrayType)
 }
 
 // The script object of type `script` attached to the object with this handle, if any. The body is exactly
-// the call spike S7 (Task 9) proved. The pinned header declares exactly three parameters (verified, API-VERIFICATION.md):
+// the call spike S7 proved. The pinned header declares exactly three parameters (checked at the pinned commit):
 //   bool FindBoundObject(VMHandle, const char* className, BSTSmartPointer<Object>& out) const
 bool FindBound(RE::VMHandle handle, const std::string& script, RE::BSTSmartPointer<RE::BSScript::Object>& out)
 {
     return VM()->FindBoundObject(handle, script.c_str(), out) && out;
 }
 
-// Task 42 (owner question from Task 29): did a form or alias already have a bound script object when a call reached it?
+// Did a form or alias already have a bound script object when a call reached it?
 // Dev only (trace_timing); once per target per epoch, so a load shows the state again; at most 4096 targets per process.
 void NoteBinding(std::uint64_t key, const std::string& desc, bool boundBefore)
 {
@@ -140,7 +140,7 @@ void BindObject(const void* ptr, RE::VMTypeID type, const std::string& nativeCla
         // A failed PackHandle leaves the value None (kNone), and GetObject() asserts the value is an object.
         if (!out.IsObject()) throw ProtocolError(ErrorCode::vm_error, "could not bind " + desc + " (a " + nativeClass + ") as " + (want.empty() ? "an object" : canonical_script_name(want)));
         // PackHandle types the value as the form's own class (Actor, WEAPON). Passed as is to a parameter declared as
-        // a base class (Form), the native never ran and the call returned None (Task 28, launch 1: IsObjectFavorited,
+        // a base class (Form), the native never ran and the call returned None (seen in game with IsObjectFavorited,
         // CreateFormArray); an exact class match (IsWordUnlocked's WordOfPower) ran. So give the value the declared
         // parameter type, as the FindBound branch below does; the object keeps its own class.
         auto obj = out.GetObject();
@@ -153,16 +153,16 @@ void BindObject(const void* ptr, RE::VMTypeID type, const std::string& nativeCla
     RE::BSTSmartPointer<RE::BSScript::Object> bound;
     if (FindBound(policy->GetHandleForObject(type, ptr), want, bound)) {
         // GetRawType() on purpose: for a class type it is the class-typed value (the ObjectTypeInfo pointer), as
-        // PackHandle sets it. GetUnmangledRawType() would drop the class and pass a plain kObject (API-VERIFICATION.md).
+        // PackHandle sets it. GetUnmangledRawType() would drop the class and pass a plain kObject (checked at the pinned commit).
         out.SetObject(bound, declared.GetRawType());
         return;
     }
     throw ProtocolError(ErrorCode::type_mismatch, "parameter " + param + " expects " + canonical_script_name(want) + ", got " + desc + " (a " + nativeClass + ")");
 }
 
-// An alias argument. Unlike a form, an alias is never bound on demand (R45): no PackHandle, which on a plain alias
+// An alias argument. Unlike a form, an alias is never bound on demand: no PackHandle, which on a plain alias
 // would bind a script object to it. Only an object already bound to the alias is passed, re-typed to the declared
-// parameter type as BindObject does for forms (Task 28: a value typed as its own class made natives return None).
+// parameter type as BindObject does for forms (a value typed as its own class made natives return None).
 void BindAlias(RE::BGSBaseAlias* alias, const AliasRef& a, const TypeInfo& declared, const std::string& param, Variable& out)
 {
     const auto* cls = declared.GetTypeInfo();  // a single object type here (IsObject), never an object array
@@ -206,9 +206,9 @@ json ObjectToJson(const RE::BSScript::Object& obj)
     // (naive_form_check_selects_a_form=false), so this check does not mistake an alias for its quest.
     if (auto* form = RE::TESForm::LookupByID(static_cast<RE::FormID>(handle & 0xFFFFFFFF));
         form && policy->HandleIsType(static_cast<RE::VMTypeID>(form->GetFormType()), handle)) {
-        // Answered (Task 28 RESULTS): a Quest's own handle has high32 = 0xFFFF, not the Quest type id (0x4D), and
+        // Measured in game: a Quest's own handle has high32 = 0xFFFF, not the Quest type id (0x4D), and
         // HandleIsType(RefAlias/LocAlias, quest handle) is false, so only an alias with id 0xFFFF could pass this check
-        // and decode as its quest (alias handles are (aliasID << 32) | questFormID, S4). Form-first stands (R52). The
+        // and decode as its quest (alias handles are (aliasID << 32) | questFormID, S4). So forms are tried first. The
         // line below is still logged once per launch because livetest/test_m1_calls.py
         // (test_quest_result_is_a_quest_not_an_alias) asserts it; drop both together.
         if (form->Is(RE::FormType::Quest)) {
@@ -232,7 +232,7 @@ json ObjectToJson(const RE::BSScript::Object& obj)
 }
 }
 
-// Unchanged from Task 27: core's encoder; shortest round-trip text, non-finite -> null (PROTOCOL.md).
+// core's encoder; shortest round-trip text, non-finite -> null (PROTOCOL.md).
 json FloatToJson(float f)
 {
     Value v;
@@ -241,8 +241,8 @@ json FloatToJson(float f)
 }
 
 // The one place a form's class name is made: DescribeForm's type, Fingerprint.type and LiveFingerprint all come from
-// here, so they agree (core's fingerprint comparison is case-sensitive). The VM's GetName() gave WEAPON and SPELL on
-// the box (Task 28): canonical_script_name gives the .psc spelling (R56). Lookups by name (IsA, FindBoundObject,
+// here, so they agree (core's fingerprint comparison is case-sensitive). The VM's GetName() gave WEAPON and SPELL in
+// game: canonical_script_name gives the .psc spelling. Lookups by name (IsA, FindBoundObject,
 // GetScriptObjectType) are case-insensitive and take the names as they are.
 std::string ScriptClassOf(const RE::TESForm* form)
 {
@@ -263,7 +263,7 @@ RE::TESForm* ResolveForm(const FormRef& r)
         if (!form) throw ProtocolError(ErrorCode::not_found, "no form " + *r.form_key + " (is " + k.plugin + " loaded?)");
     } else {
         form = RE::TESForm::LookupByID(*r.form_id);
-        // Missing is not_found, also for a runtime id (spec 4.4). stale_reference is only for "exists but is something else".
+        // Missing is not_found, also for a runtime id. stale_reference is only for "exists but is something else".
         if (!form) throw ProtocolError(ErrorCode::not_found, "no form " + Describe(r) + (runtime ? " (the runtime reference no longer exists)" : ""));
     }
     if (form->IsDeleted()) throw ProtocolError(ErrorCode::not_found, "form " + Describe(r) + " is deleted");
@@ -342,7 +342,7 @@ Target ResolveTarget(const Value& object, const std::string& script)
     const bool boundBefore = FindBound(handle, script, bound);
     NoteBinding(static_cast<std::uint64_t>(handle), desc, boundBefore);
     if (boundBefore) return {bound, desc};
-    // Aliases are never bound on demand (R45): a plain alias would get an `Alias`-class object (S7g), still not a
+    // Aliases are never bound on demand: a plain alias would get an `Alias`-class object (S7g), still not a
     // ReferenceAlias, and the binding adds an attachedScripts entry whose save persistence is unmeasured.
     if (std::holds_alternative<AliasRef>(object.v))
         throw ProtocolError(ErrorCode::type_mismatch, desc + " has no " + script + " script object bound (an unscripted alias; "
@@ -350,7 +350,7 @@ Target ResolveTarget(const Value& object, const std::string& script)
     if (sig::IsA(nativeClass, script)) {
         // A form no script has touched (a cold form, or an unscripted quest) has no bound object yet; PackHandle binds
         // the native one, and the Object& overload dispatches on it (S7d/S7g). Side effect: an attachedScripts entry
-        // (save persistence unmeasured, see Task 29's Rules).
+        // (whether it persists in a save is unmeasured).
         Variable v;
         RE::BSScript::PackHandle(&v, ptr, type);
         if (v.IsObject())
@@ -465,9 +465,9 @@ json FromVariable(const Variable& v)
     if (t.IsArray()) {
         auto arr = v.GetArray();
         if (!arr) return nullptr;
-        // Results are not capped at 128 (index Contracts): SKSE and PapyrusUtil natives can return longer arrays.
+        // Results are not capped at 128: SKSE and PapyrusUtil natives can return longer arrays.
         // Copied without the Array's BSSpinLock, which is private in the pinned CommonLib. Acceptable because every
-        // array result is converted inside an SKSE task (NeedsMainThread is true for any array, R49), never on the
+        // array result is converted inside an SKSE task (NeedsMainThread is true for any array), never on the
         // VM's callback thread.
         json items = json::array();
         for (std::uint32_t i = 0; i < arr->size(); ++i) items.push_back(FromVariable((*arr)[i]));
