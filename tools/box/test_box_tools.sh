@@ -344,10 +344,15 @@ grep -qF '$Singles = @($PexDest, $EspDest) + $TestPexDests' "$pl" && grep -qF "i
 P_="$B/box_plugins.sh"; pd="$(mktemp -d)"; export SKYTHON_STATE="$pd/state"
 printf 'a.esp\r\n*B.esp\r\n' > "$pd/bak1"; printf 'a.esp\r\n*B.esp\r\n*SkythonTest.esp\r\n' > "$pd/want1"
 printf 'a.esp\r\n*B.esp' > "$pd/bak2"; printf 'a.esp\r\n*B.esp\r\n*SkythonTest.esp\r\n' > "$pd/want2"
-: > "$pd/bak3"; printf '*SkythonTest.esp\r\n' > "$pd/want3"
-for i in 1 2 3; do
-  "$P_" compose "$pd/bak$i" > "$pd/got$i" 2>&1 && cmp -s "$pd/got$i" "$pd/want$i" && ok "compose case $i: backup + [CRLF] + *SkythonTest.esp CRLF" || bad "compose case $i: $(od -c "$pd/got$i" | head -3)"
+: > "$pd/bak3"; printf '*SkythonTest.esp\n' > "$pd/want3"
+# R64: an LF-only backup (the box's real plugins.txt; the game rewrites it with LF at launch) gets an LF line
+printf 'a.esp\nB.esp\n' > "$pd/bak4"; printf 'a.esp\nB.esp\n*SkythonTest.esp\n' > "$pd/want4"
+printf 'a.esp\nB.esp' > "$pd/bak5"; printf 'a.esp\nB.esp\n*SkythonTest.esp\n' > "$pd/want5"
+for i in 1 2 3 4 5; do
+  "$P_" compose "$pd/bak$i" > "$pd/got$i" 2>&1 && cmp -s "$pd/got$i" "$pd/want$i" && ok "compose case $i: backup + [EOL] + *SkythonTest.esp EOL (the backup's line ending)" || bad "compose case $i: $(od -c "$pd/got$i" | head -3)"
 done
+t="$("$P_" classify "$pd/want4" "$pd/bak4" 2>&1)"; [ "$t" = ADDED ] && ok "classify: LF backup + LF line -> ADDED" || bad "classify LF: '$t'"
+grep -qF 'if ($bak -contains 13) { $eol = [byte[]](13, 10) }' "$B/win/plugins.ps1" && ok "plugins.ps1 Compose takes the backup's line ending" || bad "plugins.ps1 Compose line ending"
 printf 'a.esp\r\n*skythontest.esp\r\n' > "$pd/listed"; printf 'SkythonTest.esp\r\n' > "$pd/listed2"
 for f in listed listed2; do if "$P_" compose "$pd/$f" >/dev/null 2>&1; then bad "compose accepted a backup that already lists it ($f)"; else ok "compose refuses a backup that already lists SkythonTest.esp ($f)"; fi; done
 printf '*B.esp\r\na.esp\r\n*SkythonTest.esp\r\n' > "$pd/reordered"; cp "$pd/want1" "$pd/extra"; printf 'c.esp\r\n' >> "$pd/extra"

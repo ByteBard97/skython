@@ -2,14 +2,15 @@
 # The box's plugins.txt (path verified in Task 45) changes only by one added line "*SkythonTest.esp" and by putting the
 # backup back. read: "CUR <sha|NONE> <b64|->", "BAK <sha|NONE> <b64|->", "GAME IDLE|RUNNING". backup: copies plugins.txt
 # to plugins.txt.bak once ("BACKED_UP"/"BACKUP_SAME <sha>"; a differing backup is never overwritten: "BACKUP_DIFFERS",
-# exit 3). add: game idle, plugins.txt == backup (sha -ExpectCur), backup + [CRLF] + "*SkythonTest.esp" CRLF hashes to
+# exit 3). add: game idle, plugins.txt == backup (sha -ExpectCur), backup + [EOL] + "*SkythonTest.esp" EOL hashes to
 # -ExpectNew -> "ADDED <sha>". restore: game idle, plugins.txt (sha -ExpectCur) == backup + that line -> copies the
 # backup back, "RESTORED <sha>". Anything else: "REFUSED <why>", exit 3. Nothing is ever deleted.
+# EOL is the backup's own line ending: CRLF if it contains a CR, else LF (R64: the game rewrites plugins.txt with LF at
+# launch, so a CRLF line added to an LF file came back as different bytes).
 param([string]$Mode, [string]$ExpectCur = '', [string]$ExpectNew = '')
 $ErrorActionPreference = 'Stop'
 $PluginsTxt = 'C:\Users\geoff\AppData\Local\Skyrim Special Edition\plugins.txt'
 $Backup = 'C:\dev\skyrim-python-box\plugins.txt.bak'
-$Line = [Text.Encoding]::ASCII.GetBytes("*SkythonTest.esp`r`n")
 function Sha([byte[]]$b) { ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($b))).Replace('-', '').ToLower() }
 function Bytes([string]$p) { if (Test-Path -LiteralPath $p) { return ,[IO.File]::ReadAllBytes($p) } else { return $null } }
 function Refuse([string]$why) { "REFUSED $why"; exit 3 }
@@ -19,9 +20,11 @@ function Listed([byte[]]$b) {
   return $false
 }
 function Compose([byte[]]$bak) {
+  $eol = [byte[]](10)
+  if ($bak -contains 13) { $eol = [byte[]](13, 10) }
   $sep = [byte[]]@()
-  if ($bak.Length -gt 0 -and $bak[$bak.Length - 1] -ne 10) { $sep = [byte[]](13, 10) }
-  return ,([byte[]]($bak + $sep + $Line))
+  if ($bak.Length -gt 0 -and $bak[$bak.Length - 1] -ne 10) { $sep = $eol }
+  return ,([byte[]]($bak + $sep + [Text.Encoding]::ASCII.GetBytes('*SkythonTest.esp') + $eol))
 }
 switch ($Mode) {
   'read' {

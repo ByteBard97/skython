@@ -12,14 +12,16 @@ source "$(dirname "$0")/box_env.sh"
 STATE_FILE="$SKYTHON_STATE/box-plugins.state"
 WORK="$SKYTHON_STATE/box-plugins"   # this run's copies (overwritten each run)
 
-compose() {  # compose <bak file>: backup + [CRLF] + "*SkythonTest.esp" CRLF on stdout; refuses a backup that lists it
+compose() {  # compose <bak file>: backup + [EOL] + "*SkythonTest.esp" EOL on stdout (EOL: the backup's own, CRLF if it
+             # has a CR, else LF; R64); refuses a backup that lists it
   python3 - "$1" <<'PY'
 import sys
 b = open(sys.argv[1], "rb").read()
 if b"skythontest.esp" in [l.strip().lstrip(b"*").lower() for l in b.splitlines()]:
     sys.exit("box_plugins: SkythonTest.esp is already listed in the backup; ask the owner")
-sep = b"\r\n" if b and not b.endswith(b"\n") else b""
-sys.stdout.buffer.write(b + sep + b"*SkythonTest.esp\r\n")
+eol = b"\r\n" if b"\r" in b else b"\n"
+sep = eol if b and not b.endswith(b"\n") else b""
+sys.stdout.buffer.write(b + sep + b"*SkythonTest.esp" + eol)
 PY
 }
 classify() {  # classify <cur> <bak>: BACKUP (identical), ADDED (backup + our line, byte for byte) or OTHER
