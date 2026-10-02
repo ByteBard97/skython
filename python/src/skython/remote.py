@@ -150,7 +150,8 @@ def connect_remote(session=None, *, host: str = _g.HOST, port: int | None = None
                    client_name: str = _g.CLIENT_NAME, connect_timeout: float = _g.CONNECT_TIMEOUT_S,
                    call_timeout: float = _g.CALL_TIMEOUT_S, retry_not_ready: bool | float = False,
                    send_timeout: float = _g.SEND_TIMEOUT_S) -> Game:
-    """Connect to the dev bridge and handshake. Raises NotRunning, Unauthorized, ProtocolMismatch or
+    """Connect to the dev bridge and handshake. Raises NotRunning, Unauthorized, ProtocolMismatch,
+    HandshakeError (any other handshake refusal, such as bad_request for a malformed hello) or
     ProtocolViolation; a failed handshake never leaves the socket open.
 
     `connect_timeout` bounds the whole connect-hello-welcome exchange. `send_timeout` bounds how long a

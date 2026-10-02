@@ -240,6 +240,23 @@ def test_a_bridge_that_cannot_start_replaces_a_stale_session_file(host, fake, tm
         find_session(tmp_path / "session.json", env={})
 
 
+@pytest.mark.parametrize("bridge", ["disabled", "cannot start"])
+def test_a_failed_session_file_write_never_stops_the_scripts(host, fake, tmp_path, monkeypatch, bridge):
+    from skython import discovery
+
+    def broken(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(discovery, "write_inactive_session_file", broken)
+    if bridge == "cannot start":
+        fake.config_overrides.update({"bridge_enabled": True, "port": 0, "fixed_token": "not a token"})
+    script(tmp_path, "t24_ok", ECHO_SETUP)
+    assert host.main() is None
+    assert host.status()["scripts"] == {"t24_ok": "ok"}
+    assert echoes(fake) == ["t24_ok"]
+    assert "could not write the inactive session file" in log_text(tmp_path)
+
+
 def test_main_never_raises(host, fake):
     fake.config = lambda: "this is not json"
     assert host.main() is None
