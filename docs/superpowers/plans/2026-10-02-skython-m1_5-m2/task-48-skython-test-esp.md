@@ -529,8 +529,9 @@ using System.IO;
 
 namespace SkythonTestEsp
 {
-    // Usage: SkythonTestEspBuilder spike <out_dir>   -> <out_dir>/SkythonTest.esp (Task 47: the VMAD spike)
-    //        SkythonTestEspBuilder full <out_dir>    -> <out_dir>/SkythonTest.esp (Task 48: the test plugin)
+    // Usage: SkythonTestEspBuilder spike <out_dir>   -> <out_dir>/SkythonTest.esp (the VMAD spike)
+    //        SkythonTestEspBuilder full <out_dir>    -> <out_dir>/SkythonTest.esp (the test plugin; reads
+    //                                                  Skyrim.esm, path in SKYTHON_SKYRIM_ESM or TestEsp.DefaultSkyrimEsm)
     //        SkythonTestEspBuilder dump <file.esp>    -> a text summary of the plugin (offline tests)
     //        SkythonTestEspBuilder verify-esm <Skyrim.esm>  -> checks the Skyrim.esm FormKeys TestEsp uses
     // Mutagen refuses to write a mod under a file name other than its ModKey, so the output argument is a folder.
@@ -547,7 +548,8 @@ namespace SkythonTestEsp
             }
             Directory.CreateDirectory(args[1]);
             var path = Path.Combine(args[1], Names.PluginFile);
-            if (args[0] == "spike") SpikeEsp.Write(path); else TestEsp.Write(path);
+            if (args[0] == "spike") SpikeEsp.Write(path);
+            else TestEsp.Write(path, Environment.GetEnvironmentVariable("SKYTHON_SKYRIM_ESM") ?? TestEsp.DefaultSkyrimEsm);
             Console.WriteLine($"wrote {path}");
             return 0;
         }
@@ -558,21 +560,23 @@ namespace SkythonTestEsp
 DOTNET_CLI_TELEMETRY_OPTOUT=1 timeout 300 ~/.dotnet/dotnet build testesp/builder -c Release --no-restore -v q 2>&1 | grep -E 'error|warn'
 timeout 120 ~/.dotnet/dotnet testesp/builder/bin/Release/net8.0/SkythonTestEspBuilder.dll verify-esm "/mnt/games/SteamLibrary/steamapps/common/Skyrim Special Edition/Data/Skyrim.esm"; echo rc=$?
 ```
-Expected: no errors or warnings; seven lines `NordRace 013746:Skyrim.esm ok`, `WEFarmerMale 1034E4:Skyrim.esm ok`, `EncClassBanditMelee 01CE17:Skyrim.esm ok`, `DefaultLightingTemplate 0300E2:Skyrim.esm ok`, `XMarker 00003B:Skyrim.esm ok`, `COCMarkerHeading 000032:Skyrim.esm ok`, `ImpFloorMid01 03CB89:Skyrim.esm ok`; `rc=0`. (The box's Skyrim.esm is the same 1.6.1170 release; Step 10 proves the references resolve there.)
+Expected: no errors or warnings; nine lines `NordRace 013746:Skyrim.esm ok`, `WEFarmerMale 1034E4:Skyrim.esm ok`, `EncClassBanditMelee 01CE17:Skyrim.esm ok`, `XMarker 00003B:Skyrim.esm ok`, `COCMarkerHeading 000032:Skyrim.esm ok`, `ImpFloorMid01 03CB89:Skyrim.esm ok`, `WhiterunBreezehome 0165A8:Skyrim.esm ok`, `WRFireLightShadow01 077FCE:Skyrim.esm ok`, `WhiterunBreezehomeLocation 01F86F:Skyrim.esm ok`, followed by one `location-link <FormKey> <type> ok` line for each Skyrim.esm link the copied location carries (every one must be `ok`, none `ABSENT`); `rc=0`. (The box's Skyrim.esm is the same 1.6.1170 release; Step 10 proves the references resolve there.)
 
 - [ ] **Step 5: `testesp/build.sh`**
 
 Create `testesp/build.sh` (then `chmod +x testesp/build.sh`):
 ```bash
 #!/usr/bin/env bash
-# Rebuild the test plugin and its Papyrus scripts, then compare them with the pins in docs/PINS.md (Task 48).
+# Rebuild the test plugin and its Papyrus scripts, then compare them with the pins in docs/PINS.md.
 # Usage: testesp/build.sh               build into testesp/ (SkythonTest.esp, compiled/*.pex) and compare
 #        testesp/build.sh --check       build into out/testesp-check/ and compare; the committed files are untouched
 #        testesp/build.sh --print-pins  build into out/testesp-check/ and print the pin lines for docs/PINS.md
 # Pins are lines "- pin <path> sha256 <hex>" (the ESP: Mutagen's output is byte-identical across builds) and
 # "- pin <path> stable <hex>" (a .pex: tools/papyrus_compile.sh --stable-hash). Exit 0 only when every pin matches and
-# Mutagen's read-back equals testesp/expected-dump.txt. A mismatch without a source change that explains it is a STOP.
-# Offline only: dotnet restores from ~/.nuget/packages and never from the network.
+# Mutagen's read-back equals testesp/expected-dump.txt. If a pin differs and no source changed, something in the
+# toolchain changed; find out what before re-pinning.
+# Offline only: dotnet restores from ~/.nuget/packages and never from the network. The full build copies a cell record
+# and a location record from the installed Skyrim.esm (path: SKYTHON_SKYRIM_ESM, else TestEsp.DefaultSkyrimEsm).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DOTNET="${DOTNET:-$HOME/.dotnet/dotnet}"
