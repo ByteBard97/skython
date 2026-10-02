@@ -14,7 +14,9 @@ lost. The price: for the length of one subscribe round trip (in-process a few mi
 same lock before sending, so an on() that races Game.close() raises ConnectionLost instead of registering into a
 closed dispatcher. Callbacks run without the lock. Subscription.close() marks the subscription closed under the lock
 (no later callback of it starts), calls stream.untrack(), unsubscribes, and waits for a callback of it that is
-running, unless it is called from that callback's own thread.
+running, unless it is called from the dispatch thread (that callback, or any other callback of this Game). Every
+close() waits so, the second of two overlapping ones and one after Game.close() too. A callback that needs a lock the
+closing thread holds therefore deadlocks it: never close a subscription while holding a lock its callback takes.
 
 Bounds: the plugin's hub bounds each subscription in-process. Remotely the bridge drains the hub continuously, so the
 remote stream keeps its own bounded queue per subscription (skython.remote.RemoteEventStream); stream.track(sub,
@@ -65,11 +67,13 @@ class Event:
 
 class EventStream(Protocol):
     """Where a Game's events come from. next() returns up to MAX_EVENTS_PER_NEXT event objects, [] on timeout and []
-    at once once closed. consumer is the _skython consumer in-process, None remotely (the bridge owns it). track()
+    at once once closed; `closed` is True once close() was called (by the Game or by its transport), and the
+    dispatch thread then stops. consumer is the _skython consumer in-process, None remotely (the bridge owns it). track()
     gives a subscription's max_queue (called under the dispatcher's lock, before the subscription is registered);
     untrack() says it ended."""
 
     consumer: int | None
+    closed: bool
 
     def next(self, timeout: float) -> list[dict]: ...
 
@@ -86,11 +90,11 @@ class InProcessEventStream:
     def __init__(self, module):
         self._m = module
         self.consumer: int | None = module.open_consumer()
-        self._closed = False
+        self.closed = False
         self._lock = threading.Lock()
 
     def next(self, timeout: float) -> list[dict]:
-        if self._closed:
+        if self.closed:
             return []
         text = self._m.next_events(self.consumer, timeout)  # releases the GIL while it waits
         try:
@@ -103,9 +107,9 @@ class InProcessEventStream:
 
     def close(self) -> None:
         with self._lock:
-            if self._closed:
+            if self.closed:
                 return
-            self._closed = True
+            self.closed = True
         self._m.close_consumer(self.consumer)  # drops its subscriptions and queued events, wakes a waiting next
 
     def track(self, sub: int, max_queue: int) -> None:
@@ -116,7 +120,13 @@ class InProcessEventStream:
 
 
 class Subscription:
-    """One subscription of a Game. close() is idempotent; after it returns no callback of this subscription starts."""
+    """One subscription of a Game.
+
+    close() is idempotent. After it returns no callback of this subscription starts, and none is running: close()
+    blocks while this subscription's callback runs (every call, including a second overlapping one and one after
+    Game.close()), except when called on the Game's dispatch thread, i.e. from inside a callback, where it returns
+    at once. So a callback that waits for a lock the closing thread holds deadlocks: do not close a subscription
+    from a thread holding a lock its callback needs."""
 
     def __init__(self, dispatcher: "EventDispatcher", sub: int, event: str, filter: dict | None, fn: Callable):
         self.sub = sub
@@ -164,29 +174,47 @@ class EventDispatcher:
             result = send()
             sub_id = result.get("sub")
             if type(sub_id) is not int:
+                if sub_id is not None:  # the hub may hold a subscription under it: free it rather than leak it
+                    self._unsubscribe_quietly(sub_id)
                 raise errors.ProtocolViolation(f"events.subscribe result has no integer sub: {result!r}")
             granted = result.get("max_queue", max_queue)
-            self.stream.track(sub_id, granted if type(granted) is int else max_queue)
+            try:
+                self.stream.track(sub_id, granted if type(granted) is int else max_queue)
+            except BaseException:
+                try:
+                    self.stream.untrack(sub_id)
+                except Exception:  # noqa: BLE001 - the track() failure is the one to raise
+                    log.exception("events: untracking sub %r after a failed track failed", sub_id)
+                self._unsubscribe_quietly(sub_id)
+                raise
             sub = Subscription(self, sub_id, event, filter, fn)
             self._subs[sub_id] = sub
         self.start()
         return sub
 
-    def close_subscription(self, sub: Subscription) -> None:
-        with self.lock:
-            if sub.closed:
-                return
-            sub.closed = True  # checked under this lock right before each callback: no later callback starts
-            self._subs.pop(sub.sub, None)
-            self.stream.untrack(sub.sub)  # remotely: its queued frames go, later ones are ignored
+    def _unsubscribe_quietly(self, sub_id) -> None:
+        """Send events.unsubscribe for sub_id; a failure is logged (or ignored when the Game or the hub's
+        subscription is already gone), never raised."""
         try:
-            self._game._request(_g.OP_EVENTS_UNSUBSCRIBE, {"sub": sub.sub})
+            self._game._request(_g.OP_EVENTS_UNSUBSCRIBE, {"sub": sub_id})
         except (errors.ConnectionLost, errors.NotFound):
             pass  # the Game or connection is closed (its consumer went with it), or the hub already dropped it
-        except errors.SkythonError as e:
-            log.warning("events: unsubscribing sub %d failed: %s", sub.sub, e)
+        except Exception as e:  # noqa: BLE001 - best effort
+            log.warning("events: unsubscribing sub %r failed: %s", sub_id, e)
+
+    def close_subscription(self, sub: Subscription) -> None:
+        """See Subscription.close: every call waits for a running callback of `sub`, unless it is made on the
+        dispatch thread (inside a callback), where waiting could only deadlock."""
         with self.lock:
-            if threading.current_thread() is not self._thread:  # from its own callback: never wait for ourselves
+            first = not sub.closed
+            if first:
+                sub.closed = True  # checked under this lock right before each callback: no later callback starts
+                self._subs.pop(sub.sub, None)
+                self.stream.untrack(sub.sub)  # remotely: its queued frames go, later ones are ignored
+        if first:
+            self._unsubscribe_quietly(sub.sub)
+        with self.lock:
+            if threading.current_thread() is not self._thread:  # on the dispatch thread: never wait for ourselves
                 while self._running is sub:
                     self._idle.wait()
 
@@ -198,8 +226,10 @@ class EventDispatcher:
                 self._thread.start()
 
     def close(self) -> None:
-        """Close every subscription (no unsubscribe requests: closing the stream drops them), stop the thread and
-        join it (at most _JOIN_S, never from the dispatch thread itself), close the stream."""
+        """Close every subscription (no unsubscribe requests: closing the stream drops them), close the stream, stop
+        the thread and join it, never from the dispatch thread itself. The join waits at most _JOIN_S (2 s): a
+        callback still running after that keeps running and may finish after close() returns (spec 4.6 allows it);
+        no further callback starts."""
         with self.lock:
             for sub in self._subs.values():
                 sub.closed = True
@@ -215,6 +245,9 @@ class EventDispatcher:
 
     def _loop(self) -> None:
         while not self._stop.is_set():
+            if getattr(self.stream, "closed", False):  # closed under us (transport.close()): stop polling it
+                self._stop.set()
+                return
             t0 = time.monotonic()
             try:
                 batch = self.stream.next(_POLL_S)
@@ -229,7 +262,10 @@ class EventDispatcher:
             for raw in batch:
                 if self._stop.is_set():
                     return
-                self._deliver(raw)
+                try:
+                    self._deliver(raw)
+                except Exception:  # noqa: BLE001 - the thread never dies silently
+                    log.exception("events: delivering an event failed: %r", raw)
 
     def _deliver(self, raw: dict) -> None:
         try:

@@ -188,13 +188,18 @@ class Game:
            max_queue: int = _g.DEFAULT_EVENT_QUEUE) -> Subscription:
         """Call fn(Event) on the Game's event thread for every `event` that matches `filter`.
 
-        `filter` maps a field of the event's filter_fields to the values to accept (a list, or one value): every
+        `filter` maps a field of the event's filter_fields to the values to accept (a list, tuple, set or frozenset,
+        or one value): every
         listed field must match one of its values. Forms must carry form_id (resolve them first); strings match
         ignoring ASCII case. At most `max_queue` events wait per subscription; beyond that the oldest are dropped
         and the next delivered Event's `dropped` says how many.
 
         on() holds the Game's dispatcher lock across the subscribe round trip (about 90 ms through the bridge), so
-        this Game's callbacks wait that long; that is what guarantees the first event is never lost. Raises
+        this Game's callbacks wait that long; that is what guarantees the first event is never lost.
+
+        Subscription.close() blocks while that subscription's callback runs (unless called from inside a callback),
+        so a callback that waits on a lock held by the closing thread deadlocks: do not close from a thread holding a
+        lock your callback needs. Raises
         Unsupported when the server or module has no events, ConnectionLost once the Game is closed."""
         if not callable(fn):
             raise TypeError(f"fn must be callable, not {type(fn).__name__}")
@@ -202,7 +207,7 @@ class Game:
         if filter is not None:
             if not isinstance(filter, dict):
                 raise TypeError(f"filter must be a dict or None, not {type(filter).__name__}")
-            args["filter"] = {field: [to_wire(v) for v in (vals if isinstance(vals, (list, tuple)) else [vals])]
+            args["filter"] = {field: [to_wire(v) for v in (list(vals) if isinstance(vals, (list, tuple, set, frozenset)) else [vals])]
                               for field, vals in filter.items()}
         d = self._event_dispatcher()
         return d.subscribe(lambda: _expect_dict(self._request(_g.OP_EVENTS_SUBSCRIBE, args), "events.subscribe result"),
@@ -275,7 +280,9 @@ class Game:
             time.sleep(0.25)
 
     def close(self) -> None:
-        """Close every subscription, stop the event thread (joined at most 2 s), close the stream and the transport."""
+        """Close every subscription, close the event stream and the transport, and stop the event thread. The thread
+        is joined for at most 2 s: a callback still running after that may finish after close() returns (spec 4.6
+        allows it), but no further callback starts. Safe to call from inside a callback (it then does not join)."""
         with self._events_lock:
             self._closing = True
             d, self._dispatcher = self._dispatcher, None

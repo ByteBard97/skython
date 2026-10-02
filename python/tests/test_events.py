@@ -455,3 +455,168 @@ def test_the_dispatcher_tracks_and_untracks_each_subscription(fake_game):
     a.close()
     a.close()  # idempotent: no second untrack
     assert calls == [("track", a.sub, g.DEFAULT_EVENT_QUEUE), ("track", b.sub, 16), ("untrack", a.sub)]
+
+
+# -- close and re-entrancy (Task 36 review) ----------------------------------------------------------------
+def _dispatch_threads() -> set:
+    return {t for t in threading.enumerate() if t.name == "skython-events"}
+
+
+def test_game_close_from_inside_a_callback(module):
+    before = _dispatch_threads()
+    gm = connect_in_process(module=module)
+    calls, holder = [], {}
+
+    def cb(e):
+        calls.append(e.seq)
+        if e.seq == 1:
+            gm.close()  # must not join its own thread
+            holder["returned"] = True
+
+    gm.on_channel("c", cb)
+    (thread,) = _dispatch_threads() - before
+    for i in range(3):
+        push(module, "channel", chan("c", str(i)))
+    wait_until(lambda: holder.get("returned"), what="Game.close() inside the callback to return")
+    wait_until(lambda: not thread.is_alive(), what="the dispatch thread to stop")
+    push(module, "channel", chan("c", "late"))
+    time.sleep(0.1)
+    assert calls == [1] and gm.transport.closed
+
+
+def test_a_callback_closing_another_subscription(game, module):
+    a_calls, b_calls, holder = [], [], {}
+
+    def a_cb(e):
+        a_calls.append(e.seq)
+        holder["b"].close()  # on the dispatch thread: returns at once
+        holder["returned"] = True
+
+    game.on_channel("a", a_cb)
+    holder["b"] = game.on_channel("b", lambda e: b_calls.append(e.seq))
+    push(module, "channel", chan("a"))
+    push(module, "channel", chan("b", "1"))
+    push(module, "channel", chan("b", "2"))
+    wait_until(lambda: holder.get("returned"), what="the other subscription's close() to return")
+    push(module, "channel", chan("b", "3"))
+    fence(game, module)
+    assert a_calls == [1] and b_calls == [] and holder["b"].closed
+
+
+def test_a_callback_can_call_game_state(game, module):
+    got = []
+    game.on_channel("s", lambda e: got.append(game.state()))
+    push(module, "channel", chan("s"))
+    wait_until(lambda: got, what="the callback's state()")
+    assert isinstance(got[0], dict) and "epoch" in got[0]
+
+
+def _blocking_sub(game, module, channel="c"):
+    inside, release = threading.Event(), threading.Event()
+
+    def cb(e):
+        inside.set()
+        release.wait(5)
+
+    sub = game.on_channel(channel, cb)
+    push(module, "channel", chan(channel))
+    assert inside.wait(5)
+    return sub, release
+
+
+def _closer(fn):
+    done = threading.Event()
+    t = threading.Thread(target=lambda: (fn(), done.set()))
+    t.start()
+    return t, done
+
+
+def test_a_second_overlapping_close_also_waits_for_the_callback(game, module):
+    sub, release = _blocking_sub(game, module)
+    t1, done1 = _closer(sub.close)
+    wait_until(lambda: sub.closed, what="the first close() to mark the subscription")
+    t2, done2 = _closer(sub.close)
+    assert not done2.wait(0.3), "the second close() returned while the callback was still running"
+    assert not done1.is_set()
+    release.set()
+    assert done1.wait(5) and done2.wait(5)
+    t1.join(5)
+    t2.join(5)
+
+
+def test_close_after_game_close_still_waits_for_the_callback(module):
+    gm = connect_in_process(module=module)
+    sub, release = _blocking_sub(gm, module)
+    tg, done_game = _closer(gm.close)
+    wait_until(lambda: sub.closed, what="Game.close() to mark the subscription")
+    ts, done_sub = _closer(sub.close)
+    assert not done_sub.wait(0.3), "close() after Game.close() returned while the callback was still running"
+    release.set()
+    assert done_sub.wait(5) and done_game.wait(5)
+    tg.join(5)
+    ts.join(5)
+
+
+def test_transport_close_stops_the_dispatch_thread(module):
+    before = _dispatch_threads()
+    gm = connect_in_process(module=module)
+    gm.on_channel("c", lambda e: None)
+    (thread,) = _dispatch_threads() - before
+    gm.transport.close()
+    wait_until(lambda: not thread.is_alive(), what="the dispatch thread to stop after transport.close()")
+    with pytest.raises(errors.ConnectionLost):
+        gm.on_channel("d", lambda e: None)
+    gm.close()
+
+
+def test_a_failing_delivery_is_logged_and_the_thread_goes_on(fake_game, fake, caplog):
+    d = fake_game._event_dispatcher()
+    real, failed = d._deliver, []
+
+    def flaky(raw):
+        if not failed:
+            failed.append(raw)
+            raise RuntimeError("boom")
+        real(raw)
+
+    d._deliver = flaky
+    seen = []
+    fake_game.on_channel("c", seen.append)
+    with caplog.at_level(logging.ERROR, logger="skython.events"):
+        push(fake, "channel", chan("c", "1"))
+        push(fake, "channel", chan("c", "2"))
+        wait_until(lambda: seen, what="the event after the failed delivery")
+    assert [e.data["payload"] for e in seen] == ["2"]
+    assert any("delivering an event failed" in r.getMessage() for r in caplog.records)
+
+
+def test_filter_values_may_be_a_list_tuple_set_or_frozenset(fake_game, fake):
+    noop = lambda e: None  # noqa: E731
+    for vals in (["x"], ("x",), {"x"}, frozenset({"x"}), "x"):
+        fake_game.on("channel", {"channel": vals}, noop)
+    sent = [r["args"]["filter"] for r in fake.requests if r["op"] == g.OP_EVENTS_SUBSCRIBE]
+    assert sent == [{"channel": ["x"]}] * 5
+
+
+def test_a_failed_track_unsubscribes_the_hub_subscription(fake_game, fake):
+    stream = fake_game.transport.events()
+    base = fake.subscriptions(stream.consumer)
+
+    def bad_track(sub, max_queue):
+        raise RuntimeError("track failed")
+
+    stream.track = bad_track
+    with pytest.raises(RuntimeError, match="track failed"):
+        fake_game.on_channel("c", lambda e: None)
+    assert fake.subscriptions(stream.consumer) == base
+    assert [r["op"] for r in fake.requests][-2:] == [g.OP_EVENTS_SUBSCRIBE, g.OP_EVENTS_UNSUBSCRIBE]
+
+
+def test_a_non_integer_sub_is_unsubscribed_before_raising(fake_game, fake):
+    d = fake_game._event_dispatcher()
+    sent, real = [], fake_game._request
+    fake_game._request = lambda op, args, timeout=None: (sent.append((op, args)), real(op, args, timeout))[1]
+    with pytest.raises(errors.ProtocolViolation):
+        d.subscribe(lambda: {"sub": "7"}, "channel", None, lambda e: None, 16)  # unsubscribe fails: logged only
+    assert sent == [(g.OP_EVENTS_UNSUBSCRIBE, {"sub": "7"})]
+    assert d._subs == {}
