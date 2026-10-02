@@ -5,17 +5,27 @@
 #    in tools/*.sh every ssh/scp is written `timeout "$VAR" ssh|scp "${SSH_OPTS[@]}"` with BatchMode in SSH_OPTS;
 # 3. no destructive verb in any script that acts on the box (Remove-Item, Unregister-ScheduledTask, rm, del, ...);
 # 4. Stop-Process only by the two game process names;
-# 5. the box paths in box_env.sh are the ones the investigation verified;
+# 5. the box paths box_env.sh derives from the settings file (box.local.env.example's placeholders here);
 # 6. Part C (Tasks 25-32): the two-DLL deploy targets, recorded moves, launch env, the bridge session tunnel
 #    (loopback only, token only in out/), the box file mirror, save-name checks, the teardown list's saves, and the
 #    snapshot's rule for a log rewritten with the same bytes after the stamp;
 #    Gate 0 (Task 45, owner decision 7): --esp, --test-pex, the single-file allow-list, plugins.txt add/restore.
+# 8. the settings file and the two installs: a missing file or variable is a clear error, BOX_GAME picks the folders,
+#    place.ps1's allow-list and launch.ps1's required version follow the install, and no private name is committed.
+# Every check runs against tools/box/box.local.env.example (BOX_LOCAL_ENV), never this machine's box.local.env.
 # Every check runs offline: BOX_OFFLINE=1 makes box_env.sh's wrappers refuse (exit 97), and ssh/scp on PATH are
 # traps that record any call and fail. A check that exercises a real script uses its print-only mode on top of that.
 set -uo pipefail
 export BOX_OFFLINE=1
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 B="$ROOT/tools/box"
+EXAMPLE="$B/box.local.env.example"
+export BOX_LOCAL_ENV="$EXAMPLE"
+unset BOX BOX_GAME
+# ex VAR: the example's value of VAR
+ex() { bash -c 'source "$1"; printf "%s" "${!2}"' _ "$EXAMPLE" "$1"; }
+EX_1170="$(ex BOX_GAME_DIR_AE1170)"; EX_17104="$(ex BOX_GAME_DIR_AE17104)"; EX_MYGAMES="$(ex BOX_MYGAMES)"
+EX_USER="$(ex BOX_WIN_USER)"; EX_BOX="$(ex BOX)"; EX_GAME="$(ex BOX_GAME)"
 fail=0
 ok()  { echo "ok   $*"; }
 bad() { echo "FAIL $*"; fail=1; }
@@ -38,7 +48,7 @@ done
 SH=(box_env.sh box_deploy.sh box_launch.sh box_stop.sh box_wait_log.sh box_tunnel.sh box_console.sh
     box_quit.sh box_setup.sh box_teardown_list.sh box_session.sh box_files.sh box_saves.sh box_shot.sh box_plugins.sh)
 PS=(launch.ps1 setup_task.ps1 stamp.ps1 wait_log.ps1 console.ps1 stop.ps1 quit_check.ps1 place.ps1 list.ps1 files.ps1 shot.ps1
-    plugins.ps1)
+    plugins.ps1 config_lib.ps1 config.ps1)
 
 for f in "${SH[@]}"; do
   if [ ! -f "$B/$f" ]; then bad "missing tools/box/$f"; continue; fi
@@ -84,11 +94,11 @@ done
 # 4c. .pex mode: box_deploy.sh --pex resolves to exactly Data\Scripts\SkyrimPython.pex (no ssh in this mode)
 tmpd="$(mktemp -d)"; : > "$tmpd/SkyrimPython.pex"; : > "$tmpd/Other.pex"; : > "$tmpd/x.txt"
 t="$(BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --pex "$tmpd/SkyrimPython.pex" 2>&1)"
-[ "$t" = 'C:\ChronicleDev\Stock Game\Data\Scripts\SkyrimPython.pex' ] && ok "--pex target is Data\\Scripts\\SkyrimPython.pex" || bad "--pex target: '$t'"
+[ "$t" = "$EX_1170\Data\Scripts\SkyrimPython.pex" ] && ok "--pex target is Data\\Scripts\\SkyrimPython.pex" || bad "--pex target: '$t'"
 if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --pex "$tmpd/Other.pex" >/dev/null 2>&1; then bad "--pex accepted Other.pex"; else ok "--pex refuses a file not named SkyrimPython.pex"; fi
 if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --pex "$tmpd/missing.pex" >/dev/null 2>&1; then bad "--pex accepted a missing file"; else ok "--pex refuses a missing file"; fi
 # place.ps1 allows outside Data\SKSE\Plugins only the single files in $Singles: that .pex plus the Gate 0 list (6j)
-grep -qF "\$PexDest = 'C:\ChronicleDev\Stock Game\Data\Scripts\SkyrimPython.pex'" "$B/win/place.ps1" 2>/dev/null \
+grep -qF "\$PexDest = \$data + '\Scripts\SkyrimPython.pex'" "$B/win/place.ps1" 2>/dev/null \
   && grep -qF -- '-and -not ($Singles -ccontains $dest)' "$B/win/place.ps1" && ok "place.ps1 allow-list: Plugins tree + the single files" || bad "place.ps1 allow-list"
 # box_deploy records through put_file, which refuses a target that exists and is not recorded
 grep -qE 'put_file "\$PEX" "\$PEX_DEST"' "$B/box_deploy.sh" 2>/dev/null && ok "--pex goes through put_file (absent or ours; recorded)" || bad "--pex does not use put_file"
@@ -97,16 +107,19 @@ grep -qE 'put_file "\$PEX" "\$PEX_DEST"' "$B/box_deploy.sh" 2>/dev/null && ok "-
 if [ -f "$B/box_env.sh" ]; then
   # shellcheck source=/dev/null
   source "$B/box_env.sh"
-  [ "${BOX_GAME_DIR:-}" = 'C:\ChronicleDev\Stock Game' ] && ok "BOX_GAME_DIR" || bad "BOX_GAME_DIR=${BOX_GAME_DIR:-}"
-  [ "${BOX_PLUGINS:-}" = 'C:\ChronicleDev\Stock Game\Data\SKSE\Plugins' ] && ok "BOX_PLUGINS" || bad "BOX_PLUGINS=${BOX_PLUGINS:-}"
+  [ "${BOX:-}" = "$EX_BOX" ] && ok "BOX from the settings file" || bad "BOX=${BOX:-}"
+  [ "${BOX_GAME:-}" = "$EX_GAME" ] && ok "BOX_GAME defaults to the settings file's" || bad "BOX_GAME=${BOX_GAME:-}"
+  [ "${BOX_GAME_DIR:-}" = "$EX_1170" ] && ok "BOX_GAME_DIR" || bad "BOX_GAME_DIR=${BOX_GAME_DIR:-}"
+  [ "${BOX_PLUGINS:-}" = "$EX_1170\Data\SKSE\Plugins" ] && ok "BOX_PLUGINS" || bad "BOX_PLUGINS=${BOX_PLUGINS:-}"
   [ "${BOX_DIR:-}" = 'C:\dev\skyrim-python-box' ] && ok "BOX_DIR" || bad "BOX_DIR=${BOX_DIR:-}"
-  [ "${BOX_SKSE_LOG_DIR:-}" = 'C:\Users\geoff\Documents\My Games\Skyrim Special Edition\SKSE' ] && ok "BOX_SKSE_LOG_DIR" || bad "BOX_SKSE_LOG_DIR=${BOX_SKSE_LOG_DIR:-}"
+  [ "${BOX_SKSE_LOG_DIR:-}" = "$EX_MYGAMES\SKSE" ] && ok "BOX_SKSE_LOG_DIR" || bad "BOX_SKSE_LOG_DIR=${BOX_SKSE_LOG_DIR:-}"
+  [ "${BOX_SAVES_DIR:-}" = "$EX_MYGAMES\Saves" ] && ok "BOX_SAVES_DIR" || bad "BOX_SAVES_DIR=${BOX_SAVES_DIR:-}"
   [ "${BOX_TASK:-}" = SkyrimPythonGame ] && ok "BOX_TASK" || bad "BOX_TASK=${BOX_TASK:-}"
   [ "$(b64 'a"b c')" = "YSJiIGM=" ] && ok "b64 helper" || bad "b64 helper"
 fi
 
 # 6a. two-DLL layout: loader -> Plugins, core -> Plugins\Skython, ini -> Plugins\Skython.ini (no ssh)
-P='C:\ChronicleDev\Stock Game\Data\SKSE\Plugins'
+P="$EX_1170\Data\SKSE\Plugins"
 d2="$(mktemp -d)"; : > "$d2/Skython.dll"; : > "$d2/dev.ini"; sleep 1; : > "$d2/SkythonCore.dll"
 t="$(BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" "$d2/Skython.dll" "$d2/dev.ini" 2>&1)"
 want="$(printf '%s\n' "$P\Skython.dll" "$P\Skython\SkythonCore.dll" "$P\Skython.ini")"
@@ -281,12 +294,12 @@ grep -qF "\$m = \$entry.Value.PSObject.Properties['mtime']" "$sl" 2>/dev/null \
   && ok "snapshot_lib.ps1: same length + hash + later mtime -> the whole file is new" || bad "snapshot_lib.ps1 has no rewritten-identical rule"
 grep -vE '^\s*#' "$sl" | grep -qE 'LastWriteTime(Utc)? *-(lt|le)|launch\.stamp' && bad "snapshot_lib.ps1 uses a file time to drop text" \
   || ok "snapshot_lib.ps1 never drops text by file time or the stamp time"
-grep -qF 'reads as UNCHANGED: snapshot_lib cannot tell' "$B/win/files.ps1" "$B/win/wait_log.ps1" "$ROOT/docs/superpowers/plans/2026-10-01-skyrim-python-v1-embedded/task-01b-box-game-harness.md" 2>/dev/null \
+grep -qF 'reads as UNCHANGED: snapshot_lib cannot tell' "$B/win/files.ps1" "$B/win/wait_log.ps1" 2>/dev/null \
   && bad "the old 'reads as UNCHANGED' caveat is still documented" || ok "no stale 'reads as UNCHANGED' caveat"
 
 # 6j. Gate 0 (Task 45, owner decision 7): exactly Data\SkythonTest.esp, exactly six Data\Scripts\*.pex, and
 #     plugins.txt changed only by adding *SkythonTest.esp and putting the backup back (no ssh in print/local modes).
-D='C:\ChronicleDev\Stock Game\Data'
+D="$EX_1170\Data"
 gd="$(mktemp -d)"; mkdir -p "$gd/sub"
 for n in SkythonTest.esp Other.esp Skython.pex SkythonTestQuestBase.pex SkythonTestQuest.pex SkythonTestAlias.pex \
          SkythonTestLocationAlias.pex QF_SkythonTestQuest_01000800.pex Other.pex skython.pex SkyrimPython.pex Skython.psc; do : > "$gd/$n"; done
@@ -333,9 +346,9 @@ done
 [ "$(BOX_GATE0_FILE=/tmp/elsewhere bash -c 'source "$1/box_env.sh"; echo "$BOX_GATE0_FILE"' _ "$B")" = "$ROOT/out/gate0-accepted" ] \
   && ok "BOX_GATE0_FILE override ignored without BOX_SSH_STUB" || bad "BOX_GATE0_FILE override honoured without a stub"
 pl="$B/win/place.ps1"
-grep -qF "\$EspDest = 'C:\ChronicleDev\Stock Game\Data\SkythonTest.esp'" "$pl" && ok "place.ps1 lists Data\\SkythonTest.esp" || bad "place.ps1 EspDest"
-all6=1; for n in "${six[@]}"; do grep -qF "'C:\ChronicleDev\Stock Game\Data\Scripts\\$n'" "$pl" || all6=0; done
-[ "$(grep -cE "^  'C:\\\\ChronicleDev\\\\Stock Game\\\\Data\\\\Scripts\\\\[A-Za-z0-9_]+\.pex'[,)]?$" "$pl")" = 6 ] && [ "$all6" = 1 ] \
+grep -qF "\$EspDest = \$data + '\SkythonTest.esp'" "$pl" && ok "place.ps1 lists Data\\SkythonTest.esp" || bad "place.ps1 EspDest"
+all6=1; for n in "${six[@]}"; do grep -qF "(\$data + '\Scripts\\$n')" "$pl" || all6=0; done
+[ "$(grep -cE "^  \(\\\$data \+ '\\\\Scripts\\\\[A-Za-z0-9_]+\.pex'\)[,)]?$" "$pl")" = 6 ] && [ "$all6" = 1 ] \
   && ok "place.ps1 TestPexDests: exactly the six Data\\Scripts names" || bad "place.ps1 TestPexDests is not exactly the six names"
 grep -qF '$Singles = @($PexDest, $EspDest) + $TestPexDests' "$pl" && grep -qF "if ((\$Singles -ccontains \$dest) -and \$Kind -ne 'file')" "$pl" \
   && ok "place.ps1: single files are compared exactly (-ccontains) and take one file each" || bad "place.ps1 single-file rule"
@@ -365,8 +378,8 @@ for c in "bak1 BACKUP" "want1 ADDED" "reordered OTHER" "extra OTHER" "bak2 OTHER
   [ "$t" = "$2" ] && ok "classify $1 -> $2" || bad "classify $1: '$t' (expected $2)"
 done
 pp="$B/win/plugins.ps1"
-grep -qF "\$PluginsTxt = 'C:\Users\geoff\AppData\Local\Skyrim Special Edition\plugins.txt'" "$pp" && grep -qF "\$Backup = 'C:\dev\skyrim-python-box\plugins.txt.bak'" "$pp" \
-  && ok "plugins.ps1: the verified plugins.txt path and the backup in C:\\dev\\skyrim-python-box" || bad "plugins.ps1 paths"
+grep -qF "\$PluginsTxt = Join-Path \$env:LOCALAPPDATA 'Skyrim Special Edition\plugins.txt'" "$pp" && grep -qF "\$Backup = 'C:\dev\skyrim-python-box\plugins.txt.bak'" "$pp" \
+  && ok "plugins.ps1: plugins.txt under %LOCALAPPDATA% and the backup in C:\\dev\\skyrim-python-box" || bad "plugins.ps1 paths"
 w="$(grep -vE '^\s*#' "$pp" | grep -E 'WriteAllBytes|Copy-Item|Set-Content|Out-File|Move-Item|Add-Content|New-Item')"
 [ "$(echo "$w" | grep -c .)" = 3 ] && echo "$w" | grep -qF '[IO.File]::WriteAllBytes($PluginsTxt, $n)' \
   && echo "$w" | grep -qF 'Copy-Item -LiteralPath $PluginsTxt -Destination $Backup' && echo "$w" | grep -qF 'Copy-Item -LiteralPath $Backup -Destination $PluginsTxt -Force' \
@@ -430,6 +443,124 @@ for m in backup add; do
     && ok "box_plugins.sh $m refuses without out/gate0-accepted (no plugins.ps1 call)" || bad "box_plugins.sh $m without Gate 0: rc=$rc '$t'"
 done
 unset SKYTHON_STATE
+
+# 8. the settings file (tools/box/box.local.env) and the two installs
+cfgd="$(mktemp -d)"
+# clean <cmd...>: run with only PATH, HOME, BOX_OFFLINE and what the caller adds (nothing leaks from section 5)
+clean() { env -i PATH="$PATH" HOME="$HOME" BOX_OFFLINE=1 SKYTHON_STATE="$cfgd/state" "$@"; }
+# 8a. a missing settings file: every script stops before anything else and names the example file
+for cmd in "source '$B/box_env.sh'; echo LOADED" "'$B/box_deploy.sh' --where" "'$B/box_launch.sh'"; do
+  t="$(clean BOX_LOCAL_ENV="$cfgd/missing.env" bash -c "$cmd" 2>&1)"; rc=$?
+  [ "$rc" != 0 ] && case "$t" in *"no box settings file $cfgd/missing.env: copy $EXAMPLE to it"*) true ;; *) false ;; esac \
+    && case "$t" in *LOADED*) false ;; *) true ;; esac \
+    && ok "missing settings file -> clear error naming the example ($(basename "$(echo "${cmd%%\' *}" | tr -d "'")"))" || bad "missing settings file ($cmd): rc=$rc '$t'"
+done
+# 8b. each variable left out of the file is named, with the example
+for v in BOX BOX_WIN_USER BOX_MYGAMES BOX_GAME_DIR_AE1170 BOX_GAME_DIR_AE17104 BOX_GAME; do
+  grep -v "^$v=" "$EXAMPLE" > "$cfgd/no-$v.env"
+  t="$(clean BOX_LOCAL_ENV="$cfgd/no-$v.env" "$B/box_deploy.sh" --where 2>&1)"; rc=$?
+  [ "$rc" != 0 ] && case "$t" in *"$v is not set in $cfgd/no-$v.env (see $EXAMPLE)"*) true ;; *) false ;; esac \
+    && ok "settings file without $v -> clear error" || bad "settings file without $v: rc=$rc '$t'"
+done
+for badv in "BOX_GAME_DIR_AE1170='C:\\Games\\x\\'" "BOX_GAME_DIR_AE1170='Games\\x'" "BOX_GAME_DIR_AE17104='C:\\Games\\..\\x'" \
+            "BOX_MYGAMES=\"C:\\it's\"" "BOX_WIN_USER='a b'"; do
+  { cat "$EXAMPLE"; echo "$badv"; } > "$cfgd/bad.env"
+  if clean BOX_LOCAL_ENV="$cfgd/bad.env" "$B/box_deploy.sh" --where >/dev/null 2>&1; then bad "settings file accepted $badv"; else ok "settings file refuses $badv"; fi
+done
+t="$(clean BOX_LOCAL_ENV="$EXAMPLE" BOX=me@elsewhere bash -c 'source "$1/box_env.sh"; echo "$BOX"' _ "$B" 2>&1)"
+[ "$t" = me@elsewhere ] && ok "BOX in the environment wins over the settings file" || bad "BOX override: '$t'"
+# 8c. BOX_GAME selects the install; the folders and the required version follow it
+d4="$(mktemp -d)"; : > "$d4/Skython.dll"; : > "$d4/dev.ini"; touch -d '+1 min' "$d4/SkythonCore.dll"
+where_want() {  # where_want <dir> <version> <key>
+  printf 'BOX_GAME=%s (SkyrimSE.exe %s)\nBOX_GAME_DIR=%s\nBOX_DATA=%s\nBOX_PLUGINS=%s\nBOX_OWN=%s\n' "$3" "$2" "$1" "$1\\Data" \
+    "$1\\Data\\SKSE\\Plugins" "$1\\Data\\SKSE\\Plugins\\Skython"
+}
+t="$(clean BOX_LOCAL_ENV="$EXAMPLE" "$B/box_deploy.sh" --where 2>&1)"
+[ "$t" = "$(where_want "$EX_1170" 1.6.1170.0 ae1170)" ] && ok "no BOX_GAME: the settings file's install (ae1170)" || { bad "default install:"; echo "$t"; }
+for kv in "ae1170 $EX_1170 1.6.1170.0" "ae17104 $EX_17104 1.7.104.0"; do
+  k="${kv%% *}"; rest="${kv#* }"; ver="${rest##* }"; dir="${rest% *}"
+  t="$(clean BOX_LOCAL_ENV="$EXAMPLE" BOX_GAME="$k" "$B/box_deploy.sh" --where 2>&1)"
+  [ "$t" = "$(where_want "$dir" "$ver" "$k")" ] && ok "BOX_GAME=$k -> $dir (SkyrimSE.exe $ver)" || { bad "BOX_GAME=$k:"; echo "$t"; }
+  t="$(clean BOX_LOCAL_ENV="$EXAMPLE" BOX_GAME="$k" BOX_LAUNCH_PRINT_GAME=1 "$B/box_launch.sh" 2>&1)"
+  [ "$t" = "$k $ver $dir" ] && ok "box_launch.sh BOX_GAME=$k launches $dir and requires $ver" || bad "box_launch.sh BOX_GAME=$k: '$t'"
+  t="$(clean BOX_LOCAL_ENV="$EXAMPLE" BOX_GAME="$k" BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" "$d4/Skython.dll" "$d4/dev.ini" 2>&1)"
+  P2="$dir\\Data\\SKSE\\Plugins"
+  [ "$t" = "$(printf '%s\n' "$P2\\Skython.dll" "$P2\\Skython\\SkythonCore.dll" "$P2\\Skython.ini")" ] && ok "BOX_GAME=$k: DLL targets under its Plugins" || { bad "BOX_GAME=$k DLL targets:"; echo "$t"; }
+done
+for k in ae9 AE1170 'ae1170 x' ''; do
+  [ -z "$k" ] && continue
+  t="$(clean BOX_LOCAL_ENV="$EXAMPLE" BOX_GAME="$k" "$B/box_deploy.sh" --where 2>&1)"; rc=$?
+  [ "$rc" != 0 ] && case "$t" in *"is not one of: ae1170 ae17104"*) true ;; *) false ;; esac && ok "BOX_GAME='$k' refused" || bad "BOX_GAME='$k': rc=$rc '$t'"
+done
+grep -qF "bssh \"[IO.File]::WriteAllText('\$BOX_DIR\\\\launch.game', '\$BOX_GAME')\"" "$B/box_launch.sh" \
+  && ok "box_launch.sh writes launch.game with BOX_GAME on every launch" || bad "box_launch.sh does not write launch.game"
+# 8d. place.ps1's allow-list per install. place.ps1 resolves -Game through box.config (config_lib.ps1), never takes a
+#     folder from the caller, and builds every allowed path from that folder. Its single files and Plugins root,
+#     applied to each install's folder, must be exactly what box_deploy.sh targets for that install.
+pl="$B/win/place.ps1"
+grep -vE '^\s*#' "$pl" | grep -qE "'[A-Za-z]:\\\\" && bad "place.ps1 has a literal drive path" || ok "place.ps1 has no literal drive path"
+pre="$(sed -n '/^switch (\$Mode)/q;p' "$pl")"
+echo "$pre" | grep -qxF '$gameDir = Get-GameDir $Game' && echo "$pre" | grep -qF 'if (-not $gameDir) { "REFUSED unknown install' \
+  && echo "$pre" | grep -qxF "\$data = \$gameDir + '\\Data'" && echo "$pre" | grep -qxF "\$root = \$data + '\\SKSE\\Plugins\\'" \
+  && ok "place.ps1 resolves -Game to a configured folder (else REFUSED) and builds its root from it" || bad "place.ps1 install resolution"
+cl="$B/win/config_lib.ps1"
+grep -qF "if (\$key -cnotmatch '^[a-z0-9]+\$' -or -not \$GameVersions.ContainsKey(\$key)) { return \$null }" "$cl" \
+  && grep -qF "if (-not \$c -or -not \$c.Games.ContainsKey(\$key)) { return \$null }" "$cl" \
+  && grep -qF "if (\$d -notmatch '^[A-Za-z]:\\\\[^\\\\]' -or \$d -match '\\\\\$' -or \$d -match '\\.\\.'" "$cl" \
+  && ok "config_lib.ps1 Get-GameDir: only a known key listed in box.config, with a plain absolute folder" || bad "config_lib.ps1 Get-GameDir checks"
+singles="$(echo "$pre" | grep -oE "\\\$data \+ '\\\\[^']+'" | sed -E "s/^\\\$data \+ '//; s/'$//")"
+[ "$(echo "$singles" | grep -c .)" = 9 ] && ok "place.ps1: Plugins root + 8 single files, all from \$data" || { bad "place.ps1 \$data paths:"; echo "$singles"; }
+for kv in "ae1170 $EX_1170" "ae17104 $EX_17104"; do
+  k="${kv%% *}"; dir="${kv#* }"
+  allowed="$(echo "$singles" | grep -vF '\SKSE\Plugins\' | sed "s|^|$(printf '%s' "$dir\\Data" | sed 's/[\\&|]/\\&/g')|" | sort)"
+  got="$( { clean BOX_LOCAL_ENV="$EXAMPLE" BOX_GAME="$k" BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --pex "$tmpd/SkyrimPython.pex"
+            clean BOX_LOCAL_ENV="$EXAMPLE" BOX_GAME="$k" BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --esp "$gd/SkythonTest.esp"
+            clean BOX_LOCAL_ENV="$EXAMPLE" BOX_GAME="$k" BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --test-pex "${six[@]/#/$gd/}"; } 2>&1 | sort)"
+  [ -n "$got" ] && [ "$got" = "$allowed" ] && ok "BOX_GAME=$k: place.ps1's single files == box_deploy.sh's --pex/--esp/--test-pex targets" \
+    || { bad "BOX_GAME=$k single files differ:"; diff <(echo "$allowed") <(echo "$got"); }
+  [ "$k" = ae1170 ] && a1170="$allowed" || a17104="$allowed"
+done
+[ -z "$(comm -12 <(echo "$a1170") <(echo "$a17104"))" ] && ok "the two installs share no allowed single file" || bad "the installs' allow-lists overlap"
+nplace="$(grep -vE '^\s*#' "$B/box_deploy.sh" | grep -c 'place\.ps1')"
+ngame="$(grep -vE '^\s*#' "$B/box_deploy.sh" | grep 'place\.ps1' | grep -c -- '-Game "\$BOX_GAME"')"
+[ "$nplace" = 5 ] && [ "$ngame" = 5 ] && ok "box_deploy.sh passes -Game \"\$BOX_GAME\" in all 5 place.ps1 calls" || bad "place.ps1 calls with -Game: $ngame of $nplace"
+# 8e. the deploy record is per install (absolute paths): a target recorded for ae1170 does not make the same file of
+#     ae17104 ours, and the box check carries -Game ae17104
+drec3="$dd/rec3.txt"; printf '%s\n' "$EX_1170\\Data\\SKSE\\Plugins\\T12Probe.dll" > "$drec3"
+dep3() { : > "$STUBLOG"; STUB_EXISTS=EXISTS BOX_GAME="$1" BOX_DEPLOYED="$drec3" BOX_SSH_STUB="$STUB" "$B/box_deploy.sh" "$dd/T12Probe.dll" 2>&1; }
+t="$(dep3 ae17104)"; rc=$?
+[ "$rc" != 0 ] && case "$t" in *"$EX_17104\\Data\\SKSE\\Plugins\\T12Probe.dll exists on the box but is not in out/box-deployed.txt"*) true ;; *) false ;; esac \
+  && grep -qF "place.ps1 -Mode exists -DestB64 $(b64 "$EX_17104\\Data\\SKSE\\Plugins\\T12Probe.dll") -Game ae17104" "$STUBLOG" \
+  && [ "$(cat "$drec3")" = "$EX_1170\\Data\\SKSE\\Plugins\\T12Probe.dll" ] \
+  && ok "ae17104: an existing target recorded only for ae1170 is refused (record unchanged)" || bad "per-install record (ae17104): rc=$rc '$t'"
+t="$(dep3 ae1170)"; rc=$?
+[ "$rc" != 0 ] && case "$t" in *"BOX_OFFLINE: refusing scp"*) true ;; *) false ;; esac && ! grep -q 'place.ps1 -Mode exists' "$STUBLOG" \
+  && ok "ae1170: the recorded target is ours (no exists check; stopped at scp by BOX_OFFLINE)" || bad "per-install record (ae1170): rc=$rc '$t'"
+# 8f. launch.ps1 requires the version of the selected install; the two version tables agree
+vl="$(grep -E '^\$GameVersions = ' "$cl")"
+[ "$vl" = "\$GameVersions = @{ 'ae1170' = '1.6.1170.0'; 'ae17104' = '1.7.104.0' }" ] && ok "config_lib.ps1 version table: ae1170 1.6.1170.0, ae17104 1.7.104.0" || bad "config_lib.ps1 version table: '$vl'"
+pskeys="$(echo "$vl" | grep -oE "'[a-z0-9]+' = '[0-9.]+'" | tr -d "'" | sed 's/ = / /' | sort)"
+shkeys="$(clean BOX_LOCAL_ENV="$EXAMPLE" bash -c 'source "$1/box_env.sh"; for k in "${BOX_GAMES[@]}"; do echo "$k $(box_game_version "$k")"; done' _ "$B" | sort)"
+[ -n "$pskeys" ] && [ "$pskeys" = "$shkeys" ] && ok "box_env.sh and config_lib.ps1 list the same installs and versions" || bad "version tables differ: ps '$pskeys' sh '$shkeys'"
+lc="$(grep -vE '^\s*#' "$B/win/launch.ps1")"
+echo "$lc" | grep -qxF '$game = Get-GameDir $gameKey' && echo "$lc" | grep -qF 'if (-not $game) { Result "fail install' \
+  && echo "$lc" | grep -qxF '$want = $GameVersions[$gameKey]' && echo "$lc" | grep -qF 'if ($ver -ne $want) { Result "fail SkyrimSE.exe' \
+  && ok "launch.ps1: install from launch.game (refused if unknown), SkyrimSE.exe must be that install's version" || bad "launch.ps1 install/version check"
+echo "$lc" | grep -qE "1\.6\.1170|1\.7\.104|'[A-Za-z]:\\\\[^']*Game" && bad "launch.ps1 still has a literal version or game folder" || ok "launch.ps1 has no literal version or game folder"
+# 8g. box_setup.sh writes box.config (user + each install) and setup_task.ps1 takes the user from it
+t="$(clean BOX_LOCAL_ENV="$EXAMPLE" BOX_SETUP_PRINT_CONFIG=1 "$B/box_setup.sh" 2>&1)"
+[ "$t" = "$(printf 'user\t%s\ngame\tae1170\t%s\ngame\tae17104\t%s' "$EX_USER" "$EX_1170" "$EX_17104")" ] && ok "box_setup.sh box.config: user and both installs" || { bad "box.config text:"; echo "$t"; }
+grep -qF 'New-ScheduledTaskPrincipal -UserId $TaskUser ' "$B/win/setup_task.ps1" && grep -qxF '$TaskUser = $cfg.User' "$B/win/setup_task.ps1" \
+  && ! grep -qE -- "-UserId '" "$B/win/setup_task.ps1" && ok "setup_task.ps1: -UserId from box.config" || bad "setup_task.ps1 -UserId"
+grep -qF "\$BoxConfig = Join-Path \$BoxDir 'box.config'" "$cl" && grep -qE '^bps 60 setup_task\.ps1' "$B/box_setup.sh" \
+  && [ "$(grep -nE "launch.game|box.config'," "$B/box_setup.sh" | head -1 | cut -d: -f1)" -lt "$(grep -nE '^bps 60 setup_task' "$B/box_setup.sh" | cut -d: -f1)" ] \
+  && ok "box_setup.sh writes box.config before setup_task.ps1 reads it" || bad "box_setup.sh order"
+# 8h. no private machine data in the committed box tools (the names are assembled so this file does not hold them)
+priv="$(printf '%s|' 'Chron''icle' 'Counten''ance' 'Runtime''Harness' 'geo''ff' '192\.168\.' 'Stock'' Game' 'C:\\\\Users\\\\[a-z]')"; priv="${priv%|}"
+hits="$(grep -nIiE "$priv" "$B"/*.sh "$B"/win/*.ps1 "$EXAMPLE" 2>/dev/null)"
+[ -z "$hits" ] && ok "no private names, address or user paths in tools/box (example included)" || { bad "private data in tools/box:"; echo "$hits"; }
+git -C "$ROOT" check-ignore -q tools/box/box.local.env && ! git -C "$ROOT" check-ignore -q tools/box/box.local.env.example \
+  && ok "tools/box/box.local.env is gitignored; the example is not" || bad "box.local.env gitignore"
 
 # 7. nothing reached ssh or scp during the whole run
 if [ -e "$TRAPLOG" ]; then bad "ssh/scp was called during the offline test:"; cat "$TRAPLOG"; else ok "no ssh/scp call reached PATH"; fi

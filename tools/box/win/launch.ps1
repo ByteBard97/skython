@@ -1,5 +1,8 @@
-# launch.ps1: run by the scheduled task SkyrimPythonGame (interactive, as geoff, on demand only).
-# 1. refuse if the game or loader runs, or if the Stock Game exe is not 1.6.1170.0;
+# launch.ps1: run by the scheduled task SkyrimPythonGame (interactive, as the box's configured user, on demand only).
+# 0. the install: launch.game (written by box_launch.sh before every launch) names its key (ae1170, ae17104); the
+#    game folder comes from box.config and the required SkyrimSE.exe version from config_lib.ps1. A missing
+#    launch.game, an unknown key or an unconfigured install is refused: there is no default install;
+# 1. refuse if the game or loader runs, or if that install's SkyrimSE.exe is not the version required for it;
 # 2. Steam: start it with -silent if it is not running, then wait (bounded, 120 s) for a NEW
 #    "[Logged On ...] RecvMsgClientLogOnResponse() : processing complete" line in connection_log.txt
 #    (if Steam already runs, its latest state line is "Logged On" and that logon is newer than the last
@@ -13,8 +16,8 @@
 #    re-ensure Steam as in step 2 (bounded, 90 s) and then retry. Steam is only ever started -silent, never stopped.
 # Every step goes to launch.log; the outcome goes to launch.result as "<launch stamp> ok|fail ...".
 $ErrorActionPreference = 'Continue'
-$box  = 'C:\dev\skyrim-python-box'
-$game = 'C:\ChronicleDev\Stock Game'
+. (Join-Path $PSScriptRoot 'config_lib.ps1')
+$box  = $BoxDir
 $conn = 'C:\Steam\logs\connection_log.txt'
 $log  = Join-Path $box 'launch.log'
 $stampFile = Join-Path $box 'launch.stamp'
@@ -67,11 +70,17 @@ function EnsureSteam([int]$waitSec) {
 }
 
 Log 'start'
+$gameFile = Join-Path $box 'launch.game'
+$gameKey = if (Test-Path $gameFile) { ([string](Get-Content $gameFile -Raw)).Trim() } else { '' }
+$game = Get-GameDir $gameKey
+if (-not $game) { Result "fail install '$gameKey' from launch.game is unknown or not in box.config (run tools/box/box_setup.sh)"; exit 3 }
+$want = $GameVersions[$gameKey]
+Log "install $gameKey at $game (requires SkyrimSE.exe $want)"
 $running = Get-Process -Name SkyrimSE,skse64_loader -ErrorAction SilentlyContinue
 if ($running) { Result ('fail already running: ' + (($running | % { "$($_.Name) $($_.Id)" }) -join ', ')); exit 2 }
 $ver = (Get-Item (Join-Path $game 'SkyrimSE.exe')).VersionInfo.FileVersion
 Log "SkyrimSE.exe version $ver"
-if ($ver -ne '1.6.1170.0') { Result "fail SkyrimSE.exe is $ver, not 1.6.1170.0 (STOP and ask the owner)"; exit 3 }
+if ($ver -ne $want) { Result "fail SkyrimSE.exe in $game is $ver, not $want as $gameKey requires"; exit 3 }
 
 $why = EnsureSteam 120
 if ($why) { Result "fail $why"; exit 4 }

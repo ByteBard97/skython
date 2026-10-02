@@ -1,5 +1,5 @@
-# shot.ps1: run by our scheduled task SkyrimPythonShot (interactive, as geoff), not over ssh: an ssh session
-# cannot see the desktop. Saves a screenshot of the whole virtual screen to C:\dev\skyrim-python-box\shot.png,
+# shot.ps1: run by our scheduled task SkyrimPythonShot (interactive, as the box's configured user), not over ssh:
+# an ssh session cannot see the desktop. Saves a screenshot of the whole virtual screen to C:\dev\skyrim-python-box\shot.png,
 # then the processes that have a main window (name, id, title, Responding) to windows.txt in the same folder.
 # windows.txt is written last, so box_shot.sh treats a new windows.txt as "shot.png is complete". It writes
 # only those two files.

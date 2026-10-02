@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Deploy into the box's game (C:\ChronicleDev\Stock Game\Data\SKSE\Plugins), the box twin of tools/deploy.sh.
+# Deploy into the box's game (<game folder>\Data\SKSE\Plugins), the box twin of tools/deploy.sh. The install is
+# BOX_GAME (ae1170 or ae17104; default from tools/box/box.local.env), e.g. BOX_GAME=ae17104 tools/box/box_deploy.sh ...
 # Usage:
+#   tools/box/box_deploy.sh --where                          -> prints the selected install and its folders (no ssh)
 #   tools/box/box_deploy.sh out/<Dll>.dll [path/to/ini]      -> Plugins\<Dll>.dll [+ Plugins\<Dll>.ini]
 #                                                               (Skython.dll also deploys out/SkythonCore.dll
 #                                                                to Plugins\Skython\, which must not be older)
@@ -27,7 +29,7 @@
 #   BOX_DEPLOY_PRINT_TARGET=1 with --pex, --esp, --test-pex, a DLL or --move prints the resolved target(s) and exits
 #   before any ssh
 #   (offline test).
-# Every target is recorded in out/box-deployed.txt. A target that exists on the box and is not recorded there
+# Every target is recorded in out/box-deployed.txt (absolute paths, so each install's targets are its own). A target that exists on the box and is not recorded there
 # was not deployed by this tool: the deploy refuses (it never overwrites what it did not put there).
 # A *Spike* DLL needs CONFIRM_THROWAWAY_SAVE=1. Refuses while the game runs (DLLs are locked).
 # Files are staged under C:\dev\skyrim-python-box\stage (no spaces for scp), then copied into place on the box.
@@ -40,7 +42,7 @@ recorded() { grep -qxF -- "$1" "$BOX_DEPLOYED"; }
 rec() { recorded "$1" || echo "$1" >> "$BOX_DEPLOYED"; }
 check_target() {  # refuse a target that exists on the box and was not deployed by this tool
   recorded "$1" && return 0
-  local r; r="$(bps 60 place.ps1 -Mode exists -DestB64 "$(b64 "$1")" | tr -d '\r')"
+  local r; r="$(bps 60 place.ps1 -Mode exists -DestB64 "$(b64 "$1")" -Game "$BOX_GAME" | tr -d '\r')"
   case "$r" in
     ABSENT) return 0 ;;
     EXISTS) box_die "$1 exists on the box but is not in out/box-deployed.txt; not overwriting it. Ask the owner." ;;
@@ -54,7 +56,7 @@ put_file() {  # put_file <local file> <windows dest>
   check_target "$dest"
   id="$(stage_id)-$(basename "$src")"
   bscp "$src" "$BOX:$BOX_DIR_FWD/stage/$id" || box_die "scp $src failed"
-  r="$(bps 120 place.ps1 -Mode place -Kind file -SrcB64 "$(b64 "$BOX_DIR\\stage\\$id")" -DestB64 "$(b64 "$dest")" | tr -d '\r')"
+  r="$(bps 120 place.ps1 -Mode place -Kind file -SrcB64 "$(b64 "$BOX_DIR\\stage\\$id")" -DestB64 "$(b64 "$dest")" -Game "$BOX_GAME" | tr -d '\r')"
   sum="$(sha256sum "$src" | cut -d' ' -f1)"
   [ "$r" = "PLACED $sum" ] || box_die "placing $dest: '$r' (expected PLACED $sum)"
   rec "$dest"; echo "deployed $src -> $dest"
@@ -66,7 +68,7 @@ put_tree() {  # put_tree <local dir> <windows dest dir>: merge the tree (no __py
   id="$(stage_id)-$(basename "$src").tar"; tarf="$BOX_ROOT/out/box-stage/$id"
   tar -C "$src" --exclude=__pycache__ -cf "$tarf" .
   bscp "$tarf" "$BOX:$BOX_DIR_FWD/stage/$id" || box_die "scp $tarf failed"
-  r="$(bps 600 place.ps1 -Mode place -Kind tar -SrcB64 "$(b64 "$BOX_DIR\\stage\\$id")" -DestB64 "$(b64 "$dest")" | tr -d '\r')"
+  r="$(bps 600 place.ps1 -Mode place -Kind tar -SrcB64 "$(b64 "$BOX_DIR\\stage\\$id")" -DestB64 "$(b64 "$dest")" -Game "$BOX_GAME" | tr -d '\r')"
   case "$r" in PLACED*) ;; *) box_die "placing $dest: '$r'" ;; esac
   rec "$dest"; echo "deployed $src/ -> $dest ($r)"
 }
@@ -82,6 +84,11 @@ put_entries() {  # put_entries <local dir> <windows dest dir>: each top-level en
 spike_ok() { case "$(basename "$1")" in *Spike*) [ "${CONFIRM_THROWAWAY_SAVE:-0}" = 1 ] || box_die "$1 is spike code (unauthenticated port); use a throwaway save and re-run with CONFIRM_THROWAWAY_SAVE=1" ;; esac; }
 
 [ $# -ge 1 ] || box_die "usage: see the header of $0"
+if [ "$1" = --where ]; then
+  printf 'BOX_GAME=%s (SkyrimSE.exe %s)\nBOX_GAME_DIR=%s\nBOX_DATA=%s\nBOX_PLUGINS=%s\nBOX_OWN=%s\n' \
+    "$BOX_GAME" "$BOX_GAME_VERSION" "$BOX_GAME_DIR" "$BOX_DATA" "$BOX_PLUGINS" "$BOX_OWN"
+  exit 0
+fi
 owned() {  # owned <windows path>: recorded, or inside a recorded folder
   local r
   [ -f "$BOX_DEPLOYED" ] || box_die "no deploy record $BOX_DEPLOYED: this tool deployed nothing, so there is nothing it may move"
@@ -161,7 +168,7 @@ case "$1" in
     ;;
   --site-packages)
     SP="${2:?usage: box_deploy.sh --site-packages DIR}"; [ -d "$SP" ] || box_die "no such directory: $SP"
-    have="$(bps 60 place.ps1 -Mode list -DestB64 "$(b64 "$BOX_OWN\\site-packages")" | tr -d '\r' | sort)"
+    have="$(bps 60 place.ps1 -Mode list -DestB64 "$(b64 "$BOX_OWN\\site-packages")" -Game "$BOX_GAME" | tr -d '\r' | sort)"
     stale="$(comm -23 <(echo "$have" | sed '/^$/d') <(ls -A "$SP" | sort))"
     [ -z "$stale" ] || { echo "$stale" >&2; box_die "the box's site-packages holds the entries above that $SP lacks; ask the owner (nothing is deleted)"; }
     put_entries "$SP" "$BOX_OWN\\site-packages"
@@ -188,7 +195,7 @@ case "$1" in
     for i in "${!TPEX[@]}"; do put_file "${TPEX[$i]}" "${TPEX_DEST[$i]}"; done
     ;;
   --move)
-    r="$(bps 60 place.ps1 -Mode move -SrcB64 "$(b64 "$MV_SRC")" -DestB64 "$(b64 "$MV_DEST")" | tr -d '\r')"
+    r="$(bps 60 place.ps1 -Mode move -SrcB64 "$(b64 "$MV_SRC")" -DestB64 "$(b64 "$MV_DEST")" -Game "$BOX_GAME" | tr -d '\r')"
     [ "$r" = MOVED ] || box_die "moving $MV_SRC: '$r'"
     echo "$(date -Is) $MV_SRC -> $MV_DEST" >> "$BOX_ROOT/out/box-moves.txt"
     rec "$MV_DEST"; echo "moved $MV_SRC -> $MV_DEST (recorded in out/box-moves.txt)"

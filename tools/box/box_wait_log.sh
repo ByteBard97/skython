@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Usage: tools/box/box_wait_log.sh <log name> <regex> [seconds=600]
-#   <log name> is relative to the box's SKSE log folder (C:\Users\geoff\Documents\My Games\Skyrim Special
-#   Edition\SKSE), e.g. SkyrimPythonSpike.log or Skython/python.log. The regex is .NET (-match); ERE
-#   patterns used in this plan mean the same. Only text written after the last box_launch.sh stamp counts.
+#   <log name> is relative to the box's SKSE log folder (<My Games>\SKSE, BOX_SKSE_LOG_DIR), e.g.
+#   SkyrimPythonSpike.log or Skython/python.log. The regex is .NET (-match); simple ERE patterns mean the
+#   same. Only text written after the last box_launch.sh stamp counts.
 # Exit 0 and "MATCH <line>" on a match; exit 1 with the tail of this launch's text on timeout; exit 2 and
 # "DIALOG <windows.txt line>" when SKSE's modal dialog ("SKSE Plugin Loader ...") blocks the game, found through
 # our task SkyrimPythonShot every 15 s (its shot.png is already on the box: fetch it with box_shot.sh or scp, then
