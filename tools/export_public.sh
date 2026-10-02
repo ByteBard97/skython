@@ -88,7 +88,7 @@ rewrite .gitignore "dropped the entries for local development notes" \
 
 # ---- the new repository ------------------------------------------------------------------------------------------
 git init -q -b main
-git add -A
+git add -A -f   # -f: every file here was tracked in HEAD, even one an ignore rule (like *.pex) would match
 git update-index --add --cacheinfo "160000,$SUB_SHA,$SUBMODULE"
 git -c user.name="$AUTHOR_NAME" -c user.email="$AUTHOR_EMAIL" -c commit.gpgsign=false \
   commit -q -m "Initial public release of Skython" \
@@ -97,6 +97,10 @@ echo "committed $(git rev-parse --short HEAD) as $AUTHOR_NAME <$AUTHOR_EMAIL> (e
 
 # ---- checks ------------------------------------------------------------------------------------------------------
 status=0
+committed="$(git ls-files | wc -l)"
+if [ "$committed" != $(( ${#KEEP[@]} + 1 )) ]; then
+  echo "committed $committed entries, expected ${#KEEP[@]} files plus the gitlink"; status=2
+fi
 echo "== tools/check_no_em_dash.sh"; tools/check_no_em_dash.sh || status=2
 echo "== tools/check_no_plan_refs.sh"; tools/check_no_plan_refs.sh || status=2
 
