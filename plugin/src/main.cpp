@@ -2,6 +2,7 @@
 #include "GameBackend.h"
 #include "Lifecycle.h"
 #include "Log.h"
+#include "PapyrusNative.h"
 #include "PythonHost.h"
 #include "SaveLoad.h"
 #include "Settings.h"
@@ -94,6 +95,7 @@ extern "C" __declspec(dllexport) bool SpyCore_Load(const SKSE::LoadInterface* sk
             spy::settings::GetRuntime().game_version, spy::settings::GetRuntime().runtime,
             spy::host::LinkedPythonVersion()));
         spy::settings::Load();
+        spy::native::Register();  // Skython.Send; the VM calls back when it is ready (Task 46)
         auto* messaging = SKSE::GetMessagingInterface();
         if (!messaging || !messaging->RegisterListener(OnMessage)) {
             spy::log::Error("messaging listener registration failed");
