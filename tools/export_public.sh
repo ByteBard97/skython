@@ -88,7 +88,7 @@ rewrite .gitignore "dropped the entries for local development notes" \
 
 # ---- the new repository ------------------------------------------------------------------------------------------
 git init -q -b main
-git add -A -f   # -f: every file here was tracked in HEAD, even one an ignore rule (like *.pex) would match
+git add -A -f   # -f: a file stays committed even if a future ignore rule comes to match it; the count check below catches anything git still drops
 git update-index --add --cacheinfo "160000,$SUB_SHA,$SUBMODULE"
 git -c user.name="$AUTHOR_NAME" -c user.email="$AUTHOR_EMAIL" -c commit.gpgsign=false \
   commit -q -m "Initial public release of Skython" \
@@ -120,9 +120,8 @@ echo "== personal and private-name scan"
 # Built from parts so this file does not match its own patterns.
 scan_re="geo""ff|/ho""me/|192[.]168[.]|C:\\\\Us""ers\\\\|Chron""icle|Counten""ance|Runtime""Harness"
 scan_re+="|skyrim-""dm|Cla""ude|Anthro""pic|$X|sub""agent"
-# Hits that are expected and left for the owner: the copyright line (which name to publish is the owner's call)
-# and the placeholder Windows path in the box settings example.
-known_re="^(LICENSE:[0-9]+:Copyright|tools/box/box\.local\.env\.example:[0-9]+:BOX_MYGAMES='C:.Users.user.)"
+# The hit that is expected and left for the owner: the placeholder Windows path in the box settings example.
+known_re="^tools/box/box\.local\.env\.example:[0-9]+:BOX_MYGAMES='C:.Users.user."
 text_hits="$(git ls-files -z | grep -zv '^plugin/extern/' | xargs -0 grep -n -I -i -E "$scan_re" 2>/dev/null || true)"
 bin_hits=""
 while IFS= read -r -d '' f; do

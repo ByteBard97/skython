@@ -8,7 +8,7 @@ Needs: Skython 0.1 (events). Standard library only.
 """
 import threading
 
-from skython.errors import ConnectionLost, NotFound, NotReady
+from skython.errors import CallTimeout, ConnectionLost, NotFound, NotReady
 
 QUESTS = ["MQ101", "MQ102", "MQ103"]   # editor ids: Unbound, Before the Storm, Bleak Falls Barrow
 
@@ -45,14 +45,14 @@ def run(game):
             break
         except NotReady:
             continue
-        except ConnectionLost:            # the game (or the bridge) went away: nothing to watch
+        except (ConnectionLost, CallTimeout):  # the game (or the bridge) went away or stopped answering: nothing to watch
             return
     _notifier = Notifier(game)
     for editor_id in QUESTS:
         try:
             _notifier.watch(editor_id)
         except NotFound:
-            print(f"quest_stage_notifier: no quest with editor id {editor_id!r}")
+            print(f"quest_stage_notifier: no quest with editor id {editor_id!r}; check QUESTS at the top of this file")
         except Exception as e:            # any other failure skips this quest, never the rest
             print(f"quest_stage_notifier: cannot watch {editor_id!r} ({type(e).__name__}: {e})")
     print(f"quest_stage_notifier: watching {', '.join(_notifier.watched.values()) or 'nothing'}")

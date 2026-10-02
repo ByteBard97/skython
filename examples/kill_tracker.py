@@ -1,7 +1,7 @@
 """Kill tracker: a running tally of everything the player kills.
 
 Each time an actor dies with the player as its killer, a notification shows the session's kill count and what you
-killed. A summary by name goes to python.log every few minutes and when the script stops.
+killed. A summary by name goes to python.log every five minutes and when the script stops.
 
 Install: copy this file into Data/SKSE/Plugins/Skython/scripts/.
 Needs: Skython 0.1 (events). Standard library only.
@@ -58,7 +58,7 @@ def setup(game):
     global _tracker
     _tracker = KillTracker(game)
     _stop.clear()
-    game.on_death(None, _tracker.on_death)     # None: every actor (no filter); on_death keeps the player's kills
+    game.on_death(None, _tracker.on_death)     # None means every actor (no filter). on_death keeps the player's kills
     threading.Thread(target=_summaries, name="kill_tracker-summary", daemon=True).start()
 
 

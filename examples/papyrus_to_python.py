@@ -1,6 +1,6 @@
 """Papyrus to Python: your own Papyrus script reports to Python in one line.
 
-Skython comes with a tiny Papyrus script, `Skython`, with one native function, `Skython.Send(channel, payload)`.
+Skython comes with a six-line Papyrus script, `Skython`, with one native function, `Skython.Send(channel, payload)`.
 Call it from any of your scripts and every Python subscriber of that channel gets the payload at once. For example,
 a chest that reports who opened it (compile it with Skython.psc on the import path and attach it to a container in
 your plugin):

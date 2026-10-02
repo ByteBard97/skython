@@ -367,8 +367,9 @@ def _creations_prompt_open() -> bool:
 
 def _accept_creations_prompt() -> None:
     """Answer Yes (button 0) to the creations prompt through DevBench; no player input."""
-    subprocess.run([str(REPO / "tools" / "box" / "box_console.sh"), "--tool", "menu",
-                    '{"action":"accept","index":0}'], check=True, capture_output=True, text=True, timeout=90)
+    r = _box_tool("box_console.sh", "--tool", "menu", '{"action":"accept","index":0}')
+    if r.returncode != 0:
+        raise RuntimeError(f"box_console.sh --tool menu accept failed: {r.stderr.strip()}")
 
 
 def load_save(game, name: str, timeout: float = 120.0) -> dict:
@@ -394,7 +395,10 @@ def load_save(game, name: str, timeout: float = 120.0) -> dict:
     while t.is_alive():
         t.join(2.0)
         if t.is_alive() and _creations_prompt_open():
-            _accept_creations_prompt()
+            try:
+                _accept_creations_prompt()
+            except Exception as e:  # noqa: BLE001 - raised below, once the loader thread has finished
+                outcome["error"] = e
             answered += 1
     t.join()
     if "error" in outcome:

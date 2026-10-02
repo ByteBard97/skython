@@ -1,8 +1,8 @@
 """The three engine probes on SkythonTest.esp: three <Alias=...> tags in one objective line, powerofthree's
 SetObjectiveText with alias tags, and objective text plus alias fills across a save and reload. The tests check the
 mechanics (fills, display state, save/load) and collect the evidence for the rendered text: HUD screenshots
-(box_shot.sh) and the `sqo` console reply (box_console.sh). The verdict on the rendered text is the worker's, from
-that evidence. Writes out/probes/probes.json and out/probes/*.png. Each probe can run alone (-k probe2): the module
+(box_shot.sh) and the `sqo` console reply (box_console.sh). The verdict on the rendered text is made from that
+evidence, not by a test. Writes out/probes/probes.json and out/probes/*.png. Each probe can run alone (-k probe2): the module
 fixture `filled` makes the shared fills. Run with -s; probe 3 leaves one new save (new_save_name("t52"), recorded in
 livetest/results/new_saves.txt for the removal list)."""
 import json
@@ -43,7 +43,7 @@ def mgame(session, fresh_save):
 
 @pytest.fixture(scope="module")
 def esp(mgame):
-    t.ensure_running(mgame, t.quest(mgame))  # first: alias scripts may bind only once the quest runs (discover uses them)
+    t.ensure_running(mgame, t.quest(mgame))
     h = t.discover(mgame)
     mgame.call_method(h.quest, "Quest", "SetActive", True)
     return h

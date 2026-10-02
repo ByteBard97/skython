@@ -24,7 +24,7 @@ def mgame(session, fresh_save):
 
 @pytest.fixture(scope="module")
 def esp(mgame):
-    t.ensure_running(mgame, t.quest(mgame))  # first: alias scripts may bind only once the quest runs (discover uses them)
+    t.ensure_running(mgame, t.quest(mgame))
     return t.discover(mgame)
 
 

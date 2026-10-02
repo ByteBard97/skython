@@ -257,7 +257,7 @@ echo "$pre" | grep -qF '$fullDest = [IO.Path]::GetFullPath($dest)' \
   && echo "$pre" | grep -qF "if (\$dest -match '\.\.' -or -not (\$fullDest.StartsWith(\$root) -or (\$Singles -ccontains \$fullDest))) { \"REFUSED" \
   && ok "place.ps1 checks GetFullPath(Dest) and '..' before the mode switch (all modes)" || bad "place.ps1 does not normalise Dest for every mode"
 
-# 6g. the teardown list shows the save-call test's save
+# 6g. the teardown list shows the throwaway saves
 grep -qF 'spikebase|spytest|s4test|skypy_r38_savecall' "$B/win/list.ps1" 2>/dev/null && ok "list.ps1 lists skypy_r38_savecall" || bad "list.ps1 does not list skypy_r38_savecall"
 grep -qE "Where-Object \{ \\\$_\.Name -match '\^\([^']*\|skythonbase[|)]" "$B/win/list.ps1" 2>/dev/null && ok "list.ps1 lists skythonbase" || bad "list.ps1 does not list skythonbase"
 

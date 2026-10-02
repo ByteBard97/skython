@@ -1,4 +1,4 @@
-"""M2 events on SkythonTest.esp: a stage fragment's Skython.Send reaches a remote and an in-process subscriber,
+"""Events on SkythonTest.esp: a stage fragment's Skython.Send reaches a remote and an in-process subscriber,
 a mod event raised through Form.SendModEvent with an ESP sender, overflow under a slow callback (drops reported in
 `dropped`, whether made in the hub or in the client's RemoteEventStream), unsubscribe mid-stream, and the ESP NPC
 across a save and reload (its death in alias 0: killer = the player, quest_stage 100 and stage_100 from the death
@@ -85,7 +85,7 @@ def mgame(session, fresh_save):
 
 @pytest.fixture(scope="module")
 def esp(mgame):
-    t.ensure_running(mgame, t.quest(mgame))  # first: alias scripts may bind only once the quest runs (discover uses them)
+    t.ensure_running(mgame, t.quest(mgame))
     return t.discover(mgame)
 
 
