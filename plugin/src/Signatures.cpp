@@ -74,4 +74,22 @@ std::vector<RE::BSScript::Variable> BindArgs(const RE::BSScript::IFunction& fn, 
     }
     return out;
 }
+
+bool IsA(const std::string& script, const std::string& ancestor)
+{
+    auto info = TypeOf(script);
+    for (auto* t = info.get(); t; t = t->GetParent())
+        if (IEquals(t->GetName(), ancestor)) return true;
+    return false;
+}
+
+RE::BSScript::PropertyTypeInfo FindProperty(const std::string& script, const std::string& property)
+{
+    auto info = TypeOf(script);
+    if (!info) throw ProtocolError(ErrorCode::not_found, "no script named " + script + " is loaded");
+    for (auto* t = info.get(); t; t = t->GetParent())
+        for (std::uint32_t i = 0; i < t->GetNumProperties(); ++i)
+            if (IEquals(t->GetPropertyIter()[i].name.c_str(), property)) return t->GetPropertyIter()[i].info;  // a copy
+    throw ProtocolError(ErrorCode::not_found, "script " + script + " has no property " + property);
+}
 }

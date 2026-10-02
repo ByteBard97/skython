@@ -6,6 +6,7 @@ import time
 import pytest
 
 from skython import errors
+from skython.values import Form
 from support import raw_connect, rpc
 
 PLAYER_ID = 0x14
@@ -107,12 +108,6 @@ def test_int_out_of_range_is_rejected_by_the_plugin(session):
     assert raw_call(session, "Utility", "RandomInt", [1, 2147483648])["error"]["code"] == "type_mismatch"
 
 
-def test_object_results_are_unsupported_until_task_28(game):
-    # Replaced in Task 28 by test_static_call_returns_form.
-    with pytest.raises(errors.Unsupported):
-        game.call("Game", "GetPlayer")
-
-
 def test_timeout_carries_game_state(game):
     with pytest.raises(errors.Timeout) as ei:
         game.call("Utility", "Wait", 3.0, timeout=0.5)
@@ -150,3 +145,77 @@ def test_late_result_after_timeout_is_dropped_and_counted(session, game):
         game.call("Utility", "Wait", 1.0, timeout=0.2)
     time.sleep(2.0)  # the wait finishes in the game; its result must be dropped, not delivered
     assert raw_state(session)["diagnostics"]["late_results_dropped"] == before + 1
+
+
+def test_static_call_returns_form(game):
+    p = game.call("Game", "GetPlayer")
+    assert isinstance(p, Form) and p.form_id == PLAYER_ID and p.type == "Actor"
+
+
+def test_form_argument_round_trip(game):
+    sword = game.call("Game", "GetFormFromFile", 0x012EB7, "Skyrim.esm")
+    # The VM spells some class names in capitals: GetScriptObjectType(VMTypeID).GetName() gave WEAPON and SPELL on the
+    # box (Actor, ActorBase, Armor, MiscObject, Quest, Ammo, MagicEffect as in the .psc). Task 28 records it; Papyrus
+    # names are case-insensitive.
+    assert sword.form_key == IRON_SWORD and sword.type.lower() == "weapon"
+    # A Form parameter given a Weapon. False is also what a None argument gives; the next line proves the form arrives:
+    # SKSE's CreateFormArray fills the array with the argument and returns it (None if the native never ran, which is
+    # what a value typed as WEAPON instead of the declared Form gave before Task 28's fix).
+    assert game.call("Game", "IsObjectFavorited", sword) is False
+    assert game.call("Utility", "CreateFormArray", 2, sword) == [sword, sword]
+
+
+def test_form_of_the_wrong_class_is_rejected_before_dispatch(game):
+    # BindObject's reject path: an ObjectReference parameter given a base Weapon.
+    sword = game.call("Game", "GetFormFromFile", 0x012EB7, "Skyrim.esm")
+    with pytest.raises(errors.TypeMismatch, match="argument 0 of Debug.SendAnimationEvent"):  # natives: param1..N (S7a)
+        game.call("Debug", "SendAnimationEvent", sword, "x")
+
+
+def test_none_for_an_object_parameter(game):
+    assert game.call("Game", "IsObjectFavorited", None) is False  # a typed None Form
+
+
+def test_none_for_an_array_parameter(game):
+    r = game.call("Utility", "ResizeIntArray", None, 2, 0)  # a typed None Int[]
+    assert r is None or isinstance(r, list)
+    assert 1 <= game.call("Utility", "RandomInt", 1, 6) <= 6  # the VM and the game carry on
+
+
+def test_missing_forms_are_not_found_not_stale(game):
+    for ref in (Form(form_key="Skyrim.esm|0xFFFFF0"), Form(form_key="NotAPlugin.esp|0x000800"),
+                Form(form_id=0xFF123456)):  # the last is a runtime id that names nothing
+        with pytest.raises(errors.NotFound):
+            game.call("Game", "IsObjectFavorited", ref)
+
+
+def test_primitive_arrays_round_trip(game):
+    assert game.call("Utility", "CreateIntArray", 3, 7) == [7, 7, 7]
+    assert game.call("Utility", "ResizeIntArray", [1, 2, 3], 5, 0) == [1, 2, 3, 0, 0]
+    assert game.call("Utility", "CreateFloatArray", 2, 1.5) == [1.5, 1.5]
+
+
+def test_array_wire_shape(session):
+    r = raw_call(session, "Utility", "CreateIntArray", [3, 7])
+    assert r["result"] == {"array": "Int", "items": [7, 7, 7]}
+
+
+def test_array_argument_with_wrong_element_type(session):
+    r = raw_call(session, "Utility", "ResizeIntArray", [{"array": "Int", "items": [1, "two"]}, 5, 0])
+    assert r["ok"] is False and r["error"]["code"] in ("type_mismatch", "bad_request")
+
+
+def test_array_argument_longer_than_128_is_type_mismatch(session):
+    # Sent raw: the Python client refuses it before it leaves the process. Core refuses it while parsing the request.
+    r = raw_call(session, "Utility", "ResizeIntArray", [{"array": "Int", "items": list(range(129))}, 5, 0])
+    assert r["ok"] is False and r["error"]["code"] == "type_mismatch" and "128" in r["error"]["message"], r
+
+
+def test_light_plugin_form_key(game):
+    # A light (0xFE) id: the form key carries the plugin's name and the 12-bit local id, whichever way SourceFile
+    # found the file (GetFile(0) or the light load-order index).
+    name = "ccbgssse002-exoticarrows.esl"
+    if not game.call("Game", "IsPluginInstalled", name):
+        pytest.skip(f"{name} is not installed on this game")
+    f = game.call("Game", "GetFormFromFile", 0x800, name)
+    assert f.form_key == f"{name}|0x000800" and (f.form_id >> 24) == 0xFE
