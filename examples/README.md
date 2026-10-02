@@ -8,6 +8,9 @@ Each example is one Python file. Drop it into `Data/SKSE/Plugins/Skython/scripts
 | [`talk_to_npc_llm.py`](talk_to_npc_llm.py) | Look at any NPC, press K, and they greet you in character through a language model (local Ollama/LM Studio or any OpenAI-compatible API). | ~80 |
 | [`live_dashboard.py`](live_dashboard.py) | A live stats page (health, magicka, stamina, gold, level, location, time) on `127.0.0.1:8765`, usable as an OBS browser source. Each run writes the address with its access token to `python.log`. | ~120 |
 | [`real_weather.py`](real_weather.py) | Skyrim's weather follows the real weather in your city (Open-Meteo, no API key). | ~60 |
+| [`kill_tracker.py`](kill_tracker.py) | A running tally of everything you kill, as notifications, with a summary by name in `python.log`. Uses the `death` event. | ~70 |
+| [`papyrus_to_python.py`](papyrus_to_python.py) | Your own Papyrus script reports to Python with one line, `Skython.Send("my_mod", ...)`; the docstring has the `.psc` side. | ~50 |
+| [`quest_stage_notifier.py`](quest_stage_notifier.py) | A notification whenever a quest you follow reaches a new stage; handy while writing a quest mod. | ~60 |
 
 ## Why Python
 
