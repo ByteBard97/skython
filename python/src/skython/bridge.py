@@ -54,9 +54,14 @@ _TOKEN = re.compile(r"[0-9a-f]{%d}" % _g.TOKEN_LENGTH)
 _STRUCTURE = re.compile(r'"(?:[^"\\]++|\\.)*+"?|[\[\]{}]', re.S)
 
 
-def _log_no_hub_once(e: Exception) -> None:
+def _log_no_consumer(e: Exception) -> None:
+    """open_consumer failed. The expected case (a build with no event hub, before Task 39) is logged once per process
+    with its documented text; any other failure is unexpected and logged every time, naming the actual error."""
     global _no_hub_logged
-    if not _no_hub_logged:
+    if "no event hub" not in str(e):
+        log.warning("bridge: could not open an event consumer (%s: %s); events are unsupported on this connection",
+                    type(e).__name__, e)
+    elif not _no_hub_logged:
         _no_hub_logged = True
         log.warning("bridge: no event hub (%s); events are unsupported on this connection", e)
 
@@ -214,7 +219,7 @@ class _Conn:
         try:
             consumer = self.server.backend.open_consumer()  # before the welcome: every request has a consumer
         except Exception as e:  # noqa: BLE001 - no event hub (the game build before Task 39): serve without events
-            _log_no_hub_once(e)
+            _log_no_consumer(e)
             consumer = 0  # requests still go with consumer 0; events.* answer unsupported (the hub is null)
         with self.cond:  # set under cond, so exactly one of this thread and close() closes the consumer
             if not self.closed:
@@ -299,15 +304,22 @@ class _Conn:
                 if self.closed:
                     return
                 for event in json.loads(text):
-                    self._enqueue(_dumps(event))  # one frame per event, under the same max_queued_bytes cap
+                    self._enqueue(_dumps(event), event=True)  # one frame per event, same max_queued_bytes cap
         except Exception:  # noqa: BLE001
             log.exception("bridge: the event pump failed")
             self.close("internal error")
 
     # -- writer ---------------------------------------------------------------------------------------
-    def _enqueue(self, text: str) -> None:
+    def _enqueue(self, text: str, *, event: bool = False) -> None:
         data = _frame(text)
         if len(data) - 4 > _g.MAX_FRAME_BYTES:
+            if event:
+                # Unreachable with the real limits: the hub's per-consumer byte budget (max_queued_event_bytes_per_
+                # consumer, each event counted as its data plus a 96-byte envelope) drops an event that large before
+                # it is queued. Should one come anyway it is counted and dropped: an id-0 response would answer
+                # nothing the client sent.
+                self.server._oversize_event()
+                return
             try:
                 rid = _request_id(json.loads(text)) or 0
             except ValueError:
@@ -392,6 +404,7 @@ class BridgeServer:
         self._conns: set[_Conn] = set()
         self._lock = threading.Lock()
         self._closing = False
+        self.oversize_events = 0  # event frames over MAX_FRAME_BYTES, dropped (unreachable; see _Conn._enqueue)
         self._lsock = socket.socket()
         try:
             if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows: nobody else may bind our port
@@ -464,6 +477,14 @@ class BridgeServer:
                 if conn is not None:
                     self._forget(conn)  # it was registered: give its slot back
                 sock.close()
+
+    def _oversize_event(self) -> None:
+        with self._lock:
+            self.oversize_events += 1
+            first = self.oversize_events == 1
+        if first:
+            log.warning("bridge: an event frame over the frame limit (%d bytes) was dropped; later ones are only counted "
+                        "(BridgeServer.oversize_events)", _g.MAX_FRAME_BYTES)
 
     def _forget(self, conn: _Conn) -> None:
         with self._lock:

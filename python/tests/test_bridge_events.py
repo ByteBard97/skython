@@ -424,3 +424,56 @@ def test_a_connection_closed_while_its_consumer_opens_does_not_leak_it(start, fa
     s.sendall(_framing.encode({"type": "hello", "protocol": [1, 1], "token": b.token, "client": "raw"}))
     wait_until(lambda: fake.consumers() == base and b.connections() == 0, what="the consumer opened during close to be closed")
     s.close()
+
+
+# -- Task 37 review minors (fixed in Task 38's first commit) ---------------------------------------------------
+def test_track_with_max_queue_0_keeps_one_frame_like_the_hub():
+    s = RemoteEventStream()
+    for seq in range(1, 4):
+        s.put(frame(5, seq))
+    s.track(5, 0)  # the hub's bound is at least 1: the newest frame stays, the others count as drops
+    s.put(frame(5, 4))  # a full queue of one: seq 3 goes
+    assert [(f["seq"], f.get("dropped", 0)) for f in s.next(0.1)] == [(4, 3)]
+
+
+def test_next_forgets_the_drained_queue_of_an_untracked_sub():
+    s = RemoteEventStream()
+    s.track(5, 16)
+    s.put(frame(5, 1))
+    s.put(frame(9, 1))  # sub 9 not tracked (yet): a provisional queue
+    s.put({"type": "event", "event": "channel", "sub": "bad", "seq": 1})  # malformed: key None
+    assert len(s.next(0.1)) == 3
+    assert set(s._queues) == {5}  # test-only peek: provisional queues do not pile up once drained
+
+
+def test_an_event_frame_over_the_frame_limit_is_counted_not_answered(start, fake, caplog, monkeypatch):
+    # Unreachable with the real limits (the hub's per-consumer byte budget drops such an event first); lowered here.
+    caplog.set_level(logging.WARNING, logger="skython.bridge")
+    monkeypatch.setattr("skython.bridge._g.MAX_FRAME_BYTES", 4096)
+    b = start()
+    s = raw(b)
+    resp, _ = rpc(s, 1, g.OP_EVENTS_SUBSCRIBE, {"event": "channel", "filter": {"channel": ["c"]}})
+    assert resp["ok"] is True
+    push(fake, "channel", chan("c", "x" * 8000))
+    push(fake, "channel", chan("c", "y" * 8000))
+    push(fake, "channel", chan("c", "small"))
+    wait_until(lambda: b.oversize_events == 2, what="both oversize event frames to be counted")
+    resp, events = rpc(s, 2, "papyrus.call_static", {"script": "Fake", "function": "Echo", "args": [3]})
+    assert resp["ok"] is True
+    assert [e["data"]["payload"] for e in events] == ["small"]  # no id-0 internal response in between
+    assert caplog.text.count("over the frame limit") == 1  # logged once, counted every time
+    s.close()
+
+
+def test_an_open_consumer_failure_other_than_no_hub_names_its_error(start, fake, caplog, monkeypatch):
+    caplog.set_level(logging.WARNING, logger="skython.bridge")
+
+    def broken():
+        raise ValueError("consumer table full")
+
+    monkeypatch.setattr(fake, "open_consumer", broken)
+    b = start()
+    with remote(b) as game:
+        assert game.call("Fake", "Echo", 1) == 1
+    assert "bridge: could not open an event consumer (ValueError: consumer table full)" in caplog.text
+    assert "no event hub" not in caplog.text

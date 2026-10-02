@@ -78,9 +78,10 @@ class RemoteEventStream:
         with self._cond:
             if sub in self._gone:
                 return
-            self._bounds[sub] = max_queue
+            bound = max(1, max_queue)  # as the hub: a queue holds at least one frame
+            self._bounds[sub] = bound
             q = self._queues.get(sub)
-            while q and len(q) > max_queue:
+            while q and len(q) > bound:
                 self._drop_oldest(sub)
 
     def untrack(self, sub: int) -> None:
@@ -107,8 +108,11 @@ class RemoteEventStream:
             out = []
             while self._queued and len(out) < _g.MAX_EVENTS_PER_NEXT:
                 sub = min((k for k, q in self._queues.items() if q), key=lambda k: self._queues[k][0][0])
-                msg = self._queues[sub].popleft()[1]
+                q = self._queues[sub]
+                msg = q.popleft()[1]
                 self._queued -= 1
+                if not q and sub not in self._bounds:  # an untracked sub's (or malformed frames') drained queue
+                    del self._queues[sub]
                 dropped, suppressed = self._pending.pop(sub, (0, 0))
                 if dropped or suppressed:
                     msg = dict(msg)
