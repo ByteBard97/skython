@@ -6,7 +6,7 @@ import time
 import pytest
 
 from skython import errors
-from support import load_save, log_text, new_save_name, raw_connect, rpc, wait_save_file
+from support import LOADABLE, box_save_count, load_save, log_text, new_save_name, raw_connect, rpc, wait_save_file
 
 
 @pytest.fixture(scope="module")
@@ -28,6 +28,7 @@ def saved(session):
             except errors.BadRequest as e:
                 again = e
             ev = got.get(timeout=30.0)
+        assert LOADABLE.fullmatch(name), name  # tests load only their own saves (load_save's rule)
         try:
             g.load(name, timeout=120.0, wait=True)
             immediate_load = "loaded"
@@ -54,6 +55,7 @@ def test_save_creates_exactly_one_new_file(saved):
     text = log_text()
     assert f"saveload: saved {saved['name']}" in text
     assert "lifecycle: kSaveGame data '" in text  # the raw payload, for RESULTS
+    assert box_save_count(saved["name"]) == 1
 
 
 def test_saving_the_same_name_again_is_refused(game, saved):
@@ -106,6 +108,50 @@ def test_a_call_in_flight_during_the_load_ends_not_ready_dispatched(game, saved)
     assert isinstance(err, errors.NotReady) and err.detail.get("dispatched") is True, outcome
 
 
+def test_a_save_cancelled_after_dispatch_keeps_its_name_reserved(game):
+    """Fix round 1: a game.save whose request ends (here: a tiny timeout) after its Game.SaveGame was dispatched keeps
+    its name reserved, so an immediate second save of that name is refused instead of dispatching a second
+    Game.SaveGame that would overwrite the first. The ~50 ms window between dispatch and kSaveGame cannot be hit on
+    purpose (the dispatcher's reaper ticks every 50 ms), so each attempt checks what must hold on every branch and
+    the log says which branch ran; at most 3 attempts (3 new saves) try to hit the post-dispatch one."""
+    branches = []
+    timeout = 0.03
+    for _attempt in range(3):
+        name = new_save_name("t41c")
+        try:
+            game.save(name, timeout=timeout)
+            first = "ok"
+        except errors.Timeout:
+            first = "timeout"
+        second = None
+        if first == "timeout":
+            try:
+                game.save(name)
+                second = "saved"  # the first was cancelled before its dispatch: nothing was requested for it
+            except errors.BadRequest as e:
+                assert e.detail.get("reason") == "save_exists", e
+                assert e.message in (f"a save named {name} is already in progress",
+                                     f"a save named {name} already exists"), e.message
+                second = "refused"
+        wait_save_file(name)
+        with pytest.raises(errors.BadRequest) as e:
+            game.save(name)
+        assert e.value.detail.get("reason") == "save_exists"
+        assert e.value.message == f"a save named {name} already exists"
+        assert box_save_count(name) == 1
+        text = log_text()
+        assert text.count(f"saveload: save dispatched {name}\n") == 1, "Game.SaveGame was dispatched more than once"
+        reserved = f"saveload: save {name} cancelled after dispatch; name stays reserved" in text
+        if second == "saved":
+            assert not reserved
+        branches.append((name, timeout, first, second, reserved))
+        if second == "refused" and reserved:
+            break  # the post-dispatch branch ran
+        # Cancelled before the dispatch: wait longer next time; cancelled too late (or not at all): shorter.
+        timeout = timeout * 2 if second == "saved" else max(0.001, timeout / 3)
+    print(f"t41c: {branches}")
+
+
 def test_load_from_the_main_menu(session, game, saved):
     try:
         game.call("Game", "QuitToMainMenu")
@@ -116,6 +162,7 @@ def test_load_from_the_main_menu(session, game, saved):
         assert time.monotonic() < deadline, "the game did not reach the main menu"
         time.sleep(0.5)
     before = game.state()["epoch"]
+    assert LOADABLE.fullmatch(saved["name"]), saved["name"]
     s = raw_connect(session)
     try:
         r = rpc(s, "game.load", {"save": saved["name"]}, req_id=1, timeout=60.0)

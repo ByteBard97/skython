@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -51,40 +52,80 @@ std::string Fold(std::string_view s)
 
 struct Pending
 {
+    std::uint64_t id;  // this request: a retry of the same name gets a new id, so a stale task never forgets it
     std::string name;  // as requested (the result echoes it)
     std::string key;   // Fold(name)
     Done done;
     Cancelled cancelled;
+    bool dispatched = false;  // set under Mx() right before Game.SaveGame is dispatched
 };
 std::mutex& Mx() { static auto* m = new std::mutex; return *m; }  // immortal, like the dispatcher
 std::vector<Pending>& Saves() { static auto* v = new std::vector<Pending>; return *v; }
-// Names whose kSaveGame arrived: the engine started writing them, but the .ess may not be on disk yet (kSaveGame
-// can precede the file). Key -> when kSaveGame arrived. Dropped lazily once the file exists or after kAnnouncedMaxAge.
-std::map<std::string, Clock::time_point>& Announced() { static auto* m = new std::map<std::string, Clock::time_point>; return *m; }
+std::uint64_t g_nextId = 0;  // under Mx()
+// Reserved names, key -> Reserved. Two kinds, both refuse a second game.save of the name:
+// - announced: kSaveGame arrived, the engine started writing the save, but the .ess may not be on disk yet (kSaveGame
+//   can precede the file); a game.load of the name answers not_ready "saving".
+// - not announced: a pending save cancelled (timeout, disconnect, world reset) after its Game.SaveGame was dispatched;
+//   the engine may still write it, so the name stays reserved and every game.load is busy until kSaveGame arrives.
+// Dropped lazily once the file exists or after kAnnouncedMaxAge.
+struct Reserved
+{
+    Clock::time_point since;
+    bool announced;
+};
+std::map<std::string, Reserved>& Announced() { static auto* m = new std::map<std::string, Reserved>; return *m; }
 constexpr auto kAnnouncedMaxAge = std::chrono::seconds(120);
 std::atomic_bool g_loadQueued{ false };  // a game.load's UI task is queued or running
 
-fs::path EssPath(const std::string& name) { return SaveDir() / (name + ".ess"); }
-
+// A save is there when its .ess is, or its .skse cosave alone (an orphan): game.save never writes over either.
 bool OnDisk(const std::string& name)
 {
     std::error_code ec;  // never throws: an unreadable folder counts as "not there"
-    return fs::exists(EssPath(name), ec);
+    const fs::path dir = SaveDir();
+    if (fs::exists(dir / (name + ".ess"), ec)) return true;
+    return fs::exists(dir / (name + ".skse"), ec);
 }
 
-// Under Mx(): forget announced names whose file is now on disk or that are older than kAnnouncedMaxAge.
+// Under Mx(): forget reserved names whose file is now on disk or that are older than kAnnouncedMaxAge. This does file
+// system I/O (two exists() per entry) under the lock; acceptable while the set holds a handful of names.
 void PruneAnnouncedLocked()
 {
     const auto now = Clock::now();
-    std::erase_if(Announced(), [&](const auto& kv) { return now - kv.second > kAnnouncedMaxAge || OnDisk(kv.first); });
+    std::erase_if(Announced(), [&](const auto& kv) { return now - kv.second.since > kAnnouncedMaxAge || OnDisk(kv.first); });
 }
 
-// Erases the pending save of that key. True only when this call erased it, so `done` runs exactly once: kSaveGame
+// Under Mx(): drop pending saves nobody waits for any more. One cancelled before its dispatch is simply dropped (its
+// task sees cancelled() or a missing entry and dispatches nothing). One cancelled after its Game.SaveGame was
+// dispatched loses only its callbacks: its name moves to Announced() (not announced yet) and stays reserved.
+void DropCancelledLocked()
+{
+    for (auto it = Saves().begin(); it != Saves().end();) {
+        if (!it->cancelled()) { ++it; continue; }
+        if (it->dispatched) {
+            Announced().try_emplace(it->key, Reserved{ Clock::now(), false });
+            log::Info("saveload: save " + it->name + " cancelled after dispatch; name stays reserved");
+        }
+        it = Saves().erase(it);
+    }
+}
+
+// Erases the pending save with that id. True only when this call erased it, so `done` runs exactly once: kSaveGame
 // may complete the request (OnSaveGame) before the Game.SaveGame dispatch returns, throws or calls back.
-bool Forget(const std::string& key)
+bool Forget(std::uint64_t id)
 {
     std::lock_guard lk(Mx());
-    return std::erase_if(Saves(), [&](const Pending& p) { return p.key == key; }) > 0;
+    return std::erase_if(Saves(), [&](const Pending& p) { return p.id == id; }) > 0;
+}
+
+// Marks the pending save with that id as dispatched. False when it is gone (a cancel was swept, or kSaveGame came):
+// then nothing may be dispatched for it, since a retry of the same name may already own the name.
+bool MarkDispatched(std::uint64_t id)
+{
+    std::lock_guard lk(Mx());
+    const auto it = std::ranges::find_if(Saves(), [&](const Pending& p) { return p.id == id; });
+    if (it == Saves().end()) return false;
+    it->dispatched = true;
+    return true;
 }
 
 OpResult Internal(std::string message) { return OpResult::Err(ErrorCode::internal, std::move(message)); }
@@ -97,40 +138,57 @@ OpResult InProgress(const std::string& name)
 void Save(const std::string& name, Done done, Cancelled cancelled)
 {
     if (SaveDir().empty()) return done(NoSaveFolder());
-    if (OnDisk(name))
-        return done(OpResult::Err(ErrorCode::bad_request, "a save named " + name + " already exists",
-                                  json{ { "reason", "save_exists" } }));
     const std::string key = Fold(name);
+    bool exists = false;
     bool refused = false;
+    std::uint64_t id = 0;
     {
         std::lock_guard lk(Mx());
-        std::erase_if(Saves(), [](const Pending& p) { return p.cancelled(); });  // drop requests nobody waits for
+        DropCancelledLocked();
         PruneAnnouncedLocked();
-        // Pending (no kSaveGame yet) or announced (kSaveGame came, file not written yet): either way a second save of
-        // that name would overwrite the first, so it is refused.
-        refused = Announced().contains(key) || std::ranges::any_of(Saves(), [&](const Pending& p) { return p.key == key; });
-        if (!refused) Saves().push_back({ name, key, done, cancelled });  // before the engine call: kSaveGame may arrive inside it
+        // The disk is checked here, after the prune: a reserved name the prune just dropped because its file appeared
+        // must answer "already exists", never pass as free.
+        exists = OnDisk(name);
+        // Pending (no kSaveGame yet) or reserved (kSaveGame came, or a dispatched save was cancelled; file not written
+        // yet): either way a second save of that name could overwrite the first, so it is refused.
+        if (!exists)
+            refused = Announced().contains(key) || std::ranges::any_of(Saves(), [&](const Pending& p) { return p.key == key; });
+        if (!exists && !refused) {
+            id = ++g_nextId;
+            Saves().push_back({ id, name, key, done, cancelled });  // before the engine call: kSaveGame may arrive inside it
+        }
     }
-    if (refused) return done(InProgress(name));  // after the lock is released: done may complete the request at once
+    // Answers after the lock is released: done may complete the request at once.
+    if (exists)
+        return done(OpResult::Err(ErrorCode::bad_request, "a save named " + name + " already exists",
+                                  json{ { "reason", "save_exists" } }));
+    if (refused) return done(InProgress(name));
     // R63: the save is requested through SKSE's Papyrus native Game.SaveGame(name), dispatched like papyrus.call_static
     // from one AddTask. A synchronous BGSSaveLoadManager Save_Impl from an SKSE task deadlocks against the main
     // thread's Papyrus VM lock (Task 41, first live run). The VM call returns once the save is requested; the request
     // completes on kSaveGame (OnSaveGame), as before.
-    SKSE::GetTaskInterface()->AddTask([name, key, done, cancelled] {
+    // A cancel before the dispatch drops the request; after it, the name stays reserved (DropCancelledLocked).
+    auto task = [name, id, done, cancelled] {
         ops::InTask in;
         ops::Measured measured;
-        if (cancelled()) { Forget(key); return; }
+        if (cancelled()) { Forget(id); return; }
         // Called by the VM callback once Game.SaveGame returned (or with vm_error if the VM refused the dispatch).
         // Success answers nothing: kSaveGame completes the request. `done` is never called under Mx().
-        Done onCall = [name, key, done](OpResult r) {
+        Done onCall = [name, id, done](OpResult r) {
             if (r.ok) { log::Info("saveload: save requested " + name); return; }
-            if (Forget(key)) done(std::move(r));
-            else log::Error("saveload: save " + name + " failed after kSaveGame had already completed it");
+            if (Forget(id)) done(std::move(r));
+            else log::Error("saveload: save " + name + " failed after kSaveGame or a cancel had already ended it");
         };
         std::optional<OpResult> failure;
         try {
             if (auto why = life::NotReadyReason(false)) failure = ops::NotReady(*why);  // recheck inside the task
-            else ops::DispatchStatic("Game", "SaveGame", { Value{ name } }, onCall);
+            else if (!MarkDispatched(id)) return;  // cancelled and dropped meanwhile: nothing is requested
+            else {
+                // Marked first: if the request is cancelled from here on, the name stays reserved even when the
+                // dispatch below then fails (harmless: the reservation ends after kAnnouncedMaxAge).
+                ops::DispatchStatic("Game", "SaveGame", { Value{ name } }, onCall);
+                log::Info("saveload: save dispatched " + name);
+            }
         } catch (const ProtocolError& e) {
             if (e.code == ErrorCode::unknown_function)
                 failure = OpResult::Err(ErrorCode::unsupported, std::string("game.save needs SKSE's Papyrus native Game.SaveGame, "
@@ -142,9 +200,16 @@ void Save(const std::string& name, Done done, Cancelled cancelled)
             failure = Internal("requesting the save threw");
         }
         if (!failure) return;
-        if (Forget(key)) done(std::move(*failure));  // still pending: answer the error
-        else log::Error("saveload: save " + name + " failed after kSaveGame had already completed it");
-    });
+        if (Forget(id)) done(std::move(*failure));  // still pending: answer the error
+        else log::Error("saveload: save " + name + " failed after kSaveGame or a cancel had already ended it");
+    };
+    try {
+        SKSE::GetTaskInterface()->AddTask(std::move(task));
+    } catch (const std::exception& e) {
+        if (Forget(id)) done(Internal(std::string("queueing the save task threw: ") + e.what()));
+    } catch (...) {
+        if (Forget(id)) done(Internal("queueing the save task threw"));
+    }
 }
 
 void Load(const std::string& name, Done done, Cancelled cancelled)
@@ -153,15 +218,16 @@ void Load(const std::string& name, Done done, Cancelled cancelled)
     if (auto why = life::NotReadyReason(false); why && (*why == "starting" || *why == "loading")) return done(ops::NotReady(*why));
     if (SaveDir().empty()) return done(NoSaveFolder());
     const std::string key = Fold(name);
-    const bool onDisk = OnDisk(name);
     std::optional<OpResult> refusal;
     {
         std::lock_guard lk(Mx());
-        std::erase_if(Saves(), [](const Pending& p) { return p.cancelled(); });
+        DropCancelledLocked();
         PruneAnnouncedLocked();
-        if (!Saves().empty())
+        const bool onDisk = OnDisk(name);  // after the prune, like Save: the prune drops a name once its file is there
+        // A pending save, or a dispatched save that was cancelled before its kSaveGame, may still be written: busy.
+        if (!Saves().empty() || std::ranges::any_of(Announced(), [](const auto& kv) { return !kv.second.announced; }))
             refusal = OpResult::Err(ErrorCode::busy, "a game.save is in progress; load after it completes");
-        else if (!onDisk && Announced().contains(key))
+        else if (!onDisk && Announced().contains(key))  // announced (the busy check above took the others)
             refusal = OpResult::Err(ErrorCode::not_ready, "save " + name + " is still being written",
                                     ops::WithGameState({ { "reason", "saving" } }));
         else if (!onDisk)
@@ -170,7 +236,7 @@ void Load(const std::string& name, Done done, Cancelled cancelled)
             refusal = OpResult::Err(ErrorCode::busy, "another game.load is already queued");
     }
     if (refusal) return done(std::move(*refusal));  // outside the lock
-    SKSE::GetTaskInterface()->AddUITask([name, done, cancelled] {
+    auto task = [name, done, cancelled] {
         ops::InTask in;
         struct ClearQueued { ~ClearQueued() { g_loadQueued.store(false); } } clearQueued;  // whatever happens below
         if (cancelled()) return;  // the caller gave up before the UI thread got here: do not start a load nobody waits for
@@ -186,7 +252,16 @@ void Load(const std::string& name, Done done, Cancelled cancelled)
         } catch (...) {
             done(Internal("loading threw"));
         }
-    });
+    };
+    try {
+        SKSE::GetTaskInterface()->AddUITask(std::move(task));
+    } catch (const std::exception& e) {
+        g_loadQueued.store(false);
+        done(Internal(std::string("queueing the load task threw: ") + e.what()));
+    } catch (...) {
+        g_loadQueued.store(false);
+        done(Internal("queueing the load task threw"));
+    }
 }
 
 // The engine may pass a bare name, a name with ".ess", or a path: compare on the bare stem.
@@ -238,7 +313,7 @@ void OnSaveGame(std::string_view raw)
     std::vector<Pending> hit;
     {
         std::lock_guard lk(Mx());
-        Announced()[key] = Clock::now();  // the engine started this save; its .ess may not be on disk yet
+        Announced()[key] = Reserved{ Clock::now(), true };  // the engine started this save; its .ess may not be on disk yet
         for (auto it = Saves().begin(); it != Saves().end();) {
             if (it->key == key) { hit.push_back(std::move(*it)); it = Saves().erase(it); }
             else ++it;
