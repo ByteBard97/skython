@@ -1842,6 +1842,10 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse)
     SKSE::Init(skse, { .log = false });  // InitInfo aggregate (SKSE/API.h); the old Init(skse, bool) is [[deprecated]]
     SetupLog();
     spike::g_loadTid = ::GetCurrentThreadId();  // S7 tid probe (R49)
+    if (spike::py::DisableRequested()) {  // R46 exit baseline: no listener, socket, hook, Papyrus or Python
+        spike::Log(std::format("SkyrimPythonSpike disabled by spike-disable marker on Skyrim {}", REL::Module::get().version().string(".")));
+        return true;
+    }
     SKSE::GetPapyrusInterface()->Register(spike::RegisterPapyrus);
     spike::Log(std::format("SkyrimPythonSpike loading on Skyrim {}", REL::Module::get().version().string(".")));  // string() alone joins with '-' (1-6-1170-0)
     if (spike::py::AutostartRequested())  // run B (Step 7): python314.dll + SpikePyCore.dll at plugin load

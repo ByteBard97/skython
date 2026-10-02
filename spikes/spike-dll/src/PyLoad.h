@@ -13,4 +13,5 @@ std::string Status();                        // harness: py_status
 std::string Exec(const std::string& code);   // harness: py_exec <one line of Python>
 void SetCaller(CallerFn fn);                 // Task 5: forwarded to SpikePy_SetCaller now or at load
 bool AutostartRequested();                   // <Plugins>/SkyrimPython/spike-autostart exists
+bool DisableRequested();                     // <Plugins>/SkyrimPython/spike-disable exists (R46 exit baseline)
 }

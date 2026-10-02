@@ -169,4 +169,10 @@ bool AutostartRequested()
     std::error_code ec;
     return std::filesystem::exists(OwnDir() / L"spike-autostart", ec);
 }
+
+bool DisableRequested()  // R46: exit baseline; SKSEPluginLoad returns before installing anything
+{
+    std::error_code ec;
+    return std::filesystem::exists(OwnDir() / L"spike-disable", ec);
+}
 }  // namespace spike::py
