@@ -20,7 +20,9 @@ connection's consumer, 0.25 s at a time; each event object becomes one frame thr
 max_queued_bytes cap covers events too). The connection's consumer is opened once its hello is accepted, travels
 beside every request text it submits (the text is forwarded unchanged, so a client cannot name another consumer),
 and is closed with the connection, which drops its subscriptions. The Dispatcher's reaper enforces
-each request's timeout_ms: the bridge never times a call out itself. An error from accept() (a client that
+each request's timeout_ms: the bridge never times a call out itself. With trace_timing (dev only, Task 38) the writer logs
+"timing: id=<id> bridge_read=<us> bridge_write=<us>" per request on the given clock (in the game _skython.now_us, the
+plugin's steady clock): read when the request frame was complete, write when its response frame was sent. An error from accept() (a client that
 reset before it was accepted, no descriptors left) is logged and the bridge keeps accepting."""
 import collections
 import hmac
@@ -175,7 +177,8 @@ class _Conn:
         self.cond = threading.Condition()
         self.tickets: dict[int, int | None] = {}  # ticket -> request id (None when the request had no usable id)
         self.ids: set[int] = set()
-        self.out: collections.deque[bytes] = collections.deque()
+        self.out: collections.deque[tuple[bytes, int | None, int | None]] = collections.deque()  # frame, id, read_us
+        self.read_us: dict[int, int] = {}  # ticket -> bridge_read stamp (trace_timing only)
         self.out_bytes = 0
         self.closed = False
         self.consumer = 0  # the _skython event consumer; 0 until the hello is accepted
@@ -196,7 +199,8 @@ class _Conn:
                 threading.Thread(target=self._pump_loop, name=f"bridge-pump-{self.peer[1]}", daemon=True).start()
             while True:
                 text = _read_text(self.sock, _g.MAX_FRAME_BYTES)
-                self._on_request(text, _parse_object(text))
+                read_us = self.server.clock() if self.server.clock is not None else None
+                self._on_request(text, _parse_object(text), read_us)
         except (_Ended, _Violation) as e:
             reason = str(e)
         except TimeoutError:
@@ -249,7 +253,7 @@ class _Conn:
             pass
         log.info("bridge: refused a client: %s", code)
 
-    def _on_request(self, text: str, obj: dict) -> None:
+    def _on_request(self, text: str, obj: dict, read_us: int | None = None) -> None:
         rid = _request_id(obj)
         refusal = None
         with self.cond:
@@ -269,6 +273,8 @@ class _Conn:
         with self.cond:
             if not self.closed:
                 self.tickets[ticket] = rid
+                if read_us is not None and rid is not None:
+                    self.read_us[ticket] = read_us
                 self.cond.notify_all()
                 return
         self.server.backend.cancel(ticket)  # the connection closed while the request was being submitted
@@ -290,7 +296,8 @@ class _Conn:
                             continue
                         rid = self.tickets.pop(ticket)
                         self.ids.discard(rid)
-                    self._enqueue(text)
+                        read_us = self.read_us.pop(ticket, None)
+                    self._enqueue(text, rid, read_us)
         except Exception:  # noqa: BLE001
             log.exception("bridge: waiting for results failed")
             self.close("internal error")
@@ -310,7 +317,7 @@ class _Conn:
             self.close("internal error")
 
     # -- writer ---------------------------------------------------------------------------------------
-    def _enqueue(self, text: str, *, event: bool = False) -> None:
+    def _enqueue(self, text: str, rid: int | None = None, read_us: int | None = None, *, event: bool = False) -> None:
         data = _frame(text)
         if len(data) - 4 > _g.MAX_FRAME_BYTES:
             if event:
@@ -329,7 +336,7 @@ class _Conn:
             if self.closed:
                 return
             if self.out_bytes + len(data) <= self.server.max_queued_bytes:
-                self.out.append(data)
+                self.out.append((data, rid, read_us))
                 self.out_bytes += len(data)
                 self.cond.notify_all()
                 return
@@ -342,7 +349,7 @@ class _Conn:
                     self.cond.wait()
                 if self.closed:
                     return
-                data = self.out.popleft()
+                data, rid, read_us = self.out.popleft()
             try:
                 self.sock.sendall(data)
             except OSError as e:
@@ -350,6 +357,8 @@ class _Conn:
                 return
             with self.cond:
                 self.out_bytes -= len(data)
+            if read_us is not None:
+                log.info("timing: id=%d bridge_read=%d bridge_write=%d", rid, read_us, self.server.clock())
 
     # -- end ------------------------------------------------------------------------------------------
     def close(self, reason: str) -> None:
@@ -360,6 +369,7 @@ class _Conn:
             tickets = list(self.tickets)
             self.tickets.clear()
             self.ids.clear()
+            self.read_us.clear()
             self.out.clear()
             self.cond.notify_all()
         for ticket in tickets:
@@ -386,7 +396,7 @@ class BridgeServer:
 
     def __init__(self, backend, *, host: str, port: int, token: str | None, session_file, welcome_info,
                  max_connections: int, max_inflight_per_connection: int, hello_timeout: float,
-                 max_queued_bytes: int):
+                 max_queued_bytes: int, trace_timing: bool = False, clock=None):
         if not ipaddress.ip_address(host).is_loopback:
             raise ValueError(f"the dev bridge binds loopback only, not {host!r}")
         if token is None:
@@ -401,6 +411,8 @@ class BridgeServer:
         self.max_inflight_per_connection = max_inflight_per_connection
         self.hello_timeout = hello_timeout
         self.max_queued_bytes = max_queued_bytes
+        # The bridge's timing clock, or None when trace_timing is off (then no stamp is taken at all).
+        self.clock = (clock or (lambda: time.monotonic_ns() // 1000)) if trace_timing else None
         self._conns: set[_Conn] = set()
         self._lock = threading.Lock()
         self._closing = False
@@ -524,15 +536,18 @@ def serve(backend, *, host: str = _g.HOST, port: int = _g.CONFIG_KEYS["port"]["d
           session_file=None, welcome_info, max_connections: int = _g.MAX_CONNECTIONS,
           max_inflight_per_connection: int = _g.CONFIG_KEYS["max_inflight_per_connection"]["default"],
           hello_timeout: float = _g.HELLO_TIMEOUT_MS / 1000,
-          max_queued_bytes: int = _g.MAX_QUEUED_BYTES_PER_CONNECTION) -> BridgeServer:
+          max_queued_bytes: int = _g.MAX_QUEUED_BYTES_PER_CONNECTION, trace_timing: bool = False,
+          clock=None) -> BridgeServer:
     """Start a dev bridge over `backend` (anything with submit(text, consumer), wait_any, cancel, open_consumer,
     close_consumer and next_events: the _skython module).
 
     `welcome_info` is a dict, or a function returning one, with plugin_version, game_version, runtime and
     epoch (a function gives every client the current epoch). Port 0 picks a free port (see .port). The
     session file, when given, gets the port and token; if the bridge cannot start, it gets an inactive
-    record with the reason instead, and the error is raised."""
+    record with the reason instead, and the error is raised. trace_timing logs one timing line per request (Task 38;
+    clock: a function returning microseconds, default time.monotonic_ns() // 1000)."""
     return BridgeServer(backend, host=host, port=port, token=token, session_file=session_file,
                         welcome_info=welcome_info, max_connections=max_connections,
                         max_inflight_per_connection=max_inflight_per_connection,
-                        hello_timeout=hello_timeout, max_queued_bytes=max_queued_bytes)
+                        hello_timeout=hello_timeout, max_queued_bytes=max_queued_bytes,
+                        trace_timing=trace_timing, clock=clock)

@@ -52,6 +52,9 @@ public:
 };
 
 using Ticket = std::uint64_t;
+// The id of the request whose Backend::Run is running on this thread; 0 anywhere else (Task 38: GameBackend's
+// trace_timing line names it, so it can be joined with the bridge's line). Backend::Run itself gets no id.
+std::uint64_t CurrentRequestId() noexcept;
 struct DispatcherOptions
 {
     std::uint32_t default_timeout_ms = 5000;

@@ -386,7 +386,8 @@ def _start_bridge(module, cfg: dict) -> None:
     try:
         bridge = serve(module, port=cfg["port"], token=cfg.get("fixed_token") or None, session_file=session_file,
                        welcome_info=welcome_info,
-                       max_inflight_per_connection=cfg["max_inflight_per_connection"])
+                       max_inflight_per_connection=cfg["max_inflight_per_connection"],
+                       trace_timing=bool(cfg.get("trace_timing")), clock=getattr(module, "now_us", None))
     except Exception as e:  # noqa: BLE001 - a bridge that cannot start is reported, the game goes on
         log.error("bridge: could not start: %s", e)
         with _LOCK:

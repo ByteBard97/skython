@@ -528,3 +528,11 @@ def test_reload_drops_the_old_scripts_subscriptions(host, fake, tmp_path):
     fake._fake_push_event("channel", json.dumps({"channel": "t24", "payload": "x", "truncated": False}))
     wait_until(lambda: new.seen, what="the reloaded script's event")
     assert old.seen == []
+
+
+def test_trace_timing_reaches_the_bridge_with_the_modules_clock(host, fake, tmp_path):
+    fake.config_overrides.update({"bridge_enabled": True, "port": 0, "trace_timing": True})
+    host.main()
+    with connect_remote(tmp_path / "session.json") as game:
+        assert game.call("Fake", "Echo", 1) == 1
+    wait_until(lambda: "timing: id=1 bridge_read=" in log_text(tmp_path), what="the bridge's timing line in python.log")

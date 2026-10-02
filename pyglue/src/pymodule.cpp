@@ -1,4 +1,5 @@
 #include "spy/pymodule.h"
+#include "spy/clock.h"
 #include "spy/json_depth.h"
 #include <algorithm>
 #include <cmath>
@@ -112,6 +113,8 @@ void DefineModule(py::module_& m)
     m.def("log", [](const std::string& level, const std::string& message) { if (Host().log) Host().log(level, message); },
           py::arg("level"), py::arg("message"), release(), "Write one line to the plugin log.");
     m.def("in_flight", [] { return Disp().InFlight(); }, release(), "Calls submitted and not yet finished.");
+    m.def("now_us", [] { return NowUs(); },
+          "steady_clock microseconds: the clock of the plugin's trace_timing stamps (Task 38).");
     m.def("open_consumer",
           [] {
               if (Host().events == nullptr) throw std::runtime_error("_skython: this build has no event hub");

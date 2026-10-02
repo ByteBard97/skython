@@ -1,4 +1,5 @@
 #include "doctest/doctest.h"
+#include "spy/clock.h"
 #include "spy/dispatcher.h"
 #include <atomic>
 #include <fstream>
@@ -719,4 +720,27 @@ TEST_CASE("every other op ignores the consumer")
     b.answer_inline = true;
     CHECK(code_of(wait_json(d, d.Submit(state_text(10), 7))) == "ok");
     CHECK(hub.Subscriptions() == 0);
+}
+
+TEST_CASE("CurrentRequestId is the request's id inside Backend::Run and 0 outside it (Task 38)")
+{
+    struct IdBackend : spy::Backend
+    {
+        std::uint64_t seen = 99;
+        void Run(const std::string&, const json&, spy::Done done, spy::Cancelled, spy::Progress) override
+        {
+            seen = spy::CurrentRequestId();
+            done(OpResult::Ok(nullptr));
+        }
+        json BaseState() override { return json::object(); }
+        std::optional<std::string> NotReadyReason(bool) override { return std::nullopt; }
+        std::uint32_t LoadsStarted() override { return 0; }
+    } backend;
+    spy::Dispatcher d(backend, {});
+    CHECK(spy::CurrentRequestId() == 0);
+    const auto t = d.Submit(call_text(4242));
+    CHECK(backend.seen == 4242);
+    CHECK(spy::CurrentRequestId() == 0);  // reset when Run returns
+    CHECK(code_of(wait_json(d, t)) == "ok");
+    CHECK(spy::NowUs() > 0);
 }

@@ -1,9 +1,11 @@
 #pragma once
+#include "spy/clock.h"
 #include "spy/dispatcher.h"
 #include "spy/requests.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <utility>
 
 namespace spy::ops {
@@ -68,6 +70,29 @@ struct Measured
 {
     Measured() { Meter().Begin(); }
     ~Measured() { Meter().End(); }
+};
+
+// Task 38 (trace_timing, dev only, record only): one request's stamps, spy::NowUs() microseconds. GameBackend makes one
+// per request when trace_timing is on and sets t_timing while its task body runs; a Callback built in that body keeps
+// it and stamps `callback` when the VM calls back (on whatever thread). Null when trace_timing is off: nothing is taken.
+struct Timing
+{
+    std::uint64_t id = 0;
+    std::int64_t submit = 0;
+    std::atomic<std::int64_t> task_start{0};
+    std::atomic<std::int64_t> callback{0};
+    std::int64_t frame_dt = 0;  // RE::GetSecondsSinceLastFrame() in µs, read at task start
+};
+inline thread_local std::shared_ptr<Timing> t_timing;
+struct WithTiming
+{
+    explicit WithTiming(std::shared_ptr<Timing> t) : prev_(std::exchange(t_timing, std::move(t))) {}
+    ~WithTiming() { t_timing = std::move(prev_); }
+    WithTiming(const WithTiming&) = delete;
+    WithTiming& operator=(const WithTiming&) = delete;
+
+private:
+    std::shared_ptr<Timing> prev_;
 };
 
 // Inside an SKSE task only. Validation failures become Err results; nothing throws out of Run.

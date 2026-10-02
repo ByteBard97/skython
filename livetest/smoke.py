@@ -35,7 +35,7 @@ def wait_smoke(timeout: float = 180.0) -> dict:
                          "(tools/box/box_deploy.sh --scripts livetest/scripts) and a save loaded?")
 
 
-def command(cmd: str, timeout: float = 300.0, **kw) -> dict:
+def command(cmd: str, timeout: float = 300.0, first_poll_after: float = 0.0, **kw) -> dict:
     # Monotonic across launches: the game's control loop starts from the highest seq it finds on disk, and in box mode
     # the mirror holds only this launch's text, so a seq derived from the mirror could restart below it.
     seq = time.time_ns()
@@ -47,6 +47,8 @@ def command(cmd: str, timeout: float = 300.0, **kw) -> dict:
         subprocess.run([str(REPO / "tools" / "box" / "box_files.sh"), "put-control", str(path)], check=True,
                        capture_output=True, text=True, timeout=120)
     deadline = time.monotonic() + timeout
+    if first_poll_after > 0:
+        time.sleep(min(first_poll_after, timeout))  # the command cannot be done sooner; do not load the box meanwhile
     while time.monotonic() < deadline:
         r = _read("livetest_reply.json")
         if r and r.get("seq") == seq:

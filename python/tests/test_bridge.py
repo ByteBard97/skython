@@ -1,7 +1,9 @@
 """The dev bridge, end to end on Linux: a real BridgeServer over the fake _skython, driven by the real remote
 transport and by raw sockets for everything a well-behaved client would never send."""
+import itertools
 import json
 import logging
+import re
 import socket
 import struct
 import threading
@@ -418,3 +420,32 @@ def test_a_failure_after_listening_closes_the_listener_and_says_why(fake, tmp_pa
         serve(fake, port=0, session_file=log_file, welcome_info=broken)
     with pytest.raises(errors.NotRunning, match="could not start"):
         find_session(log_file, env={})
+
+
+TIMING = re.compile(r"timing: id=(\d+) bridge_read=(\d+) bridge_write=(\d+)")
+
+
+def test_trace_timing_logs_one_line_per_request_and_none_for_events(start, fake, caplog):
+    caplog.set_level(logging.INFO, logger="skython.bridge")
+    ticks = itertools.count(1000, 7)  # a fake clock: every read is later than the one before
+    b = start(trace_timing=True, clock=lambda: next(ticks))
+    seen = []
+    with remote(b) as game:
+        for v in range(3):
+            assert game.call("Fake", "Echo", v) == v
+        game.on_channel("t", seen.append)
+        fake._fake_push_event("channel", json.dumps({"channel": "t", "payload": "", "truncated": False}))
+        wait_until(lambda: seen, what="the event")
+    lines = [m for m in (TIMING.fullmatch(r.getMessage()) for r in caplog.records) if m]
+    ids = [int(m[1]) for m in lines]
+    # Three calls and the subscribe (ids 1-4); leaving `with remote(b)` closes the Game, whose events.unsubscribe is
+    # id 5 and may or may not be logged before the connection closes. The event frame has no line.
+    assert {1, 2, 3, 4} <= set(ids) and all(i <= 5 for i in ids) and len(ids) == len(set(ids)), ids
+    assert all(int(m[2]) < int(m[3]) for m in lines)
+
+
+def test_no_timing_lines_by_default(bridge, caplog):
+    caplog.set_level(logging.INFO, logger="skython.bridge")
+    with remote(bridge) as game:
+        assert game.call("Fake", "Echo", 1) == 1
+    assert "timing:" not in caplog.text

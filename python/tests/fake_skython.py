@@ -619,6 +619,10 @@ class FakeSkython:
             self._tick()
             return self._in_flight()
 
+    def now_us(self) -> int:
+        """Like the real module's (Task 38): steady microseconds (CLOCK_MONOTONIC, as std::chrono::steady_clock)."""
+        return time.monotonic_ns() // 1000
+
     # -- events (the Task 35 module API) ---------------------------------------------------------
     # A test may set self.hub = None: the fake then acts like a build with no event hub (ModuleHost.events null).
     def open_consumer(self) -> int:

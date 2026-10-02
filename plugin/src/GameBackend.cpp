@@ -3,7 +3,10 @@
 #include "Log.h"
 #include "Ops.h"
 #include "Settings.h"
+#include "spy/clock.h"
+#include <RE/Skyrim.h>  // RE::GetSecondsSinceLastFrame (RE/M/Misc.h), Task 38
 #include <SKSE/SKSE.h>
+#include <memory>
 #include <mutex>
 
 namespace spy::game {
@@ -16,10 +19,22 @@ public:
     void Run(const std::string& op, const json& args, Done done, Cancelled cancelled, Progress progress) override
     {
         if (op == "game.state") return State(std::move(done), std::move(cancelled));
+        std::shared_ptr<ops::Timing> timing;  // Task 38: only with trace_timing (dev); null costs nothing
+        if (settings::Get().trace_timing) {
+            timing = std::make_shared<ops::Timing>();
+            timing->id = spy::CurrentRequestId();
+            timing->submit = NowUs();
+            done = Traced(std::move(done), timing);
+        }
         // Exactly one AddTask; never block the submitting Python thread.
-        SKSE::GetTaskInterface()->AddTask([op, args, done, cancelled, progress] {
+        SKSE::GetTaskInterface()->AddTask([op, args, done, cancelled, progress, timing] {
             ops::InTask in;
             ops::Measured measured;  // Task 31 drain meter: before the cancelled() check, a cancelled body still ran
+            if (timing) {
+                timing->task_start.store(NowUs());
+                timing->frame_dt = static_cast<std::int64_t>(RE::GetSecondsSinceLastFrame() * 1'000'000.0f);
+            }
+            ops::WithTiming traced(timing);  // a Callback built below keeps it
             if (cancelled()) return;  // timed out, cancelled or a load started while queued
             try {
                 ops::Run(op, args, done, cancelled, progress);
@@ -41,6 +56,20 @@ public:
     std::uint32_t LoadsStarted() override { return life::LoadsStarted(); }
 
 private:
+    // Task 38: stamp `done`, hand the result on, then write the request's one line. The line is written after done so
+    // the log write is not inside the measured path; Log.cpp flushes every info line (a synchronous write on this
+    // thread, which may be inside an SKSE task: a small, recorded perturbation of the next request's queue time).
+    static Done Traced(Done done, std::shared_ptr<ops::Timing> t)
+    {
+        return [done = std::move(done), t = std::move(t)](OpResult r) {
+            const std::int64_t at = NowUs();
+            done(std::move(r));
+            log::Info("timing: id=" + std::to_string(t->id) + " submit=" + std::to_string(t->submit) +
+                      " task_start=" + std::to_string(t->task_start.load()) + " callback=" +
+                      std::to_string(t->callback.load()) + " done=" + std::to_string(at) +
+                      " frame_dt=" + std::to_string(t->frame_dt));
+        };
+    }
     static json WithDiagnostics(json s)
     {
         auto& d = GetDispatcher();

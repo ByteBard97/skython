@@ -68,7 +68,18 @@ bool declares(const OpSpec* spec, std::string_view name)
     return spec != nullptr &&
            std::any_of(spec->args.begin(), spec->args.end(), [&](const ArgSpec& a) { return a.name == name; });
 }
+
+thread_local std::uint64_t t_request_id = 0;
+struct RequestIdScope  // set around the one Backend::Run call in Submit; reset even if Run throws
+{
+    explicit RequestIdScope(std::uint64_t id) { t_request_id = id; }
+    ~RequestIdScope() { t_request_id = 0; }
+    RequestIdScope(const RequestIdScope&) = delete;
+    RequestIdScope& operator=(const RequestIdScope&) = delete;
+};
 }
+
+std::uint64_t CurrentRequestId() noexcept { return t_request_id; }
 
 struct Dispatcher::Shared
 {
@@ -240,6 +251,7 @@ Ticket Dispatcher::Submit(std::string_view request_text, ConsumerId consumer)
         it->second.dispatched = true;
     }
     try {
+        RequestIdScope request_id(id);
         backend_.Run(req.op, req.args, done, is_cancelled, progress);
     } catch (const std::exception& e) {
         shared_->Finish(ticket, error_text(id, ErrorCode::internal, std::string("backend error: ") + e.what()), false);

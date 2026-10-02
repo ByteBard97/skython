@@ -185,3 +185,12 @@ def test_golden_late_cancel_and_not_ready_dispatched():
     t = _skython.submit(request(43, "Never"))
     _skython._fake_bump_loads()
     assert response(_skython.wait(t, 2.0)) == GOLDEN[43]
+
+
+def test_now_us_is_steady_clock_microseconds():
+    a = _skython.now_us()
+    time.sleep(0.05)
+    b = _skython.now_us()
+    assert type(a) is int and 45_000 <= b - a < 1_000_000
+    # On Linux std::chrono::steady_clock and time.monotonic are both CLOCK_MONOTONIC: the same clock.
+    assert abs(_skython.now_us() - time.monotonic_ns() // 1000) < 10_000

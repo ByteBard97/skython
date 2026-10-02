@@ -76,11 +76,12 @@ void KeptOnRefusal(const std::string& qualified)
 class Callback final : public RE::BSScript::IStackCallbackFunctor
 {
 public:
-    Callback(Done d, DynArgs* args) : done_(std::move(d)), args_(args) {}
+    Callback(Done d, DynArgs* args) : done_(std::move(d)), args_(args), timing_(t_timing) {}
     void operator()(Variable result) override
     {
         // Nothing may escape into the VM: AddTask, the copies or the unique_ptr could still throw (bad_alloc).
         try {
+            if (timing_) timing_->callback.store(NowUs());  // Task 38: before anything else the callback does
             // This call's arguments (S2: the VM never frees them). Freed when this scope ends, after the result was
             // read and converted or queued; `result` is our own copy. The destructor does not free them (Known limits).
             std::unique_ptr<DynArgs> owned{std::exchange(args_, nullptr)};
@@ -108,6 +109,7 @@ public:
 private:
     Done done_;
     DynArgs* args_;  // owned; freed in operator()
+    std::shared_ptr<Timing> timing_;  // Task 38: set only with trace_timing, from the task body that built us
 };
 
 // The view from inside the task; life::Paused() is what the Dispatcher saw at submit.

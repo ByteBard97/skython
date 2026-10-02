@@ -125,6 +125,27 @@ def _bench(game, calls: int) -> dict:
             "spinning": bool(_spin_thread and _spin_thread.is_alive())}
 
 
+def _sweep(cmd: dict) -> dict:
+    """Task 38: sequential Utility.RandomInt calls, `calls` per pause in `sleeps_ms`, the pause before each call.
+    Straight through _skython.call with request ids from id_base, so the plugin's timing lines join with them, and
+    stamped with _skython.now_us (the plugin's clock). No Game: its ids would collide with other clients'."""
+    calls, base, rows, n = int(cmd.get("calls", 100)), int(cmd["id_base"]), [], 0
+    for sleep_ms in cmd["sleeps_ms"]:
+        for _ in range(calls):
+            n += 1
+            text = json.dumps({"type": "request", "id": base + n, "op": "papyrus.call_static",
+                               "args": {"script": "Utility", "function": "RandomInt", "args": [1, 6]}})
+            if sleep_ms:
+                time.sleep(sleep_ms / 1000)
+            start = _skython.now_us()
+            resp = json.loads(_skython.call(text, 30.0))
+            end = _skython.now_us()
+            if resp.get("ok") is not True:
+                return {"error": f"sweep call {base + n} failed: {resp.get('error')}"}
+            rows.append([base + n, sleep_ms, start, end])
+    return {"calls": rows}
+
+
 def _handle(game, cmd: dict) -> dict:
     global _spin_thread, _spin_loops
     name = cmd.get("cmd")
@@ -142,6 +163,8 @@ def _handle(game, cmd: dict) -> dict:
         return {"spinning": False, "spin_loops": _spin_loops}
     if name == "bench":
         return _bench(game, int(cmd.get("calls", 300)))
+    if name == "sweep":
+        return _sweep(cmd)
     return {"error": f"unknown command {name!r}"}
 
 
