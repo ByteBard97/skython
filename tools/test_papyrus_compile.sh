@@ -28,6 +28,8 @@ PY
 )"
 [ "$hdr" = "skython build" ] && ok "fresh .pex header: user skython, machine build" || bad "fresh .pex header user/machine: '$hdr'"
 me="$(id -un)"; host="$(hostname)"
+# a name equal to one of the fixed values is not personal; drop it from the search
+case "$me" in skython|build) me="-" ;; esac; case "$host" in skython|build) host="-" ;; esac
 if strings -n 3 "$T/out/Skython.pex" | grep -qixF -e "$me" -e "$host"; then
   bad "the fresh .pex contains the account name '$me' or host name '$host'"
 else

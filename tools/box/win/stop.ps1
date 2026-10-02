@@ -21,4 +21,4 @@ Get-CimInstance Win32_Process -Filter "Name='SkyrimSE.exe'" | Invoke-CimMethod -
 Get-CimInstance Win32_Process -Filter "Name='skse64_loader.exe'" | Invoke-CimMethod -MethodName Terminate | ForEach-Object { "CIM Terminate skse64_loader.exe returned $($_.ReturnValue)" }
 if (WaitGone 20) { "GONE via CIM Terminate"; exit 0 }
 "STILL_RUNNING after Stop-Process and CIM Terminate: " + (((Alive) | ForEach-Object { "$($_.Name) $($_.Id)" }) -join ', ')
-"End the game by hand on the box (Task Manager); nothing else was tried."; exit 1
+"End the game by hand on the box (Task Manager); this script tries nothing further."; exit 1
