@@ -18,7 +18,7 @@
 - `livetest_smoke` gains a `sweep` command (in-process, straight through `_skython.call` with request ids from a given base, stamped with `now_us`), and `livetest/test_m2_drain_timing.py` runs both sweeps and writes `livetest/results/drain_timing.json`.
 
 **Files:**
-- Create: `core/include/spy/clock.h`, `plugin/config/variants/trace-timing.ini`, `livetest/test_m2_drain_timing.py`, `livetest/results/drain_timing.json` (written by the run)
+- Create: `core/include/spy/clock.h`, `plugin/config/variants/trace-timing.ini` (owned here: the dev ini with `trace_timing = true`; Tasks 42 and 44 use it), `livetest/test_m2_drain_timing.py`, `livetest/results/drain_timing.json` (written by the run)
 - Modify: `core/include/spy/dispatcher.h`, `core/src/dispatcher.cpp` (`CurrentRequestId`), `core/tests/test_dispatcher.cpp` (one test), `pyglue/src/pymodule.cpp` (`now_us`), `pyglue/tests/test_module.py` (one test), `plugin/src/Ops.h` (`Timing`, `t_timing`, `WithTiming`), `plugin/src/Ops.cpp` (`Callback` stamps `callback`), `plugin/src/GameBackend.cpp` (stamps and the `timing:` line), `python/src/skython/bridge.py` (`trace_timing`, `clock`), `python/src/skython/_host.py` (passes both), `python/tests/fake_skython.py` (`now_us`), `python/tests/test_bridge.py` and `python/tests/test_host.py` (one test each, plus one in `test_bridge.py` for the default), `livetest/scripts/livetest_smoke/__init__.py` (`sweep`), `spikes/RESULTS.md` (the Task 38 entry)
 
 **Interfaces:**
@@ -29,6 +29,8 @@
   - `skython.bridge.serve(..., trace_timing: bool = False, clock: Callable[[], int] | None = None)`; without `clock` the bridge uses `time.monotonic_ns() // 1000`. `_host` passes `trace_timing=cfg["trace_timing"]`, `clock=_skython.now_us`.
   - Log lines (exact): plugin `timing: id=<id> submit=<us> task_start=<us> callback=<us> done=<us>`; bridge (logger `skython.bridge`, INFO, `python.log`) `timing: id=<id> bridge_read=<us> bridge_write=<us>`.
   - `livetest_smoke` command `sweep` (`sleeps_ms: list[int]`, `calls: int`, `id_base: int`) replying `{"calls": [[id, sleep_ms, start_us, end_us], ...]}`.
+  - `plugin/config/variants/trace-timing.ini` (the dev ini with `trace_timing = true`, nothing else changed; Tasks 42 and 44 deploy it).
+  - Raw-request id bases (index Global Constraints and Contracts, Live tests): `IN_BASE = 3_800_000_000` (in-process `sweep`), `REMOTE_BASE = 3_900_000_000` (bridge), so the ids never collide with another client's (every transport counts from 1; the box's `live_dashboard` polls).
   - `livetest/results/drain_timing.json`: `date`, `game_version`, `runtime`, `calls_per_step`, `sleeps_ms`, `frame_ms_estimate`, `tie_back` (`remote_game_p50_ms`, `inprocess_game_p50_ms`, Task 31's `92.39` / `46.11`), `inprocess.steps` and `remote.steps` (one per pause: totals and phase spreads `{p10, p50, p90}` in ms), `raw.inprocess` rows `[id, sleep_ms, start, submit, task_start, callback, done, end]` and `raw.remote` rows `[id, sleep_ms, client_ms, bridge_read, submit, task_start, callback, done, bridge_write]` (µs stamps), `notes`.
 
 - [ ] **Step 1: The core pieces, test first**
@@ -312,26 +314,13 @@ and add to the `private:` section:
         };
     }
 ```
-Create `plugin/config/variants/trace-timing.ini` (the dev ini plus one key; sections are ignored by the parser):
-```ini
-; Skython settings for Task 38's timing experiment only: the dev ini plus trace_timing = true (one timing line per
-; request in Skython.log and python.log). Redeploy plugin/config/Skython.dev.ini afterwards.
-[Python]
-python_enabled = true
-scripts_enabled = true
-[Bridge]
-bridge_enabled = true
-port = 45977
-fixed_token =
-session_file =
-max_inflight_per_connection = 256
-[Calls]
-default_timeout_ms = 5000
-max_inflight_total = 1024
-enable_console = false
-trace_timing = true
-console_echo_errors = true
+Create `plugin/config/variants/trace-timing.ini` from the dev ini (Task 33 added `trace_timing = false` and `console_echo_errors = true` to it), so it differs in exactly one line. This task owns the file; Tasks 42 and 44 deploy it and never recreate it:
+```bash
+sed 's/^trace_timing = false$/trace_timing = true/' plugin/config/Skython.dev.ini > plugin/config/variants/trace-timing.ini
+grep -c '^trace_timing = true$' plugin/config/variants/trace-timing.ini     # 1
+diff plugin/config/Skython.dev.ini plugin/config/variants/trace-timing.ini  # exactly the trace_timing line differs
 ```
+Expected: `1`, and `diff` prints only `< trace_timing = false` / `> trace_timing = true`. (After the experiment, redeploy `plugin/config/Skython.dev.ini`.)
 
 Run: `tools/remote_build.sh plugin Skython.dll && tools/remote_build.sh plugin SkythonCore.dll`
 Expected: both exit 0 with 0 warnings (`SPY_TEST_HOOKS=OFF`), `out/Skython.dll` and `out/SkythonCore.dll` refreshed. The Linux core and pyglue builds of Steps 1-2 already compiled `clock.h` and `CurrentRequestId`.

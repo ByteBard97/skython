@@ -32,10 +32,15 @@ bool filter_matches(const EventFilter&, std::string_view event, const json& data
 struct EventHubOptions {
     std::function<std::uint32_t()> epoch;   // LifecycleState::epoch in the plugin; a counter in tests
     std::function<bool()> loading;          // LifecycleState::loading in the plugin; a switch in tests
+    // Task 44 adds, only if its probe PASSes, one optional last member (so existing aggregate initializers stay valid):
+    // std::function<void(std::string_view event, bool wanted)> on_wanted;  // called outside the hub's lock when an
+    //                                                                      // event's subscriber count goes 0->1 or 1->0
 };
 class EventHub {
  public:
     explicit EventHub(EventHubOptions);
+    EventHub(const EventHub&) = delete;
+    EventHub& operator=(const EventHub&) = delete;
     ConsumerId OpenConsumer();
     void CloseConsumer(ConsumerId);                  // drops its subscriptions and queued events; wakes a waiting Next; idempotent
     json Subscribe(ConsumerId, const json& args);    // {sub, event, max_queue}; throws ProtocolError (bad_request, busy)
@@ -51,7 +56,7 @@ class EventHub {
     std::uint64_t SuppressedTotal() const;
 };
 ```
-  Behaviour details later tasks rely on: an empty `EventHubOptions::epoch` stamps 0 and an empty `loading` means "never loading"; `Subscribe` on consumer 0, an unknown or a closed consumer is `bad_request`; `Unsubscribe` of an unknown sub and of another consumer's sub are both `not_found` with the same message; `Next` on an unknown or closed consumer returns empty at once; `Next` with `max_events == 0` returns empty; frame texts are `{"type":"event","event","sub","seq","epoch","data"}` plus `dropped`/`suppressed` when non-zero, made with `dump_json`.
+  Behaviour details later tasks rely on: an empty `EventHubOptions::epoch` stamps 0 and an empty `loading` means "never loading"; `Subscribe` on consumer 0, an unknown or a closed consumer is `bad_request` whose message starts `no event consumer` (the Dispatcher answers consumer 0 itself with exactly `no event consumer`, Task 35); `filter` absent or `null` means no filter; `Unsubscribe` of an unknown sub and of another consumer's sub are both `not_found` with the same message; `Next` on an unknown or closed consumer returns empty at once; `Next` with `max_events == 0` returns empty; frame texts are `{"type":"event","event","sub","seq","epoch","data"}` plus `dropped`/`suppressed` when non-zero, made with `dump_json`.
 
 ---
 
@@ -604,6 +609,7 @@ struct EventHubOptions
 {
     std::function<std::uint32_t()> epoch;   // LifecycleState::epoch in the plugin; a counter in tests (empty: 0)
     std::function<bool()> loading;          // LifecycleState::loading in the plugin; a switch in tests (empty: false)
+    // No other member in this task. Task 44 appends `on_wanted` (optional, last) only if its sink-detach probe passes.
 };
 
 // Event consumers, subscriptions and their bounded queues (spec 4.6). Pure C++: no game, no Python. Thread-safe.

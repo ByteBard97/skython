@@ -8,7 +8,7 @@
 - **Dispatcher.** `DispatcherOptions` gains `EventHub* events = nullptr;` (appended last, so the positional `DispatcherOptions{timeout, cap}` in `pyglue/linux/fake_module.cpp` and the plugin still compiles), and `Submit` gains a second parameter, `ConsumerId consumer = 0`. After parsing, `events.subscribe` and `events.unsubscribe` are answered by the hub synchronously: the ticket is done at once, there is no backend call, no deadline and no in-flight slot. The checks run in this order: no hub → `unsupported` ("this build has no event hub"); consumer 0 → `bad_request` ("no event consumer"); then the hub (`Subscribe` / `Unsubscribe`), whose `ProtocolError` becomes the error response. Readiness does not apply (both ops are `needs_game: false`). Every other op ignores `consumer`.
 - **FakeBackend.** `game.save {name}` records the name in a set; an existing name is `bad_request` with `detail.reason = "save_exists"` and message `a save named <name> already exists`; otherwise `{"name": name}`. `game.load {save}` checks `NotReadyReason(false)` itself (the Dispatcher skips readiness for this `needs_game: false` op): `"starting"` or `"loading"` → `not_ready` (detail `reason`, `paused`, `menus`; message as the Dispatcher's), a `"no_game"` main menu is allowed; an unknown name → `not_found` with message `no save named <name>`; else `BumpLoads()` then `{"save": name, "started": true}`. Both answer inside `Run`, like `game.state`. Controls `AddFakeSave(std::string)` and `FakeSaves()`. Its texts equal the golden responses 62-65.
 - **`_skython`.** `submit(request, consumer=0)` and `call(request, timeout, consumer=0)` pass the consumer beside the text; `open_consumer()`, `close_consumer(consumer)` (idempotent), `next_events(consumer, timeout)` (a JSON list of event objects, `"[]"` on timeout; the GIL is released while it waits; an unknown or closed consumer returns `"[]"` at once). `ModuleHost` gains `EventHub* events = nullptr;` (appended last). With no hub installed, `open_consumer` raises `RuntimeError`, `close_consumer` does nothing and `next_events` returns `"[]"`.
-- **Fake build.** `pyglue/linux/fake_module.cpp` builds one immortal `EventHub` whose `epoch` is the fake backend's epoch (`LoadsStarted()`, what `BaseState()["epoch"]` reports) and whose `loading` is true while `_fake_set_not_ready("loading")` is in force; installs it in both `DispatcherOptions::events` and `ModuleHost::events`; and adds `_fake_push_event(event, data_json)`, which calls `EventHub::Push` (an unknown event name, invalid JSON, a non-object or too-deep data → `ValueError`).
+- **Fake build.** `pyglue/linux/fake_module.cpp` builds one immortal `EventHub` whose `epoch` is the fake backend's epoch (`LoadsStarted()`, what `BaseState()["epoch"]` reports) and whose `loading` is true while `_fake_set_not_ready("loading")` is in force; installs it in both `DispatcherOptions::events` and `ModuleHost::events` (the `ModuleHost` is now built with named fields, so later fields never shift positions); and adds `_fake_push_event(event, data_json)`, which calls `EventHub::Push` (an unknown event name, invalid JSON, a non-object or too-deep data → `ValueError`).
 
 Review Focus lines this task pins: **2** (a consumer nobody drains fills to `max_queue`, drops are counted and reported, another consumer of the same events is unaffected) and **3** (with the fake loading, `cell_attach` is suppressed and `menu_open` delivered; the next `cell_attach` carries `suppressed`).
 
@@ -22,9 +22,9 @@ Review Focus lines this task pins: **2** (a consumer nobody drains fills to `max
 **Interfaces:**
 - Consumes: `spy::EventHub` with `OpenConsumer`, `CloseConsumer`, `Subscribe`, `Unsubscribe`, `Push`, `Next`, `Subscriptions`; `spy::ConsumerId`, `spy::SubId`, `spy::EventHubOptions` (Task 34); `spy::ops::kEventsSubscribe`, `kEventsUnsubscribe`, `kGameSave`, `kGameLoad`, `spy::find_event`, `spy::kMaxEventsPerNext`, `spy::kMaxJsonDepth` (Task 33, generated); `responses.json` ids 62-65 (Task 33); `spy::nesting_within`, `spy::clip_text`, `Dispatcher`, `FakeBackend` (v1).
 - Produces (exactly the index Contracts):
-  - `struct DispatcherOptions` gains `EventHub* events = nullptr;` (null → `events.*` answer `unsupported`); `Ticket Dispatcher::Submit(std::string_view request_text, ConsumerId consumer = 0);`
-  - `FakeBackend`: `game.save` / `game.load` as above; `void AddFakeSave(std::string name);`, `std::vector<std::string> FakeSaves() const;` (sorted).
-  - `ModuleHost` gains `EventHub* events = nullptr;`.
+  - `struct DispatcherOptions` gains `EventHub* events = nullptr;` (null → `events.*` answer `unsupported`; consumer 0 → `bad_request` `no event consumer`; an unknown or closed consumer → the hub's `bad_request` starting `no event consumer`; `filter` absent or `null` = no filter); `Ticket Dispatcher::Submit(std::string_view request_text, ConsumerId consumer = 0);`
+  - `FakeBackend`: `game.save` / `game.load` as above (errors exactly `bad_request` `a save named <name> already exists` with `detail.reason` `save_exists`, and `not_found` `no save named <name>`: `responses.json` 64-65); `void AddFakeSave(std::string name);`, `std::vector<std::string> FakeSaves() const;` (sorted).
+  - `ModuleHost` gains `EventHub* events = nullptr;` (appended last, with its default). `pyglue/linux/fake_module.cpp` builds `ModuleHost` with named fields (designated initializers); in the game build `plugin/src/PythonHost.cpp` fills `events` (Task 39; it already sets fields by name on a `ModuleHost host;` local). Later fields, each appended with a default: `console_echo` (Task 43), `probe_sink_cycles` (Task 44).
   - `_skython.submit(request: str, consumer: int = 0) -> int`, `_skython.call(request: str, timeout: float, consumer: int = 0) -> str`, `_skython.open_consumer() -> int`, `_skython.close_consumer(consumer: int) -> None`, `_skython.next_events(consumer: int, timeout: float) -> str`; fake build only: `_skython._fake_push_event(event: str, data_json: str) -> None`.
 
 ---
@@ -676,7 +676,10 @@ Inside the existing `if (h.fake != nullptr) { ... }` block, after `_fake_set_pau
         d->StartReaper();
         return d;
     }();
-    spy::InstallModuleHost({dispatcher, "fake", ConfigJson, Log, fake, hub});
+    // Named fields (C++20 designated initializers), never positional: later tasks append ModuleHost fields
+    // (console_echo in Task 43, probe_sink_cycles in Task 44), each with a default.
+    spy::InstallModuleHost({.dispatcher = dispatcher, .backend = "fake", .config_json = ConfigJson, .log = Log,
+                            .fake = fake, .events = hub});
     spy::DefineModule(m);
 ```
 

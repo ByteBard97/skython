@@ -11,10 +11,11 @@ The spec's M1.5 milestone (section 9) names three engine probes, all run through
 > **STOP and ask the owner (do not improvise) if:** a probe's verdict is INCONCLUSIVE after Step 4 (neither the screenshots nor the `sqo` text show the rendered objective; do not open the Journal from Papyrus: the menu pauses the VM, and nothing driven through Papyrus could close it again); the save name already exists (`box_saves.sh count` not 0); `PO3_SKSEFunctions.SetObjectiveText` is `unknown_function` (powerofthree's Papyrus Extender not loaded this launch); a screenshot shows anything but the game (another window, a desktop with personal content): do not commit it; a live test crashes the game.
 
 **Method (the same for every probe, written into each write-up):**
+- **Fills (all three probes):** alias 0 `SkythonTarget` ← `SkythonTestNPC` (`ForceRefTo`), alias 1 `SkythonItem` ← an iron sword placed at the player (`ForceRefTo`), alias 3 `SkythonPlace` ← `SkythonTestLocation` (`ForceLocationTo`); objective 10. Alias 2 is not tagged and stays empty.
 - **Rendered text, method A (screenshot):** `Quest.SetObjectiveDisplayed(idx, False, False)` then `SetObjectiveDisplayed(idx, True, True)` (force) makes the HUD show the objective banner for a few seconds; `tools/box/box_shot.sh <png>` is started at once. Up to 3 tries per probe; the worker opens each PNG and records whether the banner is visible and what it says.
 - **Rendered text, method B (console):** `tools/box/box_console.sh "sqo SkythonTestQuest"` (ShowQuestObjectives); the reply is recorded verbatim. Whether `sqo` prints resolved names or raw tags is itself recorded, not assumed.
-- **State:** `Quest.IsObjectiveDisplayed(idx)`, each alias's `ReferenceAlias.GetReference()`, and each filled reference's `ObjectReference.GetDisplayName()` (SKSE), through the bridge.
-- **Verdict per probe:** PASS when method A or B shows every tag replaced by the filled reference's display name; FAIL when either shows a raw `<Alias=...>` tag or an empty name where a filled alias should appear; INCONCLUSIVE otherwise (STOP).
+- **State:** `Quest.IsObjectiveDisplayed(idx)`, aliases 0 and 1's `ReferenceAlias.GetReference()` with each filled reference's `ObjectReference.GetDisplayName()` (SKSE), and alias 3's `LocationAlias.GetLocation()` with the location's `Form.GetName()` (SKSE), through the bridge.
+- **Verdict per probe:** PASS when method A or B shows every tag replaced by the filled alias's name (the reference's display name for aliases 0 and 1, the location's name for alias 3); FAIL when either shows a raw `<Alias=...>` tag or an empty name where a filled alias should appear; INCONCLUSIVE otherwise (STOP).
 
 **Files:**
 - Create: `livetest/test_m15_probes.py`
@@ -24,11 +25,11 @@ The spec's M1.5 milestone (section 9) names three engine probes, all run through
 
 **Interfaces:**
 - Consumes:
-  - Task 48: the quest's one objective, whose text holds three `<Alias=...>` tags naming three of its reference aliases (which ones is read from the game: the probe fills every reference alias).
-  - Task 50: `_testesp.discover(game) -> Esp` (`quest`, `ref_aliases`, `alias_names`, `npc`, `objective`), `ensure_running`, `PLAYER`, `IRON_SWORD`.
+  - Task 48 (index Contracts, **Test ESP**): objective 10 with the text `Skython test: <Alias=SkythonTarget>, <Alias=SkythonItem>, <Alias=SkythonPlace>`, i.e. reference aliases 0 and 1 and location alias 3 (`SkythonTestLocationAlias`); `SkythonTestNPC` `SkythonTest.esp|0x000804`; `SkythonTestLocation` `|0x000801`.
+  - Task 50: `_testesp.discover(game) -> Esp` (`quest`, `ref_aliases`, `location_alias`, `alias_names`, `npc`, `objective`), `ensure_running`, `location(game)`, `PLAYER`, `IRON_SWORD`, `TARGET_ALIAS`, `ITEM_ALIAS`, `PLACE_ALIAS`, `ALIAS_NAMES`, `OBJECTIVE`.
   - Task 41: `Game.save(name, *, timeout=60.0) -> str`, `Game.load(name, *, timeout=120.0, wait=True) -> dict` (returns the interactive state with the new `epoch`).
   - Task 49: `fresh_save`. Box tools: `box_console.sh`, `box_shot.sh [LOCAL_PNG]`, `box_saves.sh count NAME`.
-  - Natives: `Quest.SetActive(bool)`, `Quest.SetObjectiveDisplayed(int, bool, bool)`, `Quest.IsObjectiveDisplayed(int)`, `ReferenceAlias.ForceRefTo(ObjectReference)`, `ReferenceAlias.GetReference()`, `ObjectReference.GetDisplayName()` (SKSE), `ObjectReference.PlaceAtMe(Form, int, bool, bool)`, `PO3_SKSEFunctions.SetObjectiveText(Quest, string, int)`.
+  - Natives: `Quest.SetActive(bool)`, `Quest.SetObjectiveDisplayed(int, bool, bool)`, `Quest.IsObjectiveDisplayed(int)`, `ReferenceAlias.ForceRefTo(ObjectReference)`, `ReferenceAlias.GetReference()`, `LocationAlias.ForceLocationTo(Location)`, `LocationAlias.GetLocation()`, `ObjectReference.GetDisplayName()` (SKSE), `Form.GetName()` (SKSE), `ObjectReference.PlaceAtMe(Form, int, bool, bool)`, `PO3_SKSEFunctions.SetObjectiveText(Quest, string, int)`.
 - Produces: `docs/probes/*.md` (method, raw results, verdict per probe); `out/probes/probes.json` and `out/probes/*.png` (raw, not committed; the PNGs a verdict rests on are copied to `docs/probes/img/`); one new throwaway save `skython_t52_<timestamp>` on the owner's removal list.
 
 - [ ] **Step 1: Write the probe test**
@@ -103,26 +104,32 @@ def show_and_shoot(game, esp, tag: str) -> list:
 
 
 def fills(game, esp) -> list:
+    """The three aliases the objective's tags name, in tag order: 0 SkythonTarget, 1 SkythonItem, 3 SkythonPlace."""
     out = []
-    for a in esp.ref_aliases:
+    for i in (t.TARGET_ALIAS, t.ITEM_ALIAS):
+        a = esp.ref_aliases[i]
         ref = game.call_method(a, "ReferenceAlias", "GetReference")
         name = game.call_method(ref, "ObjectReference", "GetDisplayName") if ref is not None else None
-        out.append({"alias_id": a.alias_id, "alias_name": esp.alias_names[a.alias_id],
+        out.append({"alias_id": i, "alias_name": t.ALIAS_NAMES[i],
                     "ref": None if ref is None else {"form_id": ref.form_id, "form_key": ref.form_key},
                     "display_name": name})
+    loc = game.call_method(esp.location_alias, "LocationAlias", "GetLocation")
+    out.append({"alias_id": t.PLACE_ALIAS, "alias_name": t.ALIAS_NAMES[t.PLACE_ALIAS],
+                "ref": None if loc is None else {"form_id": loc.form_id, "form_key": loc.form_key},
+                "display_name": game.call_method(loc, "Form", "GetName") if loc is not None else None})
     return out
 
 
 def test_probe1_three_alias_tags_in_one_objective(game, esp):
-    sword = game.form(t.IRON_SWORD)
-    placed = [game.call_method(t.PLAYER, "ObjectReference", "PlaceAtMe", sword, 1, True, False)
-              for _ in range(max(0, len(esp.ref_aliases) - 2))]
-    refs = [esp.npc, t.PLAYER, *placed]                       # one named reference per alias
-    for a, ref in zip(esp.ref_aliases, refs):
-        game.call_method(a, "ReferenceAlias", "ForceRefTo", ref)
+    sword = game.call_method(t.PLAYER, "ObjectReference", "PlaceAtMe", game.form(t.IRON_SWORD), 1, True, False)
+    place = t.location(game)
+    game.call_method(esp.ref_aliases[t.TARGET_ALIAS], "ReferenceAlias", "ForceRefTo", esp.npc)
+    game.call_method(esp.ref_aliases[t.ITEM_ALIAS], "ReferenceAlias", "ForceRefTo", sword)
+    game.call_method(esp.location_alias, "LocationAlias", "ForceLocationTo", place)
     got = fills(game, esp)
-    assert all(f["ref"] is not None for f in got), got
-    assert got[0]["ref"]["form_id"] == esp.npc.form_id and got[1]["ref"]["form_id"] == t.PLAYER.form_id, got
+    assert [f["ref"]["form_id"] if f["ref"] else None for f in got] == [esp.npc.form_id, sword.form_id,
+                                                                        place.form_id], got
+    assert all(f["display_name"] for f in got), got        # every tag has a non-empty name to show
     shots = show_and_shoot(game, esp, "probe1")
     assert game.call_method(esp.quest, "Quest", "IsObjectiveDisplayed", esp.objective) is True
     RAW["probe1"] = {"objective": esp.objective, "fills": got, "sqo": sqo(), "screenshots": shots}
@@ -130,7 +137,7 @@ def test_probe1_three_alias_tags_in_one_objective(game, esp):
 
 
 def test_probe2_po3_set_objective_text_with_alias_tags(game, esp):
-    names = [esp.alias_names[a.alias_id] for a in esp.ref_aliases[:3]]
+    names = [t.ALIAS_NAMES[i] for i in (t.TARGET_ALIAS, t.ITEM_ALIAS, t.PLACE_ALIAS)]
     text = "Probe two: " + " / ".join(f"<Alias={n}>" for n in names)
     game.call("PO3_SKSEFunctions", "SetObjectiveText", esp.quest, text, esp.objective)
     shots = show_and_shoot(game, esp, "probe2")
@@ -187,7 +194,7 @@ Expected: `3 passed`; `out/probes/probes.json` and nine PNGs (`probe1_try1..3`, 
 
 - [ ] **Step 3: Read the evidence and decide each verdict**
 
-Open every PNG (the Read tool shows images) and `out/probes/probes.json`. For each probe write down: which try shows the objective banner (or none), the banner's exact text, the `sqo` reply's objective line, and the expected names (`display_name` of each filled alias, in the tag order). Apply the Method's verdict rule. Probe 3 has two questions, recorded separately: (a) alias fills and the displayed flag after the reload (the test asserts both), (b) the objective text after the reload: the ESP text or the `SetObjectiveText` text from probe 2, and whether its tags resolve.
+Open every PNG (the Read tool shows images) and `out/probes/probes.json`. For each probe write down: which try shows the objective banner (or none), the banner's exact text, the `sqo` reply's objective line, and the expected names (`display_name` of aliases 0, 1 and 3, in the tag order). Apply the Method's verdict rule. Probe 3 has two questions, recorded separately: (a) alias fills and the displayed flag after the reload (the test asserts both), (b) the objective text after the reload: the ESP text or the `SetObjectiveText` text from probe 2, and whether its tags resolve.
 
 - [ ] **Step 4: If a verdict is INCONCLUSIVE, try once more, then STOP**
 
@@ -222,7 +229,7 @@ Create `docs/probes/01-objective-alias-tags.md` (and `02-...`, `03-...` the same
 
 **Question.** An objective's text can name reference aliases with `<Alias=Name>` tags. With three tags in one line and all three aliases filled, does the game show all three names?
 
-**Setup.** Quest `SkythonTest.esp|0x000800`, objective [[index]] with the text [[objective text from the ESP]]. Aliases filled with `ReferenceAlias.ForceRefTo`: [[alias name -> reference (display name)]] for each. Then `SetObjectiveDisplayed([[index]], True, True)`.
+**Setup.** Quest `SkythonTest.esp|0x000800`, objective 10 with the text `Skython test: <Alias=SkythonTarget>, <Alias=SkythonItem>, <Alias=SkythonPlace>`. Aliases filled: `SkythonTarget` ← `SkythonTestNPC` and `SkythonItem` ← an iron sword with `ReferenceAlias.ForceRefTo`, `SkythonPlace` ← `SkythonTestLocation` with `LocationAlias.ForceLocationTo` ([[display names as read]]). Then `SetObjectiveDisplayed(10, True, True)`.
 
 **Raw results.**
 - HUD banner (`img/probe1.png`, try [[n]]): [[exact banner text, or "not captured"]]

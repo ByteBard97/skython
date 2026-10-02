@@ -2,6 +2,8 @@
 
 > Part of the [Skython M1.5/M2 plan](README.md). Read the index's **Global Constraints**, **Gates** ("Sink detach (Task 44)": implemented only if the probe passes; not a STOP), **Contracts** (Plugin: `Events.h`; `EventHub`) and Part E's brief for Task 44 first. R38 item 1 (`.superpowers/sdd/README/skyrimplatform-comparison.md`, section 4: SkyrimPlatform registers a sink on the first subscription and removes it on the last; adopt it only if registering mid-game is shown safe; never drop events silently). Steps use checkbox (`- [ ]`) syntax.
 >
+> **Depends on:** Task 40 (both sink batches), Task 38 (`plugin/config/variants/trace-timing.ini`, the dev ini with `trace_timing = true`: `_skython._probe_sink_cycles` exists only with it), Task 35 (`ModuleHost`, built with named fields), Task 34 (`EventHubOptions`).
+>
 > **Runs on:** the Windows build box and the game on the box ([v1 Task 1c](../2026-10-01-skyrim-python-v1-embedded/task-01c-part-c-on-the-box.md)); Part 2's core change also on Linux.
 >
 > **STOP and ask the owner (do not improvise) if:** the probe crashes the game a second time after one clean relaunch (one crash is a FAIL result to record; two means something else is wrong); the game does not reach the main menu within 10 minutes; the box does not answer `ssh` within 10 s. A probe FAIL is **not** a STOP: record it, skip Part 2, run Part 3 in skip-only mode.
@@ -9,12 +11,12 @@
 > **Box rules:** `s4test`, never saved; the probe picks up swords it places, and they are removed at the end. End games with `tools/box/box_stop.sh`.
 
 **Files:**
-- Part 1 (always): Create `plugin/src/SinkProbe.h`, `plugin/src/SinkProbe.cpp`; Modify `pyglue/include/spy/pymodule.h` (`ModuleHost::probe_sink_cycles`), `pyglue/src/pymodule.cpp` (`_skython._probe_sink_cycles`, only when set), `plugin/src/PythonHost.cpp`, `plugin/CMakeLists.txt`, `livetest/scripts/livetest_smoke/__init__.py` (`probe_sink_cycles` command); Create (if absent) `plugin/config/variants/trace-timing.ini`
+- Part 1 (always): Create `plugin/src/SinkProbe.h`, `plugin/src/SinkProbe.cpp`; Modify `pyglue/include/spy/pymodule.h` (`ModuleHost::probe_sink_cycles`), `pyglue/src/pymodule.cpp` (`_skython._probe_sink_cycles`, only when set), `plugin/src/PythonHost.cpp`, `plugin/CMakeLists.txt`, `livetest/scripts/livetest_smoke/__init__.py` (`probe_sink_cycles` command). Uses (does not create) `plugin/config/variants/trace-timing.ini` from Task 38
 - Part 2 (only on PASS): Modify `core/include/spy/events.h`, `core/src/events.cpp`, `core/tests/test_events.cpp` (`EventHubOptions::on_wanted`); `plugin/src/Events.h`, `plugin/src/Events.cpp`, `plugin/src/EventSinks.cpp`, `plugin/src/EventSinksWorld.cpp` (sinks attach on demand)
 - Part 3 (always): Create `livetest/test_m2_sink_detach.py`; Modify `spikes/RESULTS.md`, `docs/superpowers/plans/2026-10-02-skython-m1_5-m2/API-VERIFICATION.md`
 
 **Interfaces:**
-- Consumes: Task 39/40 sinks (`EventSinks.cpp`: `RegisterBatch1`; `EventSinksWorld.cpp`: `RegisterWorldSinks`; their static sink objects), `events::Hub()`, `EventHub::Wants`; Task 34 `EventHubOptions{epoch, loading}`, the hub's per-event atomic subscriber count; Task 33 `Config::trace_timing`; Task 35 `ModuleHost` (named fields); Task 40 `livetest/support.py` `PLAYER`, the `activate` event; v1 `ops::InTask`, `ops::Measured`, the smoke command loop and `smoke.command`, `support.log_text`.
+- Consumes: Task 39/40 sinks (`EventSinks.cpp`: `RegisterBatch1`; `EventSinksWorld.cpp`: `RegisterWorldSinks`; their static sink objects), `events::Hub()`, `EventHub::Wants`; Task 34 `EventHubOptions{epoch, loading}`, the hub's per-event atomic subscriber count; Task 33 `Config::trace_timing`; Task 38 `plugin/config/variants/trace-timing.ini`; Task 35 `ModuleHost` (named fields); Task 40 `livetest/support.py` `PLAYER`, the `activate` event; v1 `ops::InTask`, `ops::Measured`, the smoke command loop and `smoke.command`, `support.log_text`.
 - Produces: `_skython._probe_sink_cycles(n: int) -> str` (game build only, defined only when `trace_timing` is on; JSON `{cycles, registered, delivered, errors}`; `n > 0`: n register/unregister cycles, each step inside its own SKSE task, then the spare sink is left registered with its counter reset; `n == 0`: reports `delivered` since then and unregisters it); the smoke command `probe_sink_cycles`; on PASS: `EventHubOptions::on_wanted` (`std::function<void(std::string_view event, bool wanted)>`, called outside the hub's lock on a per-event subscriber count change 0→1 or 1→0), `spy::events::OnWanted(std::string_view, bool)`, log lines `events: sinks attach on demand`, `events: sink attached <sink>`, `events: sink detached <sink>`; the RESULTS verdict.
 
 Rules:
@@ -131,7 +133,7 @@ Verify `RemoveEventSink` at the pin (`grep -n "inline void RemoveEventSink" plug
 
 - [ ] **Step 2: Expose it to Python (dev only) and add the smoke command**
 
-`pyglue/include/spy/pymodule.h`, last member of `ModuleHost`:
+`pyglue/include/spy/pymodule.h`, last member of `ModuleHost` (with a default, so every existing initializer stays valid: `PythonHost.cpp` and `fake_module.cpp` set `ModuleHost` fields by name, never positionally; the fake build leaves this one unset):
 ```cpp
     std::function<std::string(int n)> probe_sink_cycles;  // game build with trace_timing only (Task 44); unset = absent
 ```
@@ -156,7 +158,7 @@ In `livetest/scripts/livetest_smoke/__init__.py`, in `_handle` before the final 
             return {"error": "_skython._probe_sink_cycles is absent: deploy plugin/config/variants/trace-timing.ini"}
         return json.loads(probe(int(cmd["n"])))
 ```
-The variant ini: `test -f plugin/config/variants/trace-timing.ini || sed 's/^trace_timing = false$/trace_timing = true/' plugin/config/Skython.dev.ini > plugin/config/variants/trace-timing.ini`, then `grep -c '^trace_timing = true$' plugin/config/variants/trace-timing.ini` → `1`.
+The variant ini is Task 38's (never recreated here): `grep -c '^trace_timing = true$' plugin/config/variants/trace-timing.ini` → `1` (absent → STOP: Task 38 is not done).
 
 - [ ] **Step 3: The live test file (both modes)**
 
@@ -317,7 +319,7 @@ TEST_CASE("event hub: on_wanted reports 0->1 and 1->0 per event, outside the loc
 ```
 Run `cmake --build core/build -j && ./core/build/spy_core_tests -tc="event hub: on_wanted*"` → FAIL (no third member in `EventHubOptions`).
 
-Then in `core/include/spy/events.h` add, as the **last** member of `EventHubOptions`:
+Then in `core/include/spy/events.h` add, as the **optional last** member of `EventHubOptions` (index Contracts: existing aggregate initializers `{epoch, loading}` stay valid; an empty `on_wanted` is never called):
 ```cpp
     std::function<void(std::string_view event, bool wanted)> on_wanted;  // Task 44: subscriber count 0->1 (true) / 1->0 (false); optional
 ```
@@ -441,7 +443,7 @@ git commit -m "feat(plugin): attach event sinks only while something is subscrib
 Append to `spikes/RESULTS.md`: `**Task 44, sink register/unregister probe (box, Windows-native, <date/time>, Skyrim 1.6.1170.0, s4test, never saved; <n> launches; SKSE plugins: <list>):** PASS|FAIL` with the probe JSON and the `probe:` log lines verbatim, the activations raised during the cycles, the after-register count (spare sink vs hub, must both be 20), the exit result, and the decision: "sinks attach on demand (Part 2 in), first-event window at most one frame after `events.subscribe` answers" or "probe FAIL: sinks stay registered and skip when nothing is subscribed (skip-only, the Task 39 behaviour); not adopted". Then:
 ```bash
 git add plugin/src/SinkProbe.h plugin/src/SinkProbe.cpp pyglue/include/spy/pymodule.h pyglue/src/pymodule.cpp \
-  plugin/src/PythonHost.cpp plugin/CMakeLists.txt plugin/config/variants/trace-timing.ini \
+  plugin/src/PythonHost.cpp plugin/CMakeLists.txt \
   livetest/scripts/livetest_smoke/__init__.py livetest/test_m2_sink_detach.py spikes/RESULTS.md \
   docs/superpowers/plans/2026-10-02-skython-m1_5-m2/API-VERIFICATION.md
 git commit -m "test(live): sink register/unregister probe and its verdict"

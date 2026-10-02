@@ -2,31 +2,33 @@
 
 > Part of the [Skython M1.5/M2 plan](README.md). Before starting, read the plan index's **Global Constraints**, **Review Focus**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.6 and 4.7). Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Depends on:** Task 35 (the real Linux `_skython` with `open_consumer`, `close_consumer`, `next_events`, `submit`/`call` with a consumer, `_fake_push_event`, fake `game.save`/`game.load`) and Task 33 (the generated names below). Linux only: no game, no Gate 0, no ESP.
+> **Depends on:** Task 35 (the real Linux `_skython` with `open_consumer`, `close_consumer`, `next_events`, `submit`/`call` with a consumer, `_fake_push_event`, fake `game.save`/`game.load`), Task 36a (the same API in the Python fake `fake_skython.py`, with `FakeHub` and the test-only counters) and Task 33 (the generated names below). Linux only: no game, no Gate 0, no ESP.
 
-**What this task builds.** The Python side of events for a `Game` in either mode. `skython/events.py` holds the `Event` value, the `EventStream` protocol and its in-process implementation over one `_skython` consumer, `Subscription`, and `EventDispatcher`: one daemon thread per `Game`, named `skython-events`, that pulls event objects from the `Game`'s stream and runs each subscription's callback in event order. `Game` gains `on(...)` and six helpers, `wait_for`, `save` and `load`. `fake_skython.py` gains a Python copy of core's `EventHub` (Task 34) so every test runs against the fake; `tests/test_events.py` runs each behaviour test against the fake **and** against the real Linux `_skython` when `SKYTHON_REAL_MODULE_DIR` names its build folder, so the fake cannot drift from the C++ hub. Task 37 adds the remote stream and reuses `EventDispatcher` unchanged.
+**What this task builds.** The Python side of events for a `Game` in either mode. `skython/events.py` holds the `Event` value, the `EventStream` protocol and its in-process implementation over one `_skython` consumer, `Subscription`, and `EventDispatcher`: one daemon thread per `Game`, named `skython-events`, that pulls event objects from the `Game`'s stream and runs each subscription's callback in event order. `Game` gains `on(...)` and six helpers, `wait_for`, `save` and `load`, and `Game` callers for the four new ops replace Task 33's `PENDING_OPS` in `test_game.py`. `tests/test_events.py` runs each behaviour test against Task 36a's fake **and** against the real Linux `_skython` when `SKYTHON_REAL_MODULE_DIR` names its build folder. The `EventStream` protocol carries `track(sub, max_queue)` / `untrack(sub)`: the dispatcher tells the stream each subscription's bound and when it ends; the in-process stream ignores both (the hub bounds each subscription), Task 37's remote stream uses them for its client-side bounded queues. Task 37 adds the remote stream and reuses `EventDispatcher` unchanged.
 
 **The two locking rules that carry Review Focus 4 and the "no lost first event" rule** (index Contracts, `events.py`):
-1. `Game.on()` holds the dispatcher's `threading.RLock` across the `events.subscribe` request **and** the `sub -> Subscription` registration. The dispatch thread takes the same lock before it looks up each event's `sub`. An event that the hub queued between its `Subscribe` and our registration therefore waits for the lock instead of being dropped as "unknown sub". No deadlock: the subscribe response arrives synchronously (in-process) or on the reader thread (remote), never on the dispatch thread; and it is an `RLock`, so `on()` from inside a callback works.
-2. A callback runs **without** the lock. `Subscription.close()` sets `closed` under the lock (so no later callback of it starts: the dispatch thread checks `closed` under the same lock right before it calls), sends `events.unsubscribe`, then, unless it runs on the dispatch thread itself, waits on a `Condition` over the same lock until that subscription's running callback (if any) has returned. From inside its own callback it returns at once.
+1. `Game.on()` holds the dispatcher's `threading.RLock` across the `events.subscribe` request, `stream.track(sub, max_queue)` **and** the `sub -> Subscription` registration. The dispatch thread takes the same lock before it looks up each event's `sub`. An event that the hub queued between its `Subscribe` and our registration therefore waits for the lock instead of being dropped as "unknown sub". No deadlock: the subscribe response arrives synchronously (in-process) or on the reader thread (remote), never on the dispatch thread; and it is an `RLock`, so `on()` from inside a callback works.
+2. A callback runs **without** the lock. `Subscription.close()` sets `closed` under the lock (so no later callback of it starts: the dispatch thread checks `closed` under the same lock right before it calls) and calls `stream.untrack(sub)`, sends `events.unsubscribe`, then, unless it runs on the dispatch thread itself, waits on a `Condition` over the same lock until that subscription's running callback (if any) has returned. From inside its own callback it returns at once.
 
 **Files:**
 - Create: `python/src/skython/events.py`, `python/tests/test_events.py`
 - Modify: `python/src/skython/game.py` (Transport gains `events()`; `Game.on`, helpers, `wait_for`, `save`, `load`, `close`), `python/src/skython/inprocess.py` (`InProcessTransport.events()`, consumer passed to `_skython.call`, `close()` closes the stream), `python/src/skython/errors.py` (`WaitTimeout`), `python/src/skython/__init__.py` (exports `Event`, `Subscription`)
-- Modify: `python/tests/fake_skython.py` (appended: `FakeHub`, consumers, `next_events`, `_fake_push_event`, `game.save`/`game.load`; `submit`/`call` take a consumer; never recreated), `python/tests/test_host.py` (one test: `reload` drops the old script's subscriptions), `python/tests/test_fixtures.py` (Task 33's `test_the_fake_accepts_valid_requests_of_the_new_ops` passes a consumer for the `events.*` requests: without one they are now `bad_request` "no event consumer", as in core)
+- Modify: `python/tests/test_host.py` (one test: `reload` drops the old script's subscriptions), `python/tests/test_game.py` (`CALLERS` gains the four new ops; Task 33's `PENDING_OPS` set and its two uses are deleted)
+- Not changed here: `python/tests/fake_skython.py` and `python/tests/test_fixtures.py` (Task 36a)
 - Unchanged: `python/src/skython/_host.py`. `reload()` already closes a script's previous `Game`; with this task `Game.close()` closes that `Game`'s subscriptions, stream and dispatch thread, so the index's "`_host` drops a script's subscriptions" needs no host code, only the test below.
 
 **Interfaces:**
 - Consumes:
+  - Task 36a `python/tests/fake_skython.py`: `FakeSkython` with `hub`, `saves`, `submit(request, consumer=0)`, `call(request, timeout, consumer=0)`, `open_consumer()`, `close_consumer(consumer)`, `next_events(consumer, timeout)`, `_fake_push_event(event, data_json)`, the fake `game.save`/`game.load`, test-only `consumers()` and `subscriptions(consumer=None)`.
   - Task 35 `_skython` (index Contracts): `open_consumer() -> int`, `close_consumer(consumer) -> None` (idempotent, wakes a waiting `next_events`), `next_events(consumer, timeout) -> str` (JSON list of event objects `{"type":"event","event","sub","seq","epoch","data"[,"dropped"][,"suppressed"]}`, `"[]"` on timeout, `"[]"` at once for an unknown or closed consumer, GIL released), `call(request, timeout, consumer=0) -> str`, `submit(request, consumer=0) -> int`, fake only `_fake_push_event(event, data_json)`, `_fake_set_not_ready("loading")` also drives the hub's loading rule, the hub's epoch is the fake backend's epoch; `game.save {name}` / `game.load {save}` on the fake backend.
   - Task 33 generated (`skython._protocol_generated`): `EVENTS` (name -> `{fields, filter_fields, filter_required_any_of, deliver_while_loading}`), `DEFAULT_EVENT_QUEUE` (1024), `MAX_EVENT_QUEUE` (65536), `MAX_FILTER_VALUES` (128), `MAX_EVENTS_PER_NEXT` (256), `SAVE_NAME_PATTERN` (`^[A-Za-z0-9_]{1,64}$`), and by the generator's existing patterns `MAX_SUBSCRIPTIONS` (1024, every `limits` entry is emitted) and `OP_EVENTS_SUBSCRIBE`, `OP_EVENTS_UNSUBSCRIBE`, `OP_GAME_SAVE`, `OP_GAME_LOAD` (every op is emitted as `OP_<NAME>`). If one of these names is missing, STOP and report it (Global Constraints: one owner for `protocol.json`).
   - v1: `Game._request`, `_timeout_ms`, `_positive_seconds`, `_expect_dict` (`game.py`), `values.to_wire` / `from_wire`, `errors.*`, `tests/support.wait_until`, the `fake` fixture, `test_host.py`'s `host` fixture and `script()` helper.
 - Produces (index Contracts, `skython` package):
-  - `skython.events`: `Event` (frozen dataclass `name, sub, seq, epoch, data, dropped=0, suppressed=0`; `Event.from_wire(raw) -> Event`, `data` values decoded with `from_wire`, a malformed object is `ProtocolViolation`); `EventStream` (Protocol: `consumer: int | None`, `next(timeout) -> list[dict]`, `close()`); `InProcessEventStream(module)`; `Subscription` (`sub`, `event`, `filter`, `closed`, `close()`, context manager); `EventDispatcher(stream, game)` (`lock`, `subscribe(send, event, filter, fn) -> Subscription`, `start()`, `close()`). Task 37 reuses `EventDispatcher` and the `EventStream` protocol as they are.
+  - `skython.events`: `Event` (frozen dataclass `name, sub, seq, epoch, data, dropped=0, suppressed=0`; `Event.from_wire(raw) -> Event`, `data` values decoded with `from_wire`, a malformed object is `ProtocolViolation`); `EventStream` (Protocol: `consumer: int | None`, `next(timeout) -> list[dict]`, `close()`, `track(sub, max_queue)`, `untrack(sub)`); `InProcessEventStream(module)` (`track`/`untrack` are no-ops); `Subscription` (`sub`, `event`, `filter`, `closed`, `close()`, context manager); `EventDispatcher(stream, game)` (`lock`, `subscribe(send, event, filter, fn, max_queue) -> Subscription` (calls `stream.track(sub, result["max_queue"])` under the lock before registering), `start()`, `close()`). Task 37 reuses `EventDispatcher` and the `EventStream` protocol as they are.
   - `skython.game.Transport` gains `events() -> EventStream` (one per transport, made on first use). `Game.on(event, filter, fn, *, max_queue=DEFAULT_EVENT_QUEUE) -> Subscription`; `on_death(actor, fn)`, `on_dying(actor, fn)`, `on_mod_event(name, fn)`, `on_channel(channel, fn)`, `on_quest_stage(quest, fn, *, stage=None)`, `on_game_loaded(fn)`; `wait_for(predicate, timeout, *, interval=0.25)`; `save(name, *, timeout=60.0) -> str`; `load(name, *, timeout=120.0, wait=True) -> dict`; `close()` closes every subscription, joins the dispatch thread (at most 2 s, never from the dispatch thread itself) and closes the stream. A transport without `events()` makes `on()` raise `Unsupported`.
   - `skython.inprocess.InProcessTransport.events() -> InProcessEventStream`; `request()` passes the stream's consumer to `_skython.call` (as a third argument only when a stream exists, so v1 stubs with `call(text, timeout)` keep working).
   - `skython.errors.WaitTimeout(SkythonError)`.
-  - `python/tests/fake_skython.py`: `FakeHub(epoch, loading)` (the hub; fields `dropped_total`, `suppressed_total`), and on `FakeSkython`: `hub`, `saves` (set of names), `submit(request, consumer=0)`, `call(request, timeout, consumer=0)`, `open_consumer()`, `close_consumer(consumer)`, `next_events(consumer, timeout)`, `_fake_push_event(event, data_json)`, test-only `consumers() -> int` and `subscriptions(consumer=None) -> int` (the real `_skython` has no counters; Task 37's disconnect test uses these). `close()` also closes every consumer.
+  - `Game` callers for `events.subscribe`, `events.unsubscribe`, `game.save`, `game.load` in `python/tests/test_game.py` (`set(CALLERS) == set(g.OPS)` again); `Game.load(..., wait=False)` sends no `game.state` first.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -203,7 +205,7 @@ def test_a_slow_callback_drops_only_its_own_events(game, module):
             started.set()
             time.sleep(2.0)
 
-    game.on_channel("slow", slow, max_queue=4)
+    game.on("channel", {"channel": ["slow"]}, slow, max_queue=4)  # on_channel has no max_queue (Contracts)
     game.on_channel("fast", fast_seen.append)
     with connect_in_process(module=module) as other:
         other.on_channel("slow", other_seen.append)
@@ -425,7 +427,42 @@ def test_on_after_close_is_connection_lost(fake):
     gm.close()
     with pytest.raises(errors.ConnectionLost):
         gm.on_channel("x", lambda e: None)
+
+
+def test_the_dispatcher_tracks_and_untracks_each_subscription(fake_game):
+    # Task 37's remote stream bounds each subscription by these calls; in-process they are no-ops but still made.
+    stream = fake_game.transport.events()
+    calls = []
+    stream.track = lambda sub, max_queue: calls.append(("track", sub, max_queue))
+    stream.untrack = lambda sub: calls.append(("untrack", sub))
+    a = fake_game.on_channel("a", lambda e: None)
+    b = fake_game.on("channel", {"channel": ["b"]}, lambda e: None, max_queue=16)
+    a.close()
+    a.close()  # idempotent: no second untrack
+    assert calls == [("track", a.sub, g.DEFAULT_EVENT_QUEUE), ("track", b.sub, 16), ("untrack", a.sub)]
 ```
+
+Edit `python/tests/test_game.py` (Task 33 left the four new ops out of the replay with `PENDING_OPS`). Add `from skython.events import Subscription` to the imports and these helpers above `CALLERS`:
+```python
+def _subscribe(game, a):
+    flt = {f: [from_wire(v) for v in vals] for f, vals in a["filter"].items()} if a.get("filter") is not None else None
+    return game.on(a["event"], flt, lambda e: None, **({"max_queue": a["max_queue"]} if "max_queue" in a else {}))
+
+
+def _unsubscribe(game, a):
+    # events.unsubscribe has no Game method of its own: it is Subscription.close(). The sub in the fixture is not one
+    # this Game made, so the hub answers not_found, which close() ignores; the replay checks only what was sent.
+    d = game._event_dispatcher()
+    d.close_subscription(Subscription(d, a["sub"], "death", None, lambda e: None))
+```
+add four entries to `CALLERS`:
+```python
+    "events.subscribe": _subscribe,
+    "events.unsubscribe": _unsubscribe,
+    "game.save": lambda game, a: game.save(a["name"], timeout=a["timeout_ms"] / 1000),
+    "game.load": lambda game, a: game.load(a["save"], timeout=a["timeout_ms"] / 1000, wait=False),
+```
+then delete the `PENDING_OPS` set and its comment, restore the replay's parametrisation to `@pytest.mark.parametrize("fx", REQUESTS["valid"], ids=lambda r: f"{r['id']}-{r['op']}")`, and restore the first assertion of `test_the_game_speaks_exactly_the_ops_in_the_table` to `assert set(CALLERS) == set(g.OPS)`. (The two `events.*` replays are answered by the fake's hub, not `replay_handler`; `game.save`/`game.load` reach `replay_handler`, whose `{}` result both methods accept.)
 
 Append to `python/tests/test_host.py`:
 ```python
@@ -451,8 +488,8 @@ def test_reload_drops_the_old_scripts_subscriptions(host, fake, tmp_path):
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `cd python && uv run --managed-python --python 3.12 pytest -q tests/test_events.py tests/test_host.py::test_reload_drops_the_old_scripts_subscriptions 2>&1 | tail -3`
-Expected: collection error `ModuleNotFoundError: No module named 'skython.events'`.
+Run: `cd python && uv run --managed-python --python 3.12 pytest -q tests/test_events.py tests/test_host.py::test_reload_drops_the_old_scripts_subscriptions tests/test_game.py 2>&1 | tail -3`
+Expected: collection errors `ModuleNotFoundError: No module named 'skython.events'` (`test_events.py`, and `test_game.py` through its new import).
 
 - [ ] **Step 3: `skython/events.py` and `WaitTimeout`**
 
@@ -467,10 +504,15 @@ One daemon thread per Game, "skython-events", runs every callback of that Game i
 is logged (logger skython.events, with the traceback) and the thread goes on. A slow callback holds back only this
 Game's later callbacks; its own queue overflows and the drops are reported, nothing else waits.
 
-Locking: Game.on() holds EventDispatcher.lock (an RLock) across the subscribe request and the registration, and the
-dispatch thread takes it before looking up each event's subscription, so no first event is lost. Callbacks run
-without the lock. Subscription.close() marks the subscription closed under the lock (no later callback of it starts),
-unsubscribes, and waits for a callback of it that is running, unless it is called from that callback's own thread."""
+Locking: Game.on() holds EventDispatcher.lock (an RLock) across the subscribe request, stream.track() and the
+registration, and the dispatch thread takes it before looking up each event's subscription, so no first event is
+lost. Callbacks run without the lock. Subscription.close() marks the subscription closed under the lock (no later
+callback of it starts), calls stream.untrack(), unsubscribes, and waits for a callback of it that is running, unless
+it is called from that callback's own thread.
+
+Bounds: the plugin's hub bounds each subscription in-process. Remotely the bridge drains the hub continuously, so the
+remote stream keeps its own bounded queue per subscription (skython.remote.RemoteEventStream); stream.track(sub,
+max_queue) tells it each bound, stream.untrack(sub) that the subscription ended."""
 import json
 import logging
 import threading
@@ -517,13 +559,19 @@ class Event:
 
 class EventStream(Protocol):
     """Where a Game's events come from. next() returns up to MAX_EVENTS_PER_NEXT event objects, [] on timeout and []
-    at once once closed. consumer is the _skython consumer in-process, None remotely (the bridge owns it)."""
+    at once once closed. consumer is the _skython consumer in-process, None remotely (the bridge owns it). track()
+    gives a subscription's max_queue (called under the dispatcher's lock, before the subscription is registered);
+    untrack() says it ended."""
 
     consumer: int | None
 
     def next(self, timeout: float) -> list[dict]: ...
 
     def close(self) -> None: ...
+
+    def track(self, sub: int, max_queue: int) -> None: ...
+
+    def untrack(self, sub: int) -> None: ...
 
 
 class InProcessEventStream:
@@ -553,6 +601,12 @@ class InProcessEventStream:
                 return
             self._closed = True
         self._m.close_consumer(self.consumer)  # drops its subscriptions and queued events, wakes a waiting next
+
+    def track(self, sub: int, max_queue: int) -> None:
+        pass  # the hub bounds each subscription in-process
+
+    def untrack(self, sub: int) -> None:
+        pass
 
 
 class Subscription:
@@ -593,14 +647,18 @@ class EventDispatcher:
         self._stop = threading.Event()
 
     # -- subscriptions ----------------------------------------------------------------------------------
-    def subscribe(self, send: Callable[[], dict], event: str, filter: dict | None, fn: Callable) -> Subscription:
-        """send() makes the events.subscribe request and returns its result. Request and registration happen under
-        self.lock, so an event the hub queues in between waits for the registration instead of being dropped."""
+    def subscribe(self, send: Callable[[], dict], event: str, filter: dict | None, fn: Callable,
+                  max_queue: int) -> Subscription:
+        """send() makes the events.subscribe request and returns its result. Request, stream.track() and registration
+        happen under self.lock, so an event the hub queues in between waits for the registration instead of being
+        dropped. The result's max_queue (what the hub granted) wins over the requested one."""
         with self.lock:
             result = send()
             sub_id = result.get("sub")
             if type(sub_id) is not int:
                 raise errors.ProtocolViolation(f"events.subscribe result has no integer sub: {result!r}")
+            granted = result.get("max_queue", max_queue)
+            self.stream.track(sub_id, granted if type(granted) is int else max_queue)
             sub = Subscription(self, sub_id, event, filter, fn)
             self._subs[sub_id] = sub
         self.start()
@@ -612,6 +670,7 @@ class EventDispatcher:
                 return
             sub.closed = True  # checked under this lock right before each callback: no later callback starts
             self._subs.pop(sub.sub, None)
+            self.stream.untrack(sub.sub)  # remotely: its queued frames go, later ones are ignored
         try:
             self._game._request(_g.OP_EVENTS_UNSUBSCRIBE, {"sub": sub.sub})
         except (errors.ConnectionLost, errors.NotFound):
@@ -741,7 +800,7 @@ Replace `Game.close` with the block below, and insert the event methods before i
                               for field, vals in filter.items()}
         d = self._event_dispatcher()
         return d.subscribe(lambda: _expect_dict(self._request(_g.OP_EVENTS_SUBSCRIBE, args), "events.subscribe result"),
-                           event, filter, fn)
+                           event, filter, fn, max_queue)
 
     def on_death(self, actor: Form | None, fn) -> Subscription:
         return self.on("death", None if actor is None else {"victim": [actor]}, fn)
@@ -794,7 +853,7 @@ Replace `Game.close` with the block below, and insert the event methods before i
         reason "load timed out" (plus the last state) if that takes longer than `timeout`. Every call in flight when
         the load starts ends NotReady (spec 4.5); subscriptions stay."""
         deadline = time.monotonic() + _positive_seconds(timeout, "timeout")
-        before = self.state().get("epoch", 0)
+        before = self.state().get("epoch", 0) if wait else 0  # without wait, game.load is the only request sent
         started = _expect_dict(self._request(_g.OP_GAME_LOAD, {"save": name, "timeout_ms": _timeout_ms(timeout)}, timeout),
                                "game.load result")
         if not wait:
@@ -853,300 +912,31 @@ In `request`, replace `resp = _object(self._m.call(text, wait_s), f"the response
             stream.close()
 ```
 
-- [ ] **Step 6: The fake hub in `fake_skython.py` (appended; the file is not recreated)**
+- [ ] **Step 6: Run the new tests**
 
-Add `import collections` and `import string` to the imports (`re` is there since Task 33). Append to the module docstring:
-```
-Events (Task 36): `hub` is a FakeHub, a Python copy of core's EventHub (Task 34). events.subscribe and
-events.unsubscribe are answered at submit time through the hub, with the consumer passed beside the request text
-(0 or a closed consumer -> bad_request "no event consumer"); open_consumer, close_consumer, next_events and
-_fake_push_event are the Task 35 module API; consumers() and subscriptions() are test-only counters. game.save and
-game.load follow FakeBackend (Task 35): save names are kept in `saves`; a load bumps the loads counter.
-```
-Append after `class _Entry` (before `def _response`):
-```python
-_ASCII_LOWER = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)  # the hub folds ASCII case only
-_EVENT_OPS = (_g.OP_EVENTS_SUBSCRIBE, _g.OP_EVENTS_UNSUBSCRIBE)
-
-
-def _filter_key(value):
-    """What an event field or a filter item is compared by: forms by form_id, ints, strings ASCII-case-folded."""
-    if isinstance(value, dict):
-        return ("form", value.get("form_id")) if value.get("kind") == "form" else None
-    if type(value) is int:
-        return ("int", value)
-    if isinstance(value, str):
-        return ("str", value.translate(_ASCII_LOWER))
-    return None
-
-
-def _bad(message: str) -> FakeRemoteError:
-    return FakeRemoteError(_g.CODE_BAD_REQUEST, message)
-
-
-def _parse_filter(event: str, spec: dict, flt) -> dict:
-    """core's parse_event_filter: field -> set of keys; {} matches everything."""
-    required = list(spec["filter_required_any_of"])
-    if flt is None:
-        if required:
-            raise _bad(f"{event} needs a filter on {' or '.join(required)}")
-        return {}
-    if not isinstance(flt, dict):
-        raise _bad("filter must be an object")
-    out = {}
-    for name, values in flt.items():
-        if name not in spec["filter_fields"]:
-            raise _bad(f"{event} cannot be filtered on {name!r}")
-        if not isinstance(values, list) or not values:
-            raise _bad(f"filter field {name!r} needs a non-empty array")
-        if len(values) > _g.MAX_FILTER_VALUES:
-            raise _bad(f"filter field {name!r} has more than {_g.MAX_FILTER_VALUES} values")
-        keys = set()
-        for v in values:
-            if isinstance(v, dict) and (v.get("kind") != "form" or type(v.get("form_id")) is not int):
-                raise _bad("a form in a filter needs form_id: resolve the form first")
-            key = _filter_key(v)
-            if key is None:
-                raise _bad(f"filter field {name!r} holds {v!r}")
-            keys.add(key)
-        out[name] = keys
-    if required and not any(f in out for f in required):
-        raise _bad(f"{event} needs a filter on {' or '.join(required)}")
-    return out
-
-
-class _FakeSub:
-    def __init__(self, sub: int, consumer: int, event: str, flt: dict, max_queue: int):
-        self.sub, self.consumer, self.event, self.filter, self.max_queue = sub, consumer, event, flt, max_queue
-        self.queue: collections.deque = collections.deque()  # (push number, event object)
-        self.seq = 0
-        self.dropped = 0     # since the previous delivered event
-        self.suppressed = 0  # since the previous delivered event
-
-
-class FakeHub:
-    """core's EventHub (Task 34) in Python: consumers, a bounded drop-oldest queue per subscription, seq from 1 per
-    subscription (gaps equal drops), the epoch stamp, equality-set filters, and the loading rule (an event whose
-    table entry has deliver_while_loading false is not queued while loading() is true; it counts as suppressed)."""
-
-    def __init__(self, epoch, loading):
-        self._epoch, self._loading = epoch, loading  # callables
-        self._cond = threading.Condition()
-        self._consumers: set[int] = set()
-        self._subs: dict[int, _FakeSub] = {}
-        self._consumer_ids = itertools.count(1)
-        self._sub_ids = itertools.count(1)
-        self._pushes = itertools.count(1)
-        self.dropped_total = 0
-        self.suppressed_total = 0
-
-    def open_consumer(self) -> int:
-        with self._cond:
-            c = next(self._consumer_ids)
-            self._consumers.add(c)
-            return c
-
-    def close_consumer(self, consumer: int) -> None:
-        with self._cond:
-            self._consumers.discard(consumer)
-            for sid in [s.sub for s in self._subs.values() if s.consumer == consumer]:
-                del self._subs[sid]
-            self._cond.notify_all()
-
-    def close_all(self) -> None:
-        with self._cond:
-            self._consumers.clear()
-            self._subs.clear()
-            self._cond.notify_all()
-
-    def subscribe(self, consumer: int, args: dict) -> dict:
-        event = args.get("event")
-        spec = _g.EVENTS.get(event) if isinstance(event, str) else None
-        if spec is None:
-            raise _bad(f"unknown event {event!r}")
-        max_queue = args.get("max_queue", _g.DEFAULT_EVENT_QUEUE)
-        if type(max_queue) is not int or not 1 <= max_queue <= _g.MAX_EVENT_QUEUE:
-            raise _bad(f"max_queue must be an integer from 1 to {_g.MAX_EVENT_QUEUE}")
-        flt = _parse_filter(event, spec, args.get("filter"))
-        with self._cond:
-            if consumer not in self._consumers:
-                raise _bad("no event consumer")
-            if len(self._subs) >= _g.MAX_SUBSCRIPTIONS:
-                raise FakeRemoteError(_g.CODE_BUSY, f"{_g.MAX_SUBSCRIPTIONS} subscriptions already exist")
-            sid = next(self._sub_ids)
-            self._subs[sid] = _FakeSub(sid, consumer, event, flt, max_queue)
-        return {"sub": sid, "event": event, "max_queue": max_queue}
-
-    def unsubscribe(self, consumer: int, args: dict) -> None:
-        sid = args.get("sub")
-        with self._cond:
-            if consumer not in self._consumers:
-                raise _bad("no event consumer")
-            s = self._subs.get(sid) if type(sid) is int else None
-            if s is None or s.consumer != consumer:
-                raise FakeRemoteError(_g.CODE_NOT_FOUND, f"no subscription {sid!r} on this consumer")
-            del self._subs[sid]
-            self._cond.notify_all()
-
-    def push(self, event: str, data: dict) -> None:
-        spec = _g.EVENTS.get(event)
-        held = spec is not None and not spec["deliver_while_loading"] and self._loading()  # read once, outside the lock
-        epoch = self._epoch()
-        with self._cond:
-            n = next(self._pushes)
-            for s in self._subs.values():
-                if s.event != event or not all(_filter_key(data.get(f)) in keys for f, keys in s.filter.items()):
-                    continue
-                if held:
-                    s.suppressed += 1
-                    self.suppressed_total += 1
-                    continue
-                s.seq += 1
-                if len(s.queue) >= s.max_queue:
-                    s.queue.popleft()
-                    s.dropped += 1
-                    self.dropped_total += 1
-                s.queue.append((n, {"type": "event", "event": event, "sub": s.sub, "seq": s.seq, "epoch": epoch,
-                                    "data": data}))
-            self._cond.notify_all()
-
-    def next(self, consumer: int, timeout: float, max_events: int = _g.MAX_EVENTS_PER_NEXT) -> list[dict]:
-        """Events in push order across the consumer's subscriptions; [] on timeout, [] at once for an unknown consumer."""
-        deadline = time.monotonic() + max(0.0, timeout)
-        with self._cond:
-            while True:
-                if consumer not in self._consumers:
-                    return []
-                mine = [s for s in self._subs.values() if s.consumer == consumer and s.queue]
-                if mine:
-                    break
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return []
-                self._cond.wait(remaining)
-            out = []
-            while len(out) < max_events:
-                s = min((s for s in mine if s.queue), key=lambda s: s.queue[0][0], default=None)
-                if s is None:
-                    break
-                ev = dict(s.queue.popleft()[1])
-                if s.dropped:
-                    ev["dropped"], s.dropped = s.dropped, 0
-                if s.suppressed:
-                    ev["suppressed"], s.suppressed = s.suppressed, 0
-                out.append(ev)
-            return out
-
-    def consumers(self) -> int:
-        with self._cond:
-            return len(self._consumers)
-
-    def subscriptions(self, consumer: int | None = None) -> int:
-        with self._cond:
-            return sum(1 for s in self._subs.values() if consumer is None or s.consumer == consumer)
-```
-
-In `fake_handler`, before the final `raise FakeRemoteError(_g.CODE_UNSUPPORTED, ...)`:
-```python
-    if op == _g.OP_GAME_SAVE:  # FakeBackend (Task 35): never overwrites
-        with fake._cond:
-            if args["name"] in fake.saves:
-                raise FakeRemoteError(_g.CODE_BAD_REQUEST, f"a save named {args['name']} exists", {"reason": "save_exists"})
-            fake.saves.add(args["name"])
-        return {"name": args["name"]}
-    if op == _g.OP_GAME_LOAD:  # needs_game false, so the readiness check is the handler's own (index Contracts)
-        reason = fake._not_ready
-        if reason in ("starting", "loading"):
-            raise FakeRemoteError(_g.CODE_NOT_READY, f"not ready: {reason}", {"reason": reason})
-        if args["save"] not in fake.saves:
-            raise FakeRemoteError(_g.CODE_NOT_FOUND, f"no save named {args['save']}")
-        fake._fake_bump_loads()
-        return {"save": args["save"], "started": True}
-```
-
-In `FakeSkython.__init__`, after `self._cond = threading.Condition()`:
-```python
-        self.saves: set[str] = set()
-        self.hub = FakeHub(lambda: self.epoch, lambda: self._not_ready == "loading")
-```
-
-Change `submit`'s signature to `def submit(self, request: str, consumer: int = 0) -> int:` and insert, right after `op, args = obj["op"], obj["args"]`:
-```python
-            if op in _EVENT_OPS:  # answered by the hub at once: no backend call, no deadline (Task 35's Dispatcher)
-                self._finish_now(ticket, req_id, self._hub_answer(op, args, consumer, req_id))
-                return ticket
-```
-Change `call`'s signature to `def call(self, request: str, timeout: float, consumer: int = 0) -> str:` and its first line to `ticket = self.submit(request, consumer)`. In `close()`, add `self.hub.close_all()` as the last line. (`_op_problem` already checks the 1.1 argument types, including save names, since Task 33; the handlers above rely on that.) Add these methods after `in_flight`:
-```python
-    # -- events (the Task 35 module API) ---------------------------------------------------------
-    def open_consumer(self) -> int:
-        return self.hub.open_consumer()
-
-    def close_consumer(self, consumer: int) -> None:
-        self.hub.close_consumer(consumer)
-
-    def next_events(self, consumer: int, timeout: float) -> str:
-        return json.dumps(self.hub.next(consumer, timeout), separators=(",", ":"), ensure_ascii=False)
-
-    def _fake_push_event(self, event: str, data_json: str) -> None:
-        self.hub.push(event, json.loads(data_json))
-
-    def consumers(self) -> int:
-        """Test-only (the real module has no counters): open consumers."""
-        return self.hub.consumers()
-
-    def subscriptions(self, consumer: int | None = None) -> int:
-        """Test-only: live subscriptions, of one consumer or of all."""
-        return self.hub.subscriptions(consumer)
-
-    def _hub_answer(self, op: str, args: dict, consumer: int, req_id: int) -> str:
-        try:
-            if op == _g.OP_EVENTS_SUBSCRIBE:
-                return _response(req_id, True, self.hub.subscribe(consumer, args))
-            self.hub.unsubscribe(consumer, args)
-            return _response(req_id, True, None)
-        except FakeRemoteError as e:
-            return _response(req_id, False, e.code, e.detail, e.message)
-```
-(`submit` calls `_hub_answer` with `self._cond` held; the hub takes only its own lock and never `self._cond`, so the lock order is always `_cond` then the hub's.)
-
-`python/tests/test_fixtures.py`: Task 33's fake test sent the `events.*` fixtures without a consumer; they now need one, as in core. Replace its body:
-```python
-@pytest.mark.parametrize("req", [r for r in REQUESTS["valid"] if r["op"] in NEW_OPS], ids=lambda r: r["op"])
-def test_the_fake_accepts_valid_requests_of_the_new_ops(fake, req):
-    consumer = fake.open_consumer()  # events.* travel with a consumer beside the text (Task 36); other ops ignore it
-    resp = json.loads(fake.call(json.dumps(req), 5.0, consumer))
-    assert resp["ok"] is True or resp["error"]["code"] != "bad_request", resp
-    noconsumer = json.loads(fake.call(json.dumps(req), 5.0))
-    if req["op"] in ("events.subscribe", "events.unsubscribe"):
-        assert noconsumer["error"]["code"] == "bad_request" and "no event consumer" in noconsumer["error"]["message"]
-```
-
-- [ ] **Step 7: Run the new tests**
-
-Run: `cd python && uv run --managed-python --python 3.12 pytest -q tests/test_events.py tests/test_host.py 2>&1 | tail -2`
-Expected: `NN passed, 12 skipped` where NN is the existing `test_host.py` count plus 17 (16 in `test_events.py`, 1 in `test_host.py`); the 12 skips are the `real` parameters (`SKYTHON_REAL_MODULE_DIR not set`). The run takes about 10 s (the slow-callback test sleeps 2 s; the 1000-iteration test takes about 2 s).
+Run: `cd python && uv run --managed-python --python 3.12 pytest -q tests/test_events.py tests/test_host.py tests/test_game.py 2>&1 | tail -2`
+Expected: `NN passed, 12 skipped` where NN is the existing `test_host.py` and `test_game.py` counts plus 22 (17 in `test_events.py`, 1 in `test_host.py`, 4 more fixture replays in `test_game.py` now that `PENDING_OPS` is gone); the 12 skips are the `real` parameters (`SKYTHON_REAL_MODULE_DIR not set`). The run takes about 10 s (the slow-callback test sleeps 2 s; the 1000-iteration test takes about 2 s).
 
 Against the real module (Task 35 built it; the real module is built for 3.14):
 Run: `cmake --build pyglue/build -j 2>&1 | tail -1 && cd python && SKYTHON_REAL_MODULE_DIR="$(cd ../pyglue/build && pwd)" uv run --managed-python --python 3.14 pytest -q tests/test_events.py tests/test_real_module.py 2>&1 | tail -2`
-Expected: `NN passed` with no skips: the 28 cases of `test_events.py` (12 behaviour tests on both backends, 4 fake-only) plus `test_real_module.py`'s. A case that passes on the fake and fails on the real module means the fake hub drifted from Task 34: fix the fake, never the assertion.
+Expected: `NN passed` with no skips: the 29 cases of `test_events.py` (12 behaviour tests on both backends, 5 fake-only) plus `test_real_module.py`'s. A case that passes on the fake and fails on the real module means Task 36a's fake drifted from core (its own `test_fake_hub.py` should have caught it): fix the fake, never the assertion.
 
-- [ ] **Step 8: Run the whole suite on both Pythons, then the races on one CPU**
+- [ ] **Step 7: Run the whole suite on both Pythons, then the races on one CPU**
 
 Run: `cd python && uv run --managed-python --python 3.12 pytest -q 2>&1 | tail -1 && uv run --managed-python --python 3.14 pytest -q 2>&1 | tail -1`
-Expected twice: Task 35's total plus 17 passed, plus Task 35's skips plus 12; no failures (the v1 tests that build `FakeSkython` or stub `call(text, timeout)` are unchanged by Steps 5-6).
+Expected twice: Task 36a's total plus 22 passed, plus Task 36a's skips plus 12; no failures (the v1 tests that stub `call(text, timeout)` are unchanged by Step 5: the consumer is passed only once a stream exists).
 
 Run: `cd python && for i in 1 2 3; do uv run --managed-python --python 3.14 pytest -q tests/test_events.py 2>&1 | tail -1; done; taskset -c 0 uv run --managed-python --python 3.12 pytest -q tests/test_events.py 2>&1 | tail -1`
-Expected: `16 passed, 12 skipped` four times. Every wait is `wait_until` or a fence with a deadline; the one negative wait (`closed.wait(0.3)`) only checks that `close()` is still blocked.
+Expected: `17 passed, 12 skipped` four times. Every wait is `wait_until` or a fence with a deadline; the one negative wait (`closed.wait(0.3)`) only checks that `close()` is still blocked.
 
 Run: `python3 tools/gen_protocol.py --check`
 Expected: the generated files are up to date (this task edits none of them).
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add python/src/skython/events.py python/src/skython/game.py python/src/skython/inprocess.py \
         python/src/skython/errors.py python/src/skython/__init__.py \
-        python/tests/fake_skython.py python/tests/test_events.py python/tests/test_host.py python/tests/test_fixtures.py
+        python/tests/test_events.py python/tests/test_host.py python/tests/test_game.py
 git commit -m "feat(python): event subscriptions with one dispatch thread per Game, wait_for, save and load"
 ```

@@ -8,7 +8,7 @@
 >
 > **STOP and ask the owner (do not improvise) if:** a name in Step 1 is missing (README: a missing protocol name is reported, never added here); Gate 0 is not open when Step 10 is reached; `RegisterFunction`'s signature at the pin differs from Step 7's comment; the game crashes or logs no `native: Skython.Send registered`; the 70000-byte payload arrives shorter than 65536 bytes with `truncated: false` (an engine string limit before our native: record it, do not change the test); the build box does not answer.
 
-**What S5 proved and what changes.** Spike S5 registered `SkyrimPython.Send` with `vm->RegisterFunction("Send"sv, "SkyrimPython"sv, NativeSend)` (`void(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString)`) from `SKSE::GetPapyrusInterface()->Register(...)`; Send ran on varying engine threads. The product native is the same shape under the class `Skython`, and instead of storing the strings it builds the `channel` event and pushes it into Task 39's hub. Two facts measured while writing this plan (Linux, 2026-10-02) that S5 did not need: **`ScriptName Skython Hidden` does not compile without the flags file** (`Unknown user flag Hidden`), so the script always passes `-f=TESV_Papyrus_Flags.flg` (it is in the game's `Data/Scripts.zip` at `Source/Scripts/`); and **the compiler exits 0 when a script fails, and a second `-i` replaces the first**, so the script judges success from the compiler's summary line and the `.pex`, and joins import dirs with `;`. A `.pex` also embeds its compile time and its source file's modification time, so raw SHA-256s change on every build; `--stable-hash` zeroes both.
+**What S5 proved and what changes.** Spike S5 registered `SkyrimPython.Send` with `vm->RegisterFunction("Send"sv, "SkyrimPython"sv, NativeSend)` (`void(RE::StaticFunctionTag*, RE::BSFixedString, RE::BSFixedString)`) from `SKSE::GetPapyrusInterface()->Register(...)`; Send ran on varying engine threads. The product native is the same shape under the class `Skython`, and instead of storing the strings it builds the `channel` event and pushes it into Task 39's hub. Two facts measured while writing this plan (Linux, 2026-10-02) that S5 did not need: **`ScriptName Skython Hidden` does not compile without the flags file** (`Unknown user flag Hidden`), so the script always passes `-f=TESV_Papyrus_Flags.flg` (it is in the game's `Data/Scripts.zip` at `Source/Scripts/`); and **the compiler exits 0 when a script fails, and a second `-i` replaces the first**, so the script judges success from the compiler's summary line and the `.pex`, and joins import dirs with `;`. A `.pex` also embeds its compile time and its source file's modification time (and the user and machine name), so raw SHA-256s change on every build and a `.pex` is never pinned by its raw SHA-256; `--stable-hash` zeroes both time fields, and the result is reproducible only on the same machine and account (README Global Constraints, "Papyrus compiler facts").
 
 **Files:**
 - Create: `core/include/spy/channel.h`, `core/src/channel.cpp`, `core/tests/test_channel.cpp` (the pure part of the native: event data and the UTF-8 cut; picked up by `core/CMakeLists.txt`'s globs)
@@ -363,7 +363,8 @@ Expected: `Batch compile of 1 files finished. 1 succeeded, 0 failed.`, `compiled
 - Compiler: SimpleSkyrim `Stock Game/Papyrus Compiler/PapyrusCompiler.exe` sha256 f441afa877ce0b315c6b613db7fe700a7bbc66b71a72fc4d0d8bc94577ceb0ce, run headless by `tools/papyrus_compile.sh` (GE-Proton10-14 `wine64`, prefix `compatdata/4190904831`, DISPLAY and WAYLAND_DISPLAY unset; spike S5).
 - Imports and flags: the game's `Data/Scripts.zip` sha256 45ff21e55be76f3bce86385770cba878ec8dacabb8df4cd3e86976fbdf3ebdc6, `Source/Scripts/*.psc` and `TESV_Papyrus_Flags.flg` extracted to `out/papyrus-import/vanilla` (gitignored; vanilla sources are never committed).
 - `.pex` hashes: "raw" is the committed file; "stable" is `tools/papyrus_compile.sh --stable-hash` (compile time and source modification time zeroed). A rebuild is checked against the stable hash; it holds for the same source file name, machine and user (`geoff` on this machine).
-  - `plugin/papyrus/compiled/Skython.pex` raw <the sha256sum printed above> stable 36082f6c01b9f9e125fe2a239e4a7d8afc787c7d2b3424182cecbdbcaad22341
+- pin plugin/papyrus/compiled/Skython.pex stable 36082f6c01b9f9e125fe2a239e4a7d8afc787c7d2b3424182cecbdbcaad22341
+  (informational only, never compared: the committed file's raw sha256 <the sha256sum printed above>)
 ```
 Then:
 ```bash
@@ -580,7 +581,7 @@ Expected: `5 skipped`; the commit lists `plugin/papyrus/compiled/Skython.pex`.
 
 - [ ] **Step 10: Gate 0 check**
 
-Task 45's RESULTS entry must record owner decision 7 as accepted. If not: report "Task 46 offline part committed; the live step waits for Gate 0" and STOP.
+Task 45's RESULTS entry must record owner decision 7 as accepted (README **Owner decisions** table: a STOP gate, never assumed). If not: report "Task 46 offline part committed; the live step waits for Gate 0" and STOP.
 
 - [ ] **Step 11: Live run on `s4test` (no ESP needed)**
 

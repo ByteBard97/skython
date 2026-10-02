@@ -16,14 +16,14 @@
 - Modify: `docs/superpowers/plans/2026-10-02-skython-m1_5-m2/API-VERIFICATION.md`, `spikes/RESULTS.md` (append)
 
 **Interfaces:**
-- Consumes: Task 33 ops `game.save {name, timeout_ms?}` / `game.load {save, timeout_ms?}` (`save_name` validated by the Dispatcher before `Run`; `game.load` is `needs_game: false`, so the Dispatcher skips its readiness check and never cancels it on the load it starts); Task 35 Dispatcher (deadline → `timeout`); Task 36 `Game.save(name, *, timeout=60.0) -> str`, `Game.load(name, *, timeout=120.0, wait=True) -> dict`, `Game.on`; Task 40 `kSaveGame` case in `Lifecycle.cpp` (the name parsed from `m->data`, the `game_saved` push, the one-shot `lifecycle: kSaveGame data` line), `game_loaded` and `events: game_loaded epoch <n>`; v1 `life::NotReadyReason`, `ops::NotReady(reason)`, `ops::InTask`, `settings::GetRuntime().skse_dir`.
+- Consumes: Task 33 error texts `a save named <name> already exists` (`detail.reason` `save_exists`) and `no save named <name>` (`responses.json` ids 64-65; this task's plugin code produces them exactly); Task 33 ops `game.save {name, timeout_ms?}` / `game.load {save, timeout_ms?}` (`save_name` validated by the Dispatcher before `Run`; `game.load` is `needs_game: false`, so the Dispatcher skips its readiness check and never cancels it on the load it starts); Task 35 Dispatcher (deadline → `timeout`); Task 36 `Game.save(name, *, timeout=60.0) -> str`, `Game.load(name, *, timeout=120.0, wait=True) -> dict`, `Game.on`; Task 40 `kSaveGame` case in `Lifecycle.cpp` (the name parsed from `m->data`, the `game_saved` push, the one-shot `lifecycle: kSaveGame data` line), `game_loaded` and `events: game_loaded epoch <n>`; v1 `life::NotReadyReason`, `ops::NotReady(reason)`, `ops::InTask`, `settings::GetRuntime().skse_dir`.
 - Produces: `spy::saveload::Run(const std::string& op, const json& args, spy::Done, spy::Cancelled)`, `spy::saveload::OnSaveGame(std::string_view name)`, `spy::saveload::SaveDir() -> std::filesystem::path` (`SaveLoad.h`); log lines `saveload: save folder <path>`, `saveload: saved <name>`, `saveload: load started <name>`; `livetest/support.py` `box_save_count(name) -> int`, `new_save_name(tag) -> str` (checks count 0 and records the name in `livetest/results/new_saves.txt`), `wait_save_file(name, timeout=30.0)`, `load_save(game, name, timeout=120.0) -> dict`; `livetest/conftest.py` module fixture `fresh_save` (loads `skythonbase` when it exists on the box, else `s4test`; returns `{"save", "state"}`).
 
 Rules this task implements:
-- **Both ops run their engine call in one `AddUITask`** (spike S6). A UI-task lambda starts with `ops::InTask in;` and **not** `ops::Measured`: the drain meter's fields are written without a lock because our `AddTask` bodies are serialized (observed, R49); UI tasks run on the UI thread and may overlap them.
+- **Both ops run their engine call in one `AddUITask`** (spike S6). A UI-task lambda starts with `ops::InTask in;` and **not** `ops::Measured`: the drain meter's fields are written without a lock because our `AddTask` bodies are serialized (observed, R49); UI tasks run on the UI thread and may overlap them. This is the Global Constraints rule "`ops::InTask` then `ops::Measured` first in every `AddTask` lambda; `AddUITask` lambdas take `ops::InTask` only".
 - **The engine's bools.** `BGSSaveLoadManager::Save(const char*)` and `Load(const char*)` return `void` at the pin; they call the protected `Save_Impl(2, 0, name)` and `Load_Impl(name, -1, 0, true)`, which return `bool`. The plugin calls those two directly (same arguments as CommonLib's own wrappers) through a pointer to member taken via a derived struct, which is legal C++ access to a protected member. `Load_Impl` false → `internal` naming the save; `Save_Impl` false → `internal`.
-- **`game.save`**: an existing `<name>.ess` in the save folder → `bad_request` with `detail.reason = "save_exists"` (never overwrites). The request completes when the game's `kSaveGame` message names that save. SKSE sends `kSaveGame` from its save hook, which may be **before** the `.ess` is on disk: the live test polls the file count (bounded) instead of expecting it at once. A pending save whose request was cancelled (timeout, a load) is forgotten.
-- **`game.load`**: refused with `not_ready` while `NotReadyReason(false)` is `"starting"` or `"loading"` (a `"no_game"` main menu is allowed, S6); no such `.ess` → `not_found`; else the UI task loads and answers `{"save": name, "started": true}` once `Load_Impl` returned true.
+- **`game.save`**: an existing `<name>.ess` in the save folder → `bad_request` with the message exactly `a save named <name> already exists` and `detail.reason = "save_exists"` (never overwrites; the text is `responses.json` id 64, Task 33, and what `FakeBackend` and the Python fake produce). A second `game.save` of a name whose save is still pending → `bad_request` `a save named <name> is already in progress`, also `reason: "save_exists"`. The request completes when the game's `kSaveGame` message names that save. SKSE sends `kSaveGame` from its save hook, which may be **before** the `.ess` is on disk: the live test polls the file count (bounded) instead of expecting it at once. A pending save whose request was cancelled (timeout, a load) is forgotten.
+- **`game.load`**: refused with `not_ready` while `NotReadyReason(false)` is `"starting"` or `"loading"` (a `"no_game"` main menu is allowed, S6); no such `.ess` → `not_found` with the message exactly `no save named <name>` (`responses.json` id 65; the save folder is in the `saveload: save folder` log line, not in the message); else the UI task loads and answers `{"save": name, "started": true}` once `Load_Impl` returned true.
 - **Save folder**: `<Documents>/My Games/<game>` (the SKSE log folder's parent) joined with the game INI's `sLocalSavePath:General` (default `Saves\`). Read once at `kDataLoaded` and logged.
 
 - [ ] **Step 1: Verify the names**
@@ -117,7 +117,7 @@ OpResult Internal(std::string message) { return OpResult::Err(ErrorCode::interna
 void Save(const std::string& name, Done done, Cancelled cancelled)
 {
     if (fs::exists(SaveDir() / (name + ".ess")))
-        return done(OpResult::Err(ErrorCode::bad_request, "a save named " + name + " already exists; game.save never overwrites",
+        return done(OpResult::Err(ErrorCode::bad_request, "a save named " + name + " already exists",
                                   json{ { "reason", "save_exists" } }));
     {
         std::lock_guard lk(Mx());
@@ -150,7 +150,7 @@ void Load(const std::string& name, Done done, Cancelled cancelled)
     // needs_game is false for game.load (Contracts), so this is the only readiness check: a main menu is fine.
     if (auto why = life::NotReadyReason(false); why && (*why == "starting" || *why == "loading")) return done(ops::NotReady(*why));
     if (!fs::exists(SaveDir() / (name + ".ess")))
-        return done(OpResult::Err(ErrorCode::not_found, "no save named " + name + " in " + U8(SaveDir())));
+        return done(OpResult::Err(ErrorCode::not_found, "no save named " + name));
     SKSE::GetTaskInterface()->AddUITask([name, done, cancelled] {
         ops::InTask in;
         if (cancelled()) return;  // the caller gave up before the UI thread got here: do not start a load nobody waits for
@@ -307,7 +307,9 @@ Append to `livetest/conftest.py`:
 @pytest.fixture(scope="module")
 def fresh_save(session):
     """Spec 8 / v1 'After this plan' item 2: load a fixed save before the module runs. skythonbase (Task 49) when it
-    exists on the box, else s4test. Returns {"save": name, "state": the interactive state after the load}."""
+    exists on the box, else s4test. Returns {"save": name, "state": the interactive state after the load}.
+    skythonbase holds SkythonTest.esp, so a launch that may load it is preceded by `tools/box/box_plugins.sh add`
+    (Global Constraints, after Gate 0); the quit/stop tools restore plugins.txt."""
     import skython
     from support import box_save_count, load_save
     name = "skythonbase" if box_save_count("skythonbase") == 1 else "s4test"
@@ -356,6 +358,7 @@ def test_saving_the_same_name_again_is_refused(game, saved):
     with pytest.raises(errors.BadRequest) as e:
         game.save(saved["name"])
     assert e.value.detail.get("reason") == "save_exists"
+    assert e.value.message == f"a save named {saved['name']} already exists"
 
 
 def test_bad_save_names_are_refused(game):
@@ -367,8 +370,9 @@ def test_bad_save_names_are_refused(game):
 
 
 def test_load_missing_save_is_not_found(game):
-    with pytest.raises(errors.NotFound):
+    with pytest.raises(errors.NotFound) as e:
         game.load("no_such_save_skython", wait=False)
+    assert e.value.message == "no save named no_such_save_skython"
 
 
 def test_load_from_gameplay_raises_epoch_and_game_loaded(game, saved):

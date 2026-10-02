@@ -2,53 +2,33 @@
 
 Spec 8's M2 soak: 30 minutes on `skythonbase` with a subscription to every v1 event (filters where the table requires one), one bridge subscriber and one in-process subscriber, a call per second, `Skython.Send` and quest stage changes, item moves, and one save to a new throwaway save plus one load in the middle. Every 30 s the run records the bridge's `in_flight`, the event hub's consumers, subscriptions and dropped/suppressed totals, the drain meter, and the game process's memory (Python runs inside it). Pass = no crash, callbacks still delivering at the end, no memory growth trend beyond the queue bounds, subscriptions back at their count, drain and latency within recorded limits (Review Focus 1).
 
-> Part of the [Skython M1.5/M2 plan](README.md). Read the index's **Global Constraints** (Saves; no credentials), **Contracts** (events table, C++ `EventHub`) and **Review Focus** 1 and 5 first. Steps use checkbox (`- [ ]`) syntax.
+> Part of the [Skython M1.5/M2 plan](README.md). Read the index's **Global Constraints** (Saves; no credentials), **Contracts** (events table, C++ `EventHub`, Plugin: the four `game.state` diagnostics keys Task 39 owns, Live tests: `_testesp`) and **Review Focus** 1 and 5 first. Steps use checkbox (`- [ ]`) syntax.
 
-> **Gate:** start only after Task 55 is done.
+> **Gate:** start only after Tasks 50 (`_testesp`), 53 (`livetest_events`) and 55 are done; Gate 0 (owner decision 7) accepted for the box steps (index **Owner decisions**).
 >
-> **Runs on:** Linux (tests, plugin diagnostics change), the Windows build box (plugin build), then the Windows box + game for about 35 minutes.
+> **Runs on:** Linux (tests), then the Windows box + game for about 35 minutes. No plugin code changes in this task.
 >
-> **STOP and ask the owner (do not improvise) if:** the game crashes or hangs during the soak (collect the crash log with `box_files.sh pull` and `box_shot.sh` first); a pass criterion fails (report the samples; never widen a limit to make it pass); the save name exists; the plugin build fails; the game process cannot be found by `Get-Process SkyrimSE` while the bridge answers.
+> **STOP and ask the owner (do not improvise) if:** the game crashes or hangs during the soak (collect the crash log with `box_files.sh pull` and `box_shot.sh` first); a pass criterion fails (report the samples; never widen a limit to make it pass); the save name exists; a diagnostics key of Step 1 is missing (a Task 39 defect: report it, do not add it here); the game process cannot be found by `Get-Process SkyrimSE` while the bridge answers.
 
 Limits (recorded numbers, RESULTS Task 31; not tuned here): `DRAIN_LIMIT_MS = 4.5` (2 × `max_task_drain_ms` 2.2454 for a 904-task drain); `P99_LIMIT_MS = 200.0` (2 × the remote p99 100.28 ms) for calls outside the load window; memory: working-set slope after the load ≤ `SLOPE_LIMIT_MIB_PER_MIN = 1.0` (16 subscriptions × 1024 queued events of a few hundred bytes is a few MiB at most, so a steady climb beyond that over 15 minutes is a leak, not a queue).
 
 **Files:**
-- Modify: `plugin/src/GameBackend.cpp` (diagnostics: four event-hub counters, only if Task 39/40 did not already add them; Step 1)
 - Modify: `livetest/scripts/livetest_events/__init__.py` (soak mode, triggered by a mod event)
 - Create: `livetest/test_m2_soak.py`
 - Create: `livetest/results/soak.json` (written by the run, committed)
 - Modify: `spikes/RESULTS.md` (Task 56 entry; the new save on the removal list)
 
 **Interfaces:**
-- Consumes: Task 34 `EventHub::Consumers()`, `Subscriptions()`, `DroppedTotal()`, `SuppressedTotal()`; Task 39 `spy::events::Hub()`; Task 33 generated `skython._protocol_generated.EVENTS` (name → `{fields, filter_fields, filter_required_any_of, deliver_while_loading}`); Task 36 `Game.on(event, filter, fn, *, max_queue)`, `Event.dropped`, `Event.suppressed`; Task 41 `Game.save`, `Game.load(wait=True)`; Task 46 `game.call("Skython", "Send", channel, payload)`; Task 50 `_testesp` (`quest`, `PLAYER`, `IRON_SWORD`, `CHANNEL`); Task 53 `livetest_events` (`record`, `_write`, `_state`, `_lock`, `MOD_EVENT`, `FILE`); v1 `support.diagnostics`, `OTHER_CLIENTS_SLACK`, `smoke._read`, `tools/box/box_env.sh` (`bssh`).
-- Produces: `game.state` diagnostics keys `event_consumers`, `event_subscriptions`, `events_dropped_total`, `events_suppressed_total` (plugin-side only: `game.state`'s diagnostics are not in `protocol.json`, so Task 33's ownership of the protocol is untouched); `livetest_events.SOAK_EVENT = "skython_soak"` (str_arg `start` / `stop`) and `livetest_events.json` key `"soak"` (`{"active", "subs", "counts", "dropped", "suppressed", "last_t"}`, rewritten every 10 s); `livetest/results/soak.json`; one new throwaway save `skython_t56_<timestamp>`.
+- Consumes: Task 39 `game.state` diagnostics keys `event_consumers`, `event_subscriptions`, `events_dropped_total`, `events_suppressed_total` (Task 39 owns them in `GameBackend.cpp`: `Hub().Consumers()`, `Subscriptions()`, `DroppedTotal()`, `SuppressedTotal()`; this task only reads them); Task 33 generated `skython._protocol_generated.EVENTS` (name → `{fields, filter_fields, filter_required_any_of, deliver_while_loading}`); Task 36 `Game.on(event, filter, fn, *, max_queue)`, `Event.dropped`, `Event.suppressed`; Task 41 `Game.save`, `Game.load(wait=True)`; Task 46 `game.call("Skython", "Send", channel, payload)`; Task 50 `_testesp` (`quest`, `PLAYER`, `IRON_SWORD`, `CHANNEL`); Task 53 `livetest_events` (`record`, `_write`, `_state`, `_lock`, `MOD_EVENT`, `FILE`); v1 `support.diagnostics`, `OTHER_CLIENTS_SLACK`, `smoke._read`, `tools/box/box_env.sh` (`bssh`).
+- Produces: `livetest_events.SOAK_EVENT = "skython_soak"` (str_arg `start` / `stop`) and `livetest_events.json` key `"soak"` (`{"active", "subs", "counts", "dropped", "suppressed", "last_t"}`, rewritten every 10 s); `livetest/results/soak.json`; one new throwaway save `skython_t56_<timestamp>`.
 
-- [ ] **Step 1: Event-hub counters in `game.state` diagnostics**
+- [ ] **Step 1: Check the event-hub diagnostics keys (Task 39 owns them)**
 
 ```bash
 cd /home/geoff/projects/games/skyrim/skyrim-python
-grep -n "Consumers()\|Subscriptions()\|DroppedTotal()\|SuppressedTotal()" plugin/src/GameBackend.cpp
+grep -n '"event_consumers"\|"event_subscriptions"\|"events_dropped_total"\|"events_suppressed_total"' plugin/src/GameBackend.cpp
 ```
-If all four are already in `WithDiagnostics` (Task 39/40 may have added them), use their key names in Steps 3-4 wherever this task writes `event_consumers`, `event_subscriptions`, `events_dropped_total`, `events_suppressed_total`, and skip to Step 2. Otherwise add them: in `plugin/src/GameBackend.cpp` include `"Events.h"` with the other local includes, and replace the body of `WithDiagnostics`:
-```cpp
-    static json WithDiagnostics(json s)
-    {
-        auto& d = GetDispatcher();
-        auto& hub = events::Hub();
-        s["diagnostics"] = {{"late_results_dropped", d.LateResults()}, {"in_flight", d.InFlight()},
-                            {"max_task_drain_ms", ops::Meter().MaxMs()}, {"max_task_drain_count", ops::Meter().MaxCount()},
-                            {"max_task_drain_ms_count", ops::Meter().MaxMsCount()},
-                            {"event_consumers", hub.Consumers()}, {"event_subscriptions", hub.Subscriptions()},
-                            {"events_dropped_total", hub.DroppedTotal()},
-                            {"events_suppressed_total", hub.SuppressedTotal()}};
-        return s;
-    }
-```
-(`events::Hub()` is `spy::events::Hub()`; GameBackend.cpp is inside `namespace spy`, as the existing `ops::Meter()` call shows.) Build both DLLs and keep the build clean:
-```bash
-tools/remote_build.sh plugin Skython.dll && tools/remote_build.sh plugin SkythonCore.dll
-```
-Expected: both builds succeed with 0 warnings; `out/Skython.dll` and `out/SkythonCore.dll` are new.
+Expected: all four keys in `WithDiagnostics` (Task 39). A missing key is a Task 39 defect: STOP and report it; this task adds no plugin code. The deployed build is the one Task 55 ran.
 
 - [ ] **Step 2: Soak mode in the in-process script**
 
@@ -316,9 +296,8 @@ Expected: `2 skipped`.
 
 ```bash
 cd /home/geoff/projects/games/skyrim/skyrim-python
-tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini      # only if Step 1 rebuilt the DLLs
 tools/box/box_deploy.sh --scripts livetest/scripts
-tools/box/box_plugins.sh add
+tools/box/box_plugins.sh add                      # before every launch that loads skythonbase (Global Constraints)
 tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log 'python host: running' 600
 tools/box/box_session.sh up && source out/box-live.env && source livetest/s4test.env
@@ -344,8 +323,8 @@ Append to "Plugin findings" in `spikes/RESULTS.md` (filled from `soak.json`'s su
 ```
 ```bash
 grep -n "Task 56, 30-minute soak" spikes/RESULTS.md && ! grep -n "Task 56, 30-minute soak.*<" spikes/RESULTS.md && echo "entry filled"
-git add plugin/src/GameBackend.cpp livetest/scripts/livetest_events/__init__.py livetest/test_m2_soak.py \
+git add livetest/scripts/livetest_events/__init__.py livetest/test_m2_soak.py \
         livetest/results/soak.json spikes/RESULTS.md
-git commit -m "test(m2): 30-minute soak with subscriptions, event hub counters in diagnostics"
+git commit -m "test(m2): 30-minute soak with subscriptions"
 ```
-Expected: the line number, `entry filled`, then the commit (`GameBackend.cpp` drops out of the `git add` harmlessly if Step 1 found the counters already there).
+Expected: the line number, `entry filled`, then the commit.

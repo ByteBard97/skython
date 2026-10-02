@@ -1,6 +1,6 @@
 # Task 47: ESP/VMAD spike — Mutagen builds a quest whose stage fragment calls `Skython.Send` (gate)
 
-> Part of the [Skython M1.5/M2 plan](README.md). Read the index's **Global Constraints** (Mutagen is GPL-3.0; box files under decision 7), **Fixed paths** (.NET, Papyrus Compiler), **Contracts** (Papyrus: the fixed quest FormKey and fragment script name) and the **Gates** paragraph "ESP/VMAD spike" first. Steps use checkbox (`- [ ]`) syntax.
+> Part of the [Skython M1.5/M2 plan](README.md). Read the index's **Global Constraints** (Mutagen is GPL-3.0-only; box files under decision 7), **Owner decisions** (decision 7 is a STOP gate, never assumed), **Fixed paths** (.NET, Papyrus Compiler), **Contracts** (Papyrus: the fixed quest FormKey and fragment script name) and the **Gates** paragraph "ESP/VMAD spike" first. Steps use checkbox (`- [ ]`) syntax.
 >
 > **This task is THE gate for Tasks 48-53 and 55.** PASS means: a Mutagen-written quest with a scripted reference alias and a `QF_` stage fragment (VMAD with a fragment table) loads in the game, setting the stage runs the fragment and its `Skython.Send` arrives as a `channel` event, and the alias script is bound. **If any of that fails, STOP and ask the owner** (the alternatives are the Creation Kit on the box or xEdit scripts, spec open question 4); do not tune the VMAD by trial on the box.
 >
@@ -38,7 +38,7 @@ Expected: `8.0.424 [/home/geoff/.dotnet/sdk]`, `23.4.0`, `Task 46 outputs presen
 Create `testesp/builder/SkythonTestEspBuilder.csproj`:
 ```xml
 <Project Sdk="Microsoft.NET.Sdk">
-  <!-- Development tool only, never distributed: links Mutagen (GPL-3.0). See LICENSE-NOTE.md. -->
+  <!-- Development tool only, never distributed: links Mutagen (GPL-3.0-only). See LICENSE-NOTE.md. -->
   <!-- Mutagen.Bethesda.Skyrim 23.4.0 ships net5.0 / netstandard2.1 assemblies; they load and run under net8.0. -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -59,7 +59,7 @@ Create `testesp/builder/LICENSE-NOTE.md`:
 
 This folder is a development tool, not part of Skython.
 
-- It links Mutagen (`Mutagen.Bethesda.Skyrim`, `Mutagen.Bethesda.Core`, `Mutagen.Bethesda.Kernel` 23.4.0; licence GPL-3.0-only; https://github.com/Noggog/Mutagen). A binary built from this folder is therefore a GPL-3.0 work.
+- It links Mutagen (`Mutagen.Bethesda.Skyrim`, `Mutagen.Bethesda.Core`, `Mutagen.Bethesda.Kernel` 23.4.0; licence GPL-3.0-only; https://github.com/Noggog/Mutagen). A binary built from this folder is therefore a GPL-3.0-only work.
 - It is never distributed: `bin/` and `obj/` are gitignored and no binary built from it is committed.
 - No product code (`core/`, `plugin/`, `pyglue/`, `python/`) references this folder or Mutagen.
 - Its output, `SkythonTest.esp`, is test data written from the record values in these sources; it is committed with its SHA-256 in `docs/PINS.md`.
@@ -67,7 +67,7 @@ This folder is a development tool, not part of Skython.
 ```
 Append to `.gitignore`:
 ```gitignore
-# testesp/builder is a GPL-3.0 development tool (Mutagen): never commit its build output
+# testesp/builder is a GPL-3.0-only development tool (Mutagen): never commit its build output
 testesp/builder/bin/
 testesp/builder/obj/
 ```
@@ -389,7 +389,7 @@ def test_alias_script_is_bound(game, quest):
 Append to `docs/PINS.md`:
 ```markdown
 ## Test ESP (Tasks 47-48)
-- Builder: `testesp/builder` (development tool, GPL-3.0 through Mutagen, never distributed; see its LICENSE-NOTE.md), .NET SDK 8.0.424 at `~/.dotnet/dotnet`, target `net8.0`, restored offline from `~/.nuget/packages`.
+- Builder: `testesp/builder` (development tool, GPL-3.0-only through Mutagen, never distributed; see its LICENSE-NOTE.md), .NET SDK 8.0.424 at `~/.dotnet/dotnet`, target `net8.0`, restored offline from `~/.nuget/packages`.
 - Mutagen 23.4.0 nupkg sha256: Skyrim 4bdec615ae07c8ac9066f62d8a6420f0355e76c94db69e730a46bfc296856696, Core fa50598700a836dfef6639fbc1893aaf276d3f9383d51437cc8d6b8f6c254313, Kernel 07f9fbd65c846f2071a3c752671c5860409766715bab0ed9450796331a774b55.
 - `testesp/spike/SkythonTest.esp` (Task 47 spike) sha256 00a11e2e3481e87d02f38d8ff23d0b8a42ce9df6fbd6bde0aca66c288479cbce (deterministic: rebuilds are byte-identical).
 ```
@@ -405,7 +405,7 @@ Expected: `5 skipped`; `no build output staged`.
 
 - [ ] **Step 8: Gate 0 check, deploy**
 
-Gate 0 must be open (Step 1). The spike plugin already has the decision-7 file name and uses only listed script names, so the list does not grow; Task 48's build later replaces these same files (they are recorded in `out/box-deployed.txt`, so `put_file` overwrites only our own copies).
+Gate 0 must be open (Step 1; README **Owner decisions**, decision 7: without a recorded acceptance, STOP). The spike plugin already has the decision-7 file name and uses only names on Task 45's six-name `.pex` list (`Skython.pex`, `QF_SkythonTestQuest_01000800.pex`, `SkythonTestAlias.pex`), so the list does not grow; Task 48's build later replaces these same files (they are recorded in `out/box-deployed.txt`, so `put_file` overwrites only our own copies).
 ```bash
 tools/box/box_deploy.sh --esp testesp/spike/SkythonTest.esp
 tools/box/box_deploy.sh --test-pex plugin/papyrus/compiled/Skython.pex testesp/spike/compiled/QF_SkythonTestQuest_01000800.pex testesp/spike/compiled/SkythonTestAlias.pex
@@ -439,7 +439,7 @@ Gate criteria are the event arriving through either `SetStage` path, the `QF_...
 
 Append to `spikes/RESULTS.md` (PASS or FAIL, never both):
 ```markdown
-- **Task 47, ESP/VMAD spike: <PASS|FAIL> (box, Windows-native, <date time>, Skyrim 1.6.1170.0, s4test, never saved; 1 launch; SKSE plugins loaded: <list>):** Mutagen 23.4.0 (net8.0, offline restore) wrote `testesp/spike/SkythonTest.esp` (sha256 00a11e2e3481e87d02f38d8ff23d0b8a42ce9df6fbd6bde0aca66c288479cbce, no masters): quest `SkythonTestQuest` SkythonTest.esp|0x000800 (AllowRepeatedStages, QuestFormVersion 0), alias 0 `SkythonTestAlias0` (Optional) with VMAD script `SkythonTestAlias`, stage 10 with one log entry (QSDT), VMAD version 5 / object format 2 / Unknown 2, `FileName` and `Scripts` = `QF_SkythonTestQuest_01000800`, fragment `stage=10 index=0 unknown2=1 Fragment_0`. Results: plugin loaded (`IsPluginInstalled` True, `form.resolve` -> Quest); console `setstage SkythonTestQuest 10` -> `channel` `spike_stage_10` in <n> ms; `call_method(Quest.SetStage, 10)` -> True and `spike_stage_10` again; dispatch by class name `QF_SkythonTestQuest_01000800.GetStage` -> 10 (the game reports the fragment script under that name); alias 0: `ForceRefTo(player)`, `GetReference` -> player, `SkythonTestAlias.Tag` -> 0, `GetOwningQuest` -> the quest, `Clear`. plugins.txt restored to sha <A> by box_quit.sh. <On FAIL: which test, the evidence, and "STOP: owner to choose Creation Kit or xEdit (spec open question 4)".> **Owner removal list:** `Data\SkythonTest.esp`, `Data\Scripts\QF_SkythonTestQuest_01000800.pex`, `Data\Scripts\SkythonTestAlias.pex` (Task 48 overwrites all three).
+- **Task 47, ESP/VMAD spike: <PASS|FAIL> (box, Windows-native, <date time>, Skyrim 1.6.1170.0, s4test, never saved; 1 launch; SKSE plugins loaded: <list>):** Mutagen 23.4.0 (net8.0, offline restore) wrote `testesp/spike/SkythonTest.esp` (sha256 00a11e2e3481e87d02f38d8ff23d0b8a42ce9df6fbd6bde0aca66c288479cbce, no masters): quest `SkythonTestQuest` SkythonTest.esp|0x000800 (AllowRepeatedStages, QuestFormVersion 0), alias 0 `SkythonTestAlias0` (Optional) with VMAD script `SkythonTestAlias`, stage 10 with one log entry (QSDT), VMAD version 5 / object format 2 / Unknown 2, `FileName` and `Scripts` = `QF_SkythonTestQuest_01000800`, fragment `stage=10 index=0 unknown2=1 Fragment_0`, alias VMAD property name empty (VMAD specifics Task 48 keeps: quest adapter Unknown 2, fragments Unknown2 1, one log entry per stage for `StageIndex 0`, form version 0 where Mutagen's default is 255). Results: plugin loaded (`IsPluginInstalled` True, `form.resolve` -> Quest); console `setstage SkythonTestQuest 10` -> `channel` `spike_stage_10` in <n> ms; `call_method(Quest.SetStage, 10)` -> True and `spike_stage_10` again; dispatch by class name `QF_SkythonTestQuest_01000800.GetStage` -> 10 (the game reports the fragment script under that name); alias 0: `ForceRefTo(player)`, `GetReference` -> player, `SkythonTestAlias.Tag` -> 0, `GetOwningQuest` -> the quest, `Clear`. plugins.txt restored to sha <A> by box_quit.sh. <On FAIL: which test, the evidence, and "STOP: owner to choose Creation Kit or xEdit (spec open question 4)".> **Owner removal list:** `Data\SkythonTest.esp`, `Data\Scripts\QF_SkythonTestQuest_01000800.pex`, `Data\Scripts\SkythonTestAlias.pex` (Task 48 overwrites all three).
 ```
 ```bash
 git add spikes/RESULTS.md

@@ -6,7 +6,7 @@
 
 **What this task does.** It is the only task in this plan that edits `protocol/protocol.json` (Global Constraints: "One owner for `protocol/protocol.json`"). It raises the protocol to `[1, 1]`, adds the four ops `events.subscribe`, `events.unsubscribe`, `game.save`, `game.load`, the 20-entry `events` table, seven limits, the save-name pattern and the config keys `trace_timing` and `console_echo_errors`. `tools/gen_protocol.py` learns to validate and emit the events table (C++ `spy::kEvents` / `spy::find_event`, Python `EVENTS`, a Markdown table) and the five new argument types. `parse_request` learns the four ops, checked argument by argument from their table entries. A filter only has to be a JSON object (or `null`, meaning absent) at this level: its deep rules (field names, value types, `filter_required_any_of`) belong to `parse_event_filter` in Task 34, which consumes the `invalid_filters` entries of the new `events.json` fixture. `python/tests/fake_skython.py` gets the same parse-level checks so the Python fake keeps refusing what core refuses (Task 36 later adds its consumers).
 
-Because the minor bump and the new ops change pinned literals, several existing tests outside the index's File Structure change too: `core/tests/test_generated.cpp`, `core/tests/test_requests.cpp`, `core/tests/test_fake_backend.cpp` (the "while a save loads" replay must skip every op that does not need a game, not only `game.state`), `python/tests/test_generated.py`, `python/tests/test_game.py` (the four new ops have no `Game` method until Task 36), `python/tests/test_inprocess.py`, `pyglue/tests/test_module.py` and `livetest/test_m1_bridge.py` (session file `protocol`).
+Because the minor bump and the new ops change pinned literals, several existing tests change too (all listed in the index's File Structure under Task 33): `core/tests/test_generated.cpp`, `core/tests/test_requests.cpp`, `core/tests/test_fake_backend.cpp` (the "while a save loads" replay must skip every op that does not need a game, not only `game.state`), `python/tests/test_generated.py`, `python/tests/test_game.py` (the four new ops have no `Game` method until Task 36), `python/tests/test_inprocess.py`, `pyglue/tests/test_module.py` and `livetest/test_m1_bridge.py` (session file `protocol`).
 
 **Files:**
 - Modify: `protocol/protocol.json` (minor 1, limits, `save_name_pattern`, config keys, ops, `events`)
@@ -31,7 +31,12 @@ Because the minor bump and the new ops change pinned literals, several existing 
   - `bool spy::is_valid_save_name(std::string_view)` in `requests.h` (agrees with `kSaveNamePattern`; Task 35's fake and Task 41's plugin code may use it).
   - `Config::trace_timing` (bool, default false), `Config::console_echo_errors` (bool, default true), parsed by `parse_config`, emitted by `config_to_json`; generated `config_defaults::kTraceTiming`, `config_defaults::kConsoleEchoErrors`.
   - Fixture `protocol/v1/fixtures/events.json` with keys `about`, `subscribe` (`{request, result}`), `unsubscribe` (`{request, result}` or `{request, error}`), `frames` (event objects), `invalid_filters` (`{event, filter, error, message}`; `message` is a substring of the error message Task 34's `parse_event_filter` must produce).
-  - Golden responses `responses.json` ids 62 (`game.save` ok), 63 (`game.load` ok), 64 (`bad_request` message `a save named skython_t41 already exists`, `detail.reason` `save_exists`), 65 (`not_found` message `no save named no_such_save_skython`). Task 35's `FakeBackend` must produce exactly these texts.
+  - Golden responses `responses.json` ids 62 (`game.save` ok), 63 (`game.load` ok), 64 (`bad_request` message `a save named skython_t41 already exists`, `detail.reason` `save_exists`), 65 (`not_found` message `no save named no_such_save_skython`). Task 35's `FakeBackend`, Task 36a's Python fake and Task 41's plugin must produce exactly these texts (`a save named <name> already exists`, `no save named <name>`).
+  - `event_filter` semantics at the parse level: an object, or `null` / absent meaning **no filter**; the deep rules belong to Task 34.
+  - Limit docs (`protocol.json`, generated into `PROTOCOL.generated.md`): a `Skython.Send` payload over `max_channel_payload_bytes` is cut at a UTF-8 boundary with `truncated: true`; a channel that is empty or over `max_channel_bytes` is dropped with one warning, never cut (Task 46 implements both).
+  - `protocol/v1/fixtures/hello.json` client names are generic (`test`, `skython-test`).
+  - The `needs_game` rule tests (`core/tests/test_generated.cpp`, `tools/test_gen_protocol.py`, `python/tests/test_generated.py`) pin the new set `game.state`, `events.subscribe`, `events.unsubscribe`, `game.load` (there is no header comment to update).
+  - Hand-off to Task 36: `PENDING_OPS` in `python/tests/test_game.py` (Task 36 adds the `Game` callers and deletes it). Hand-off to Task 36a: `test_the_fake_accepts_valid_requests_of_the_new_ops` in `python/tests/test_fixtures.py` (Task 36a passes a consumer for `events.*`).
 
 ---
 
@@ -306,7 +311,7 @@ FILTERABLE_FIELD_TYPES = ("form", "int", "string")
     {"name": "max_channel_payload_bytes", "value": 65536, "ctype": "size", "unit": "bytes",
      "doc": "A Skython.Send payload longer than this is cut at a UTF-8 boundary and its channel event carries truncated: true."},
     {"name": "max_channel_bytes", "value": 256, "ctype": "size", "unit": "bytes",
-     "doc": "Longest channel name of a channel event; a longer name is cut at a UTF-8 boundary."}
+     "doc": "Longest channel name of a channel event. A Skython.Send whose channel is empty or longer than this is dropped and a warning is logged once; a channel is never cut (a cut name would be a different channel)."}
 ```
 
 (c) After the `"array_elem_types"` line add: `"save_name_pattern": "^[A-Za-z0-9_]{1,64}$",`
@@ -522,7 +527,7 @@ append to `"valid"`:
 ```
 and extend `"about"` with: `; 62 game.save; 63 game.load started; 64 game.save of an existing name (save_exists); 65 game.load of a missing save`.
 
-`protocol/v1/fixtures/hello.json`: add to `"valid"`: `{"type": "hello", "protocol": [1, 1], "token": "00112233445566778899aabbccddeeff", "client": "test"},` (the `[1, 0]` hello stays: an older-minor client still connects).
+`protocol/v1/fixtures/hello.json`: add to `"valid"`: `{"type": "hello", "protocol": [1, 1], "token": "00112233445566778899aabbccddeeff", "client": "test"},` (the `[1, 0]` hello stays: an older-minor client still connects). Client names in the fixtures are generic: the existing `[1, 3]` entry already uses `"client": "skython-test"` (renamed before this plan, commit "test(protocol): fixture client name is skython-test"); never name a consumer project in a fixture.
 
 - [ ] **Step 7: Run the generator tests and the drift check**
 
@@ -868,8 +873,8 @@ Expected: `0`, then `100% tests passed, 0 tests failed out of 1`.
 
 `python/tests/test_game.py` replays every valid request fixture through a `Game` method and checks `set(CALLERS) == set(g.OPS)`; the `Game` methods for the new ops (`on`, `save`, `load`) arrive in Task 36. Add above `def replay_handler`:
 ```python
-# Protocol 1.1 ops whose Game methods (Game.on, Game.save, Game.load) arrive in Task 36, which adds them to CALLERS
-# and deletes this set.
+# Protocol 1.1 ops whose Game methods (Game.on, Game.save, Game.load) arrive in Task 36, which adds Game callers for
+# them to CALLERS and deletes this set (and the two uses below).
 PENDING_OPS = {"events.subscribe", "events.unsubscribe", "game.save", "game.load"}
 ```
 change the replay's parametrisation to `@pytest.mark.parametrize("fx", [r for r in REQUESTS["valid"] if r["op"] not in PENDING_OPS], ids=lambda r: f"{r['id']}-{r['op']}")`, and in `test_the_game_speaks_exactly_the_ops_in_the_table` change the first assertion to `assert set(CALLERS) == set(g.OPS) - PENDING_OPS`.
@@ -918,6 +923,7 @@ def test_the_fake_accepts_valid_requests_of_the_new_ops(fake, req):
     resp = json.loads(fake.call(json.dumps(req), 5.0))
     assert resp["ok"] is True or resp["error"]["code"] != "bad_request", resp
 ```
+This test checks argument parsing only: at this point the fake has no event hub, so it answers `events.*` without a consumer. **Task 36a** (the fake event hub) updates this test so the `events.*` requests pass a consumer: from Task 36a on, an `events.*` request with consumer 0, or an unknown or closed consumer, is `bad_request` "no event consumer" in the fake as in core.
 
 `python/tests/fake_skython.py`: add `import re` to the imports, and in `_op_problem`, insert before the `names = [...]` line:
 ```python
@@ -977,13 +983,13 @@ An event frame (the dev bridge writes it as one frame; in-process, `_skython.nex
 
 **Loading.** While a load is in progress (a save load pending, or the Loading Menu open), an event whose table entry is not delivered while loading is not queued; each subscription that would have taken it counts it in `suppressed`. Menu events, `mod_event`, `channel` and the lifecycle events (`game_loaded`, `game_saved`, `new_game`) are delivered. `game_loaded` is raised when a loaded save or a new game becomes interactive: it marks the end of a load. Subscriptions survive a load.
 
-**Channel events.** The Papyrus native `Skython.Send(channel, payload)` raises `channel`. A payload longer than `max_channel_payload_bytes` is cut at a UTF-8 boundary and the event carries `truncated: true`; a channel name longer than `max_channel_bytes` is cut the same way.
+**Channel events.** The Papyrus native `Skython.Send(channel, payload)` raises `channel`. A payload longer than `max_channel_payload_bytes` is cut at a UTF-8 boundary and the event carries `truncated: true`; a call whose channel is empty or longer than `max_channel_bytes` is **dropped** (no event) and the plugin logs one warning the first time; a channel name is never cut, because a cut name would be a different channel.
 ````
 
 (c) Rename `## Ops (M1)` to `## Ops` and append these bullets to its rule list:
 ```markdown
-- `game.save` never overwrites: a save that already has that name is `bad_request` with `detail.reason` `"save_exists"`. It answers once the game reports the save; no report within the timeout is `timeout`.
-- `game.load` is answered without a loaded game, so it works at the main menu; while the game is starting or already loading it is `not_ready`. A missing save is `not_found`; the engine refusing to load it is `internal`. It answers once the load has started. The load is a world reset, so every call in flight that needs a game ends `not_ready` (see above).
+- `game.save` never overwrites: a save that already has that name is `bad_request` with the message `a save named <name> already exists` and `detail.reason` `"save_exists"`. It answers once the game reports the save; no report within the timeout is `timeout`.
+- `game.load` is answered without a loaded game, so it works at the main menu; while the game is starting or already loading it is `not_ready`. A missing save is `not_found` with the message `no save named <name>`; the engine refusing to load it is `internal`. It answers once the load has started. The load is a world reset, so every call in flight that needs a game ends `not_ready` (see above).
 - Save names match the save-name pattern in the generated tables (letters, digits and underscores; no path, no extension).
 ```
 

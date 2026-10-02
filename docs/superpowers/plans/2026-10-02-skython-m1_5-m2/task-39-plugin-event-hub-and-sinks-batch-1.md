@@ -12,14 +12,14 @@
 - Create: `docs/superpowers/plans/2026-10-02-skython-m1_5-m2/API-VERIFICATION.md`
 - Create: `plugin/src/Events.h`, `plugin/src/Events.cpp`, `plugin/src/EventSinks.cpp`
 - Modify: `plugin/src/PapyrusValues.h`, `plugin/src/PapyrusValues.cpp` (a VM-free form describer for sinks)
-- Modify: `plugin/src/main.cpp` (`RegisterSinks()` at `kDataLoaded`), `plugin/src/GameBackend.cpp` (`DispatcherOptions::events`, hub totals in diagnostics), `plugin/src/PythonHost.cpp` (`ModuleHost::events`; the README's File Structure says `PyModule.cpp`, but the `ModuleHost` is filled in `PythonHost.cpp`), `plugin/CMakeLists.txt`
-- Modify: `livetest/support.py` (append `subscribe`, `read_event`), `livetest/scripts/livetest_smoke/__init__.py` (a `mod_event` command)
+- Modify: `plugin/src/main.cpp` (`RegisterSinks()` at `kDataLoaded`), `plugin/src/GameBackend.cpp` (`DispatcherOptions::events`, hub totals in diagnostics), `plugin/src/PythonHost.cpp` (`ModuleHost::events`, set by name: `ModuleHost` is filled here, not in `PyModule.cpp`), `plugin/CMakeLists.txt`
+- Modify: `livetest/support.py` (append `subscribe`, `read_event`, `read_events`), `livetest/scripts/livetest_smoke/__init__.py` (a `mod_event` command)
 - Create: `livetest/test_m2_events_batch1.py`
 - Modify: `spikes/RESULTS.md` (append)
 
 **Interfaces:**
 - Consumes: Task 34 `spy::EventHub`, `spy::EventHubOptions{epoch, loading}`, `EventHub::Wants/Push/Consumers/Subscriptions/DroppedTotal/SuppressedTotal` (`core/include/spy/events.h`); Task 35 `DispatcherOptions::events` (`EventHub*`), `ModuleHost::events` (`EventHub*`), `_skython.open_consumer/close_consumer/next_events`; Task 36 `Game.on(event, filter, fn, *, max_queue)`, `Game.on_mod_event(name, fn)`, `Subscription` (context manager, `close()`), `Event` (`name, sub, seq, epoch, data, dropped, suppressed`); Task 37 remote event delivery (the same `Game.on` over the bridge); v1: `life::Epoch()`, `life::Loading()` (`Lifecycle.h`), `pv::DescribeForm` internals (`SourceFile`, `KeyOrId`, `is_runtime_form_id`, `canonical_script_name`), `ops::InTask`, `ops::Measured`, `ops::Meter()` (`Ops.h`), `form_ref_to_json` (`spy/values.h`), `pv::FloatToJson`.
-- Produces: `spy::events::Hub() -> spy::EventHub&`, `spy::events::Push(std::string_view, json) noexcept`, `spy::events::FormRefJson(const RE::TESForm*) -> json`, `spy::events::RegisterSinks() -> void` (`Events.h`); `spy::events::RegisterWorldSinks() -> void` is **declared** here and defined by Task 40 (`EventSinksWorld.cpp`); `pv::BuildClassTable() -> void`, `pv::DescribeFormForEvent(const RE::TESForm*) -> FormRef` (VM-free; safe on any engine thread); the log line `events: sinks registered (batch 1)`; `game.state` `diagnostics` gains `event_consumers`, `event_subscriptions`, `events_dropped_total`, `events_suppressed_total` (Task 42 and Task 56 read them); `livetest/support.py` `subscribe(sock, event, filter=None, req_id=1, max_queue=None) -> int`, `read_event(sock, timeout) -> dict | None`, `read_events(sock, n, timeout) -> list[dict]`; the smoke command `mod_event`.
+- Produces: `spy::events::Hub() -> spy::EventHub&`, `spy::events::Push(std::string_view, json) noexcept`, `spy::events::FormRefJson(const RE::TESForm*) -> json`, `spy::events::RegisterSinks() -> void` (`Events.h`; called at `kDataLoaded` in the order `GetDispatcher` → `RegisterSinks` → `host::Start`), `void spy::events::NoteSinkError(const char* sink, const char* what) noexcept`, `void spy::events::NoteFirstEvent(const char* event) noexcept` (Task 40 uses both); `spy::events::RegisterWorldSinks() -> void` is **declared** here and defined by Task 40 (`EventSinksWorld.cpp`); `pv::BuildClassTable() -> void`, `pv::DescribeFormForEvent(const RE::TESForm*) -> FormRef` (VM-free; safe on any engine thread); the log line `events: sinks registered (batch 1)`; `game.state` `diagnostics` gains `event_consumers`, `event_subscriptions`, `events_dropped_total`, `events_suppressed_total` (this task owns them; Tasks 40, 42 and 56 read them and never add them again); `death`/`dying` `killer` filled from `TESDeathEvent::actorKiller` (`null` when the engine gives none); `livetest/support.py` `subscribe(sock, event, filter=None, req_id=1, max_queue=None) -> int`, `read_event(sock, timeout) -> dict | None`, `read_events(sock, n, timeout) -> list[dict]`; the smoke command `mod_event`.
 
 Rules this task implements:
 - **Sinks never call into the VM, never take the GIL, never block.** A sink checks `Hub().Wants(name)` first and returns at once when nothing is subscribed; otherwise it copies form ids and plain values, builds the event's `json`, and calls `events::Push`. `pv::DescribeForm` is **not** usable from a sink: its `ScriptClassOf` calls `IVirtualMachine::GetScriptObjectType`, and a sink can run on a VM thread (S5: sinks run on varying engine threads). Sinks use `pv::DescribeFormForEvent`, which reads the form id, the data handler's load order (`SourceFile`) and the base object only, and takes the Papyrus class name from a table built once inside an SKSE task (`pv::BuildClassTable`, same `canonical_script_name` spelling as R56, so `type` matches what calls return). Until the table is built (the first SKSE task after `kDataLoaded`, at the main menu, before any gameplay event) the type is `"Form"`.
@@ -474,25 +474,40 @@ def frames_for(frames: list[dict], sub: int) -> list[dict]:
 
 
 def test_death_and_dying_with_victim_filter(game, session):
+    """Kill(player): both frames carry killer = the player (index Contracts: Task 39 fills killer from
+    TESDeathEvent::actorKiller; Tasks 53-55 rely on it). A null killer here is a sink defect, never loosened."""
     a, b = spawn(game, CHICKEN, 600.0), spawn(game, CHICKEN, -600.0)
     s = raw_connect(session)
     try:
         dying = subscribe(s, "dying", {"victim": [to_wire(a)]}, req_id=1)
         death = subscribe(s, "death", {"victim": [to_wire(a)]}, req_id=2)
         epoch = rpc(s, "game.state", req_id=3)["result"]["epoch"]
-        game.call_method(a, "Actor", "Kill", None)
-        game.call_method(b, "Actor", "Kill", None)  # filtered out: must never arrive
+        game.call_method(a, "Actor", "Kill", PLAYER)
+        game.call_method(b, "Actor", "Kill", PLAYER)  # filtered out: must never arrive
         frames = read_events(s, 2, timeout=10.0) + read_events(s, 5, timeout=3.0)
         assert [f["event"] for f in frames_for(frames, dying)] == ["dying"], frames
         assert [f["event"] for f in frames_for(frames, death)] == ["death"], frames
         for f in frames:
             assert f["type"] == "event" and f["seq"] == 1 and f["epoch"] == epoch
             assert f["data"]["victim"]["form_id"] == a.form_id and f["data"]["victim"]["type"] == "Actor"
-            assert f["data"]["killer"] is None  # Kill(None)
+            assert f["data"]["killer"] is not None and f["data"]["killer"]["form_id"] == PLAYER.form_id  # Kill(player)
             assert "dropped" not in f and "suppressed" not in f
     finally:
         s.close()
         cleanup(game, a, b)
+
+
+def test_death_killer_is_null_for_kill_none(game, session):
+    c = spawn(game, CHICKEN, 600.0)
+    s = raw_connect(session)
+    try:
+        death = subscribe(s, "death", {"victim": [to_wire(c)]}, req_id=1)
+        game.call_method(c, "Actor", "Kill", None)
+        frames = frames_for(read_events(s, 1, timeout=10.0), death)
+        assert len(frames) == 1 and frames[0]["data"]["killer"] is None, frames  # Kill(None): no killer
+    finally:
+        s.close()
+        cleanup(game, c)
 
 
 def test_quest_start_stage_stop(game):
@@ -613,7 +628,7 @@ grep "events: " "$SKSE_LOG_DIR/Skython.log"
 grep '\[error\]' "$SKSE_LOG_DIR/Skython.log" | grep -v livetest_broken || echo "no unexpected errors"
 tools/box/box_stop.sh
 ```
-Expected: `test_m2_events_batch1.py` 8 passed; the M1 suite still 77 passed with only its known skips (no regression from the hub); the `grep "events: "` shows `class table built (... form types; Actor = Actor)`, `sinks registered (batch 1)` and one `first <event> event on thread ...` line per event name raised; no `sink threw` line; `no unexpected errors`. A skip whose reason is `live test: set SKYTHON_LIVE=1` is a failure.
+Expected: `test_m2_events_batch1.py` 9 passed; the M1 suite still 77 passed with only its known skips (no regression from the hub); the `grep "events: "` shows `class table built (... form types; Actor = Actor)`, `sinks registered (batch 1)` and one `first <event> event on thread ...` line per event name raised; no `sink threw` line; `no unexpected errors`. A skip whose reason is `live test: set SKYTHON_LIVE=1` is a failure.
 
 - [ ] **Step 10: Record**
 

@@ -4,7 +4,7 @@ Three event examples for mod authors, in the style of the M1 examples (one Pytho
 
 > Part of the [Skython M1.5/M2 plan](README.md). Read the index's **Global Constraints** (general-purpose naming), **Contracts** (Python `skython.events`, events table, Papyrus `Skython.psc`) first. Steps use checkbox (`- [ ]`) syntax.
 
-> **Gate:** start only after Task 46 (`Skython.Send`) and Task 53 (events live on the ESP) are done.
+> **Gate:** start only after Task 46 (`Skython.Send`), Task 50 (`livetest/scripts/_testesp.py` and the `sys.path` line in `livetest/conftest.py`) and Task 53 (events live on the ESP) are done. The live step needs owner decision 7 (Gate 0) accepted (index **Owner decisions**).
 >
 > **Runs on:** Linux (examples, offline tests), then the Windows box + game (each example through the bridge and in-process).
 >
@@ -14,11 +14,11 @@ Three event examples for mod authors, in the style of the M1 examples (one Pytho
 - Create: `examples/kill_tracker.py`, `examples/papyrus_to_python.py`, `examples/quest_stage_notifier.py`
 - Modify: `examples/README.md` (three table rows, an events paragraph, the Status paragraph)
 - Create: `python/tests/test_examples.py` (offline: the handlers fed synthetic events through a stub game)
-- Create: `livetest/test_m2_examples.py` (live: each example through the bridge; the deployed copies in-process). Not in the index's File Structure: it is this task's live check.
+- Create: `livetest/test_m2_examples.py` (live: each example through the bridge; the deployed copies in-process).
 - Modify: `spikes/RESULTS.md` (Task 54 entry; the three deployed scripts on the removal list)
 
 **Interfaces:**
-- Consumes: Task 36 `Game.on_death(actor | None, fn)`, `Game.on_channel(channel, fn)`, `Game.on_quest_stage(quest, fn, *, stage=None)`, `skython.events.Event(name, sub, seq, epoch, data, dropped=0, suppressed=0)`; events table data: `death` `{victim, killer?}` (Task 39 fills `killer` for `Actor.Kill(akKiller)`; the live kill-tracker check depends on it), `channel` `{channel, payload, truncated}`, `quest_stage` `{quest, stage}`; Task 46 `Skython.Send(string channel, string payload)` and `max_channel_payload_bytes` = 65536; Task 50 `_testesp` (`quest`, `PLAYER`, `discover`); v1 `Game.resolve(editor_id=...)`, `call`, `call_method`, `wait_ready`; `support.python_log_text`.
+- Consumes: Task 36 `Game.on_death(actor | None, fn)`, `Game.on_channel(channel, fn)`, `Game.on_quest_stage(quest, fn, *, stage=None)`, `skython.events.Event(name, sub, seq, epoch, data, dropped=0, suppressed=0)`; events table data: `death` `{victim, killer?}` (Task 39 fills `killer` from `TESDeathEvent::actorKiller`: for `Actor.Kill(player)` it is the player's form reference, form id `0x14` (index Contracts); the live kill-tracker check relies on it, and a `null` killer there is a Task 39 defect, never loosened here), `channel` `{channel, payload, truncated}`, `quest_stage` `{quest, stage}`; Task 46 `Skython.Send(string channel, string payload)` and `max_channel_payload_bytes` = 65536; Task 50 `_testesp` (`quest(game) -> Form`, `PLAYER`); v1 `Game.resolve(editor_id=...)`, `call`, `call_method`, `wait_ready`; `support.python_log_text`.
 - Produces: the three examples, each exposing a testable class (`kill_tracker.KillTracker(game)` with `on_death(event)`, `total`, `by_name`, `summary() -> str`; `papyrus_to_python.Reporter(game)` with `on_message(event)`, `counts`; `quest_stage_notifier.Notifier(game)` with `watch(editor_id) -> Form`, `on_stage(event)`, `watched`) and a module global for the live check (`_tracker`, `_reporter`, `_notifier`).
 
 - [ ] **Step 1: Write the offline tests first**

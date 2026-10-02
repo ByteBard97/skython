@@ -4,11 +4,11 @@
 >
 > **Runs on:** Linux (Steps 1-9, offline plus one read-only ssh check), then the Windows box (Steps 10-13, only after Gate 0 is open). The game is **not** launched in this task.
 >
-> **Gate 0:** Steps 1-9 do not need it (README: "the offline parts of 45-46 do not" wait). Step 10 is the gate: until `OWNER-DECISIONS-2026-10-02.md` decision 7 is recorded as accepted, no step writes `Data\SkythonTest.esp`, any new `Data\Scripts\*.pex`, `plugins.txt`, or even installs the new box scripts. If it is not accepted, commit Steps 1-9 and STOP.
+> **Gate 0:** Steps 1-9 do not need it (README Gates: "the offline parts of 45-48 do not" wait). Step 10 is the gate (README **Owner decisions** table, decision 7: a STOP gate, never assumed): until `OWNER-DECISIONS-2026-10-02.md` decision 7 is recorded as accepted, no step writes `Data\SkythonTest.esp`, any new `Data\Scripts\*.pex`, `plugins.txt`, or even installs the new box scripts. If it is not accepted, commit Steps 1-9 and STOP.
 >
 > **STOP and ask the owner (do not improvise) if:** decision 7 is not accepted, or accepted with a list other than the one below; the verified `plugins.txt` path (Step 2) is not `C:\Users\geoff\AppData\Local\Skyrim Special Edition\plugins.txt`, or more than one `plugins.txt` could be the one the loader reads; `box_plugins.sh backup` prints `BACKUP_DIFFERS` (the owner changed the load order after the backup was taken: the owner may approve replacing the backup with the current file; only with that sign-off run `source tools/box/box_env.sh; bssh "Copy-Item -LiteralPath 'C:\Users\geoff\AppData\Local\Skyrim Special Edition\plugins.txt' -Destination 'C:\dev\skyrim-python-box\plugins.txt.bak' -Force"` once, then `box_plugins.sh backup` must print `BACKUP_SAME`; nothing is deleted); `plugins.txt` is ever neither the backup nor the backup plus our line (exit 3); the restored file is not byte-identical to the backup; the build box does not answer ssh within 10 s.
 
-**Why.** M1.5 needs a test plugin and its scripts in the game. Until now our tools could write only under `Data\SKSE\Plugins` plus `Data\Scripts\SkyrimPython.pex`. Owner decision 7 allows exactly: `Data\SkythonTest.esp`; five named `Data\Scripts\*.pex`; one added line `*SkythonTest.esp` in the box's `plugins.txt`, with a backup taken before the first change and restored at the end of every box session that added it. This task teaches `box_deploy.sh`/`place.ps1` that list and nothing more, and adds `box_plugins.sh` + `win/plugins.ps1` for `plugins.txt`. Offline tests pin every refusal; one live check (no game) proves backup → add → restore is byte-exact on the box.
+**Why.** M1.5 needs a test plugin and its scripts in the game. Until now our tools could write only under `Data\SKSE\Plugins` plus `Data\Scripts\SkyrimPython.pex`. Owner decision 7 allows exactly: `Data\SkythonTest.esp`; six named `Data\Scripts\*.pex` (`Skython.pex`, `SkythonTestQuestBase.pex`, `SkythonTestQuest.pex`, `SkythonTestAlias.pex`, `SkythonTestLocationAlias.pex`, `QF_SkythonTestQuest_01000800.pex`); one added line `*SkythonTest.esp` in the box's `plugins.txt`, with a backup taken before the first change and restored at the end of every box session that added it. This task teaches `box_deploy.sh`/`place.ps1` that list and nothing more, and adds `box_plugins.sh` + `win/plugins.ps1` for `plugins.txt`. Offline tests pin every refusal; one live check (no game) proves backup → add → restore is byte-exact on the box.
 
 **Files:**
 - Modify: `tools/box/box_deploy.sh` (`--esp`, `--test-pex`), `tools/box/win/place.ps1` (single-file allow-list), `tools/box/box_quit.sh`, `tools/box/box_stop.sh` (restore after the game ends), `tools/box/test_box_tools.sh` (block 6j and two updated pinned strings)
@@ -18,12 +18,12 @@
 
 **Interfaces:**
 - Consumes: the v1 box harness (`box_env.sh`'s `bps`, `b64`, `box_die`, `BOX_OFFLINE`, `BOX_SSH_STUB`; `put_file`/`check_target` in `box_deploy.sh`; `box_setup.sh`).
-- Produces (Tasks 46-53 use exactly these):
+- Produces (Tasks 46-56 use exactly these):
   - `tools/box/box_deploy.sh --esp path/to/SkythonTest.esp` → `C:\ChronicleDev\Stock Game\Data\SkythonTest.esp` (basename must be `SkythonTest.esp`).
-  - `tools/box/box_deploy.sh --test-pex FILE.pex...` → `...\Data\Scripts\<basename>` for basenames in exactly `Skython.pex`, `SkythonTestQuestBase.pex`, `SkythonTestQuest.pex`, `SkythonTestAlias.pex`, `QF_SkythonTestQuest_01000800.pex` (case-sensitive; a name twice is refused). Both go through `put_file`: placed only if absent or already in `out/box-deployed.txt`, so a later task's rebuild overwrites our own earlier copy (Task 48 over Task 47's spike files) and never anyone else's.
+  - `tools/box/box_deploy.sh --test-pex FILE.pex...` → `...\Data\Scripts\<basename>` for basenames in exactly `Skython.pex`, `SkythonTestQuestBase.pex`, `SkythonTestQuest.pex`, `SkythonTestAlias.pex`, `SkythonTestLocationAlias.pex`, `QF_SkythonTestQuest_01000800.pex` (case-sensitive; a name twice is refused). Both go through `put_file`: placed only if absent or already in `out/box-deployed.txt`, so a later task's rebuild overwrites our own earlier copy (Task 48 over Task 47's spike files) and never anyone else's.
   - `tools/box/box_plugins.sh backup | show | add | restore | restore-if-added` and the offline `compose BAK_FILE` / `classify CUR_FILE BAK_FILE` (`BACKUP` | `ADDED` | `OTHER`). `add` and `restore` refuse while the game runs; anything but `BACKUP`/`ADDED` is exit 3 (STOP). State in `$SKYTHON_STATE/box-plugins.state` (`added ...` / `restored ...`).
   - `box_quit.sh` (after `EXITED`) and `box_stop.sh` (after the game is gone) run `box_plugins.sh restore-if-added`; a failed restore makes them exit 3.
-  - **Box session rule for later tasks:** `tools/box/box_plugins.sh add` before `tools/box/box_launch.sh` whenever the ESP must load; the quit/stop tools put the backup back. A save made with the ESP (`skythonbase`, Task 49) must only be loaded with the line added.
+  - **Box session rule for later tasks (README Global Constraints, "`plugins.txt` around launches"):** `tools/box/box_plugins.sh add` before every `tools/box/box_launch.sh` that loads `skythonbase` or otherwise needs the ESP; the quit/stop tools put the backup back. A save made with the ESP (`skythonbase`, Task 49) must only be loaded with the line added.
 
 - [ ] **Step 1: Read the owner's answer to decision 7 (record it; do not act on it yet)**
 
@@ -92,12 +92,12 @@ git apply <<'PATCH'
 @@ -283,4 +285,113 @@
    && bad "the old 'reads as UNCHANGED' caveat is still documented" || ok "no stale 'reads as UNCHANGED' caveat"
  
-+# 6j. Gate 0 (Task 45, owner decision 7): exactly Data\SkythonTest.esp, exactly five Data\Scripts\*.pex, and
++# 6j. Gate 0 (Task 45, owner decision 7): exactly Data\SkythonTest.esp, exactly six Data\Scripts\*.pex, and
 +#     plugins.txt changed only by adding *SkythonTest.esp and putting the backup back (no ssh in print/local modes).
 +D='C:\ChronicleDev\Stock Game\Data'
 +gd="$(mktemp -d)"; mkdir -p "$gd/sub"
 +for n in SkythonTest.esp Other.esp Skython.pex SkythonTestQuestBase.pex SkythonTestQuest.pex SkythonTestAlias.pex \
-+         QF_SkythonTestQuest_01000800.pex Other.pex skython.pex SkyrimPython.pex Skython.psc; do : > "$gd/$n"; done
++         SkythonTestLocationAlias.pex QF_SkythonTestQuest_01000800.pex Other.pex skython.pex SkyrimPython.pex Skython.psc; do : > "$gd/$n"; done
 +: > "$gd/sub/Skython.pex"
 +t="$(BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --esp "$gd/SkythonTest.esp" 2>&1)"
 +[ "$t" = "$D\SkythonTest.esp" ] && ok "--esp target is Data\\SkythonTest.esp" || bad "--esp target: '$t'"
@@ -105,10 +105,10 @@ git apply <<'PATCH'
 +  # shellcheck disable=SC2086
 +  if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --esp $a >/dev/null 2>&1; then bad "--esp accepted: $a"; else ok "--esp refuses: ${a//$gd\//}"; fi
 +done
-+five=(Skython.pex SkythonTestQuestBase.pex SkythonTestQuest.pex SkythonTestAlias.pex QF_SkythonTestQuest_01000800.pex)
-+t="$(BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --test-pex "${five[@]/#/$gd/}" 2>&1)"
-+want="$(for n in "${five[@]}"; do printf '%s\n' "$D\Scripts\\$n"; done)"
-+[ "$t" = "$want" ] && ok "--test-pex: the five names resolve to Data\\Scripts\\<name>" || { bad "--test-pex targets:"; echo "$t"; }
++six=(Skython.pex SkythonTestQuestBase.pex SkythonTestQuest.pex SkythonTestAlias.pex SkythonTestLocationAlias.pex QF_SkythonTestQuest_01000800.pex)
++t="$(BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --test-pex "${six[@]/#/$gd/}" 2>&1)"
++want="$(for n in "${six[@]}"; do printf '%s\n' "$D\Scripts\\$n"; done)"
++[ "$t" = "$want" ] && ok "--test-pex: the six names resolve to Data\\Scripts\\<name>" || { bad "--test-pex targets:"; echo "$t"; }
 +t="$(BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --test-pex "$gd/sub/../sub/Skython.pex" 2>&1)"
 +[ "$t" = "$D\Scripts\Skython.pex" ] && ok "--test-pex: the local path never reaches the destination (basename only)" || bad "--test-pex local path: '$t'"
 +for a in Other.pex skython.pex SkyrimPython.pex Skython.psc missing.pex "Skython.pex Skython.pex" "Skython.pex Other.pex"; do
@@ -116,15 +116,15 @@ git apply <<'PATCH'
 +  if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --test-pex "${args[@]}" >/dev/null 2>&1; then bad "--test-pex accepted: $a"; else ok "--test-pex refuses: $a"; fi
 +done
 +if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --test-pex >/dev/null 2>&1; then bad "--test-pex accepted no file"; else ok "--test-pex refuses no file"; fi
-+grep -qE 'TEST_PEX_NAMES=\(Skython\.pex SkythonTestQuestBase\.pex SkythonTestQuest\.pex SkythonTestAlias\.pex QF_SkythonTestQuest_01000800\.pex\)$' "$B/box_deploy.sh" \
-+  && ok "box_deploy.sh TEST_PEX_NAMES is exactly the five names" || bad "box_deploy.sh TEST_PEX_NAMES"
++grep -qE 'TEST_PEX_NAMES=\(Skython\.pex SkythonTestQuestBase\.pex SkythonTestQuest\.pex SkythonTestAlias\.pex SkythonTestLocationAlias\.pex QF_SkythonTestQuest_01000800\.pex\)$' "$B/box_deploy.sh" \
++  && ok "box_deploy.sh TEST_PEX_NAMES is exactly the six names" || bad "box_deploy.sh TEST_PEX_NAMES"
 +grep -qE 'put_file "\$ESP" "\$ESP_DEST"' "$B/box_deploy.sh" && grep -qE 'put_file "\$\{TPEX\[\$i\]\}" "\$\{TPEX_DEST\[\$i\]\}"' "$B/box_deploy.sh" \
 +  && ok "--esp and --test-pex go through put_file (absent or ours; recorded)" || bad "--esp/--test-pex do not use put_file"
 +pl="$B/win/place.ps1"
 +grep -qF "\$EspDest = 'C:\ChronicleDev\Stock Game\Data\SkythonTest.esp'" "$pl" && ok "place.ps1 lists Data\\SkythonTest.esp" || bad "place.ps1 EspDest"
-+all5=1; for n in "${five[@]}"; do grep -qF "'C:\ChronicleDev\Stock Game\Data\Scripts\\$n'" "$pl" || all5=0; done
-+[ "$(grep -cE "^  'C:\\\\ChronicleDev\\\\Stock Game\\\\Data\\\\Scripts\\\\[A-Za-z0-9_]+\.pex'[,)]?$" "$pl")" = 5 ] && [ "$all5" = 1 ] \
-+  && ok "place.ps1 TestPexDests: exactly the five Data\\Scripts names" || bad "place.ps1 TestPexDests is not exactly the five names"
++all6=1; for n in "${six[@]}"; do grep -qF "'C:\ChronicleDev\Stock Game\Data\Scripts\\$n'" "$pl" || all6=0; done
++[ "$(grep -cE "^  'C:\\\\ChronicleDev\\\\Stock Game\\\\Data\\\\Scripts\\\\[A-Za-z0-9_]+\.pex'[,)]?$" "$pl")" = 6 ] && [ "$all6" = 1 ] \
++  && ok "place.ps1 TestPexDests: exactly the six Data\\Scripts names" || bad "place.ps1 TestPexDests is not exactly the six names"
 +grep -qF '$Singles = @($PexDest, $EspDest) + $TestPexDests' "$pl" && grep -qF "if ((\$Singles -ccontains \$dest) -and \$Kind -ne 'file')" "$pl" \
 +  && ok "place.ps1: single files are compared exactly (-ccontains) and take one file each" || bad "place.ps1 single-file rule"
 +
@@ -216,14 +216,15 @@ Expected: `BOX TOOLS OFFLINE FAIL` with about 30 `FAIL` lines, among them `missi
 git apply <<'PATCH'
 --- a/tools/box/box_deploy.sh
 +++ b/tools/box/box_deploy.sh
-@@ -14,4 +14,9 @@
+@@ -14,4 +14,10 @@
  #                                                               own script, which keeps its name; the only
  #                                                               target outside Plugins; placed only if absent or ours)
 +#   tools/box/box_deploy.sh --esp path/to/SkythonTest.esp    -> exactly Data\SkythonTest.esp (owner decision 7, Gate 0;
 +#                                                               Task 45). Placed only if absent or ours.
 +#   tools/box/box_deploy.sh --test-pex FILE.pex...           -> Data\Scripts\<name> for names on the Gate 0 list only:
 +#                                                               Skython.pex, SkythonTestQuestBase.pex, SkythonTestQuest.pex,
-+#                                                               SkythonTestAlias.pex, QF_SkythonTestQuest_01000800.pex
++#                                                               SkythonTestAlias.pex, SkythonTestLocationAlias.pex,
++#                                                               QF_SkythonTestQuest_01000800.pex
  #   tools/box/box_deploy.sh --move REL NEWREL                -> moves Plugins\REL to Plugins\NEWREL (Task 26's startup
  #                                                               variants; Task 25 moves the spike DLL aside). REL must be
 @@ -19,5 +24,6 @@
@@ -237,8 +238,8 @@ git apply <<'PATCH'
 @@ -86,4 +92,7 @@
    return 1
  }
-+# Owner decision 7 (Gate 0): the only Papyrus scripts --test-pex places. These five names are the whole list.
-+TEST_PEX_NAMES=(Skython.pex SkythonTestQuestBase.pex SkythonTestQuest.pex SkythonTestAlias.pex QF_SkythonTestQuest_01000800.pex)
++# Owner decision 7 (Gate 0): the only Papyrus scripts --test-pex places. These six names are the whole list.
++TEST_PEX_NAMES=(Skython.pex SkythonTestQuestBase.pex SkythonTestQuest.pex SkythonTestAlias.pex SkythonTestLocationAlias.pex QF_SkythonTestQuest_01000800.pex)
 +test_pex_ok() { local n; for n in "${TEST_PEX_NAMES[@]}"; do [ "$1" = "$n" ] && return 0; done; return 1; }
  plugins_rel() {  # plugins_rel <REL>: the Windows path under Plugins, or die
    local r="${1//\//\\}"
@@ -287,13 +288,13 @@ If `git apply` reports a conflict because an earlier task (41-44) touched these 
 git apply <<'PATCH'
 --- a/tools/box/win/place.ps1
 +++ b/tools/box/win/place.ps1
-@@ -6,17 +6,27 @@
+@@ -6,17 +6,28 @@
  #   move:   Move-Item Src to Dest (no -Force), both inside Data\SKSE\Plugins; refuses when Src is absent or Dest
  #           exists; prints "MOVED". Used for Task 26's startup variants (moved, never deleted, moved back after).
 -# Only box_deploy.sh calls this, for paths under the game's Data\SKSE\Plugins and for Data\Scripts\SkyrimPython.pex.
 +# Only box_deploy.sh calls this, for paths under the game's Data\SKSE\Plugins and for the single files in $Singles:
 +# Data\Scripts\SkyrimPython.pex (Task 7) and, under owner decision 7 (Gate 0, Task 45), Data\SkythonTest.esp and
-+# exactly five Data\Scripts\*.pex. Each single file takes -Kind file only.
++# exactly six Data\Scripts\*.pex. Each single file takes -Kind file only.
  param([string]$Mode, [string]$DestB64, [string]$SrcB64 = '', [string]$Kind = 'file')
  $ErrorActionPreference = 'Stop'
  function From-B64([string]$s) { return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($s)) }
@@ -309,6 +310,7 @@ git apply <<'PATCH'
 +  'C:\ChronicleDev\Stock Game\Data\Scripts\SkythonTestQuestBase.pex',
 +  'C:\ChronicleDev\Stock Game\Data\Scripts\SkythonTestQuest.pex',
 +  'C:\ChronicleDev\Stock Game\Data\Scripts\SkythonTestAlias.pex',
++  'C:\ChronicleDev\Stock Game\Data\Scripts\SkythonTestLocationAlias.pex',
 +  'C:\ChronicleDev\Stock Game\Data\Scripts\QF_SkythonTestQuest_01000800.pex')
 +$Singles = @($PexDest, $EspDest) + $TestPexDests
  $root = 'C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\'
@@ -560,7 +562,7 @@ exit "$rc"
 ```bash
 bash tools/box/test_box_tools.sh | grep -E '^FAIL|BOX TOOLS|6j|--esp|--test-pex|plugins|compose|classify|restore'
 ```
-Expected: no `FAIL`; the new lines include `ok   --esp target is Data\SkythonTest.esp`, `ok   --test-pex: the five names resolve to Data\Scripts\<name>`, `ok   --test-pex refuses: skython.pex`, `ok   place.ps1 TestPexDests: exactly the five Data\Scripts names`, `ok   compose case 2: backup + [CRLF] + *SkythonTest.esp CRLF`, `ok   classify reordered -> OTHER`, `ok   box_quit.sh after EXITED restores the backup (state -> restored)`, `ok   add: plugins.txt differs from the backup -> STOP, nothing written`; last lines `ok   no ssh/scp call reached PATH` and `BOX TOOLS OFFLINE PASS`. Also check the tests bite: change `SkythonTestAlias.pex` to `SkythonTestAliasX.pex` in `place.ps1`'s list, rerun, see `FAIL place.ps1 TestPexDests is not exactly the five names`, then undo the change (`git diff tools/box/win/place.ps1` shows only Step 5's patch again).
+Expected: no `FAIL`; the new lines include `ok   --esp target is Data\SkythonTest.esp`, `ok   --test-pex: the six names resolve to Data\Scripts\<name>`, `ok   --test-pex refuses: skython.pex`, `ok   place.ps1 TestPexDests: exactly the six Data\Scripts names`, `ok   compose case 2: backup + [CRLF] + *SkythonTest.esp CRLF`, `ok   classify reordered -> OTHER`, `ok   box_quit.sh after EXITED restores the backup (state -> restored)`, `ok   add: plugins.txt differs from the backup -> STOP, nothing written`; last lines `ok   no ssh/scp call reached PATH` and `BOX TOOLS OFFLINE PASS`. Also check the tests bite: change `SkythonTestAlias.pex` to `SkythonTestAliasX.pex` in `place.ps1`'s list, rerun, see `FAIL place.ps1 TestPexDests is not exactly the six names`, then undo the change (`git diff tools/box/win/place.ps1` shows only Step 5's patch again).
 
 - [ ] **Step 9: Commit**
 

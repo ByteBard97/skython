@@ -6,20 +6,22 @@
 >
 > **STOP and ask the owner (do not improvise) if:** a new save name already exists; a save's `.ess` does not appear within 30 s; the game crashes or hangs on any save or load; the plain alias `SPY_PLAIN_QUEST`/`SPY_PLAIN_ALIAS` is already bound on a fresh `s4test` load (its `Alias.GetOwningQuest` does not answer `type_mismatch`); using an old-epoch reference crashes the game (that is the exact failure Review Focus 5 forbids); the game does not reach the main menu within 10 minutes; the box does not answer `ssh` within 10 s.
 >
+> **Depends on:** Task 38 (`plugin/config/variants/trace-timing.ini`), Task 39 (the diagnostics keys), Task 40 (events, `support.py` helpers), Task 41 (save/load, helpers).
+>
 > **Saves:** this task makes exactly three new throwaway saves per run, `skython_t42a_<ts>`, `skython_t42b_<ts>` and `skython_t42bind_<ts>` (`new_save_name`, count 0 first, polled to 1 after), and loads only those and `s4test`. Never `save` over anything. All three go on the owner's removal list. End games with `tools/box/box_stop.sh`.
 >
 > **Record only for the carry-forward:** the PackHandle/GetAlias measurement changes no behaviour. R45 stands whatever it shows: aliases are never bound on demand, alias arguments still bind only an object already bound to the alias.
 
 **Files:**
 - Modify: `plugin/src/PapyrusValues.cpp` (`values: <target> bound before call: <bool>`, dev only)
-- Create (if Task 38 did not): `plugin/config/variants/trace-timing.ini`
+- Use (Task 38 owns it): `plugin/config/variants/trace-timing.ini`
 - Create: `livetest/test_m2_lifecycle.py`
 - Create: `livetest/results/binding_persistence.json` (written by the test)
 - Modify: `livetest/results/new_saves.txt` (appended by `new_save_name`), `spikes/RESULTS.md` (append)
 
 **Interfaces:**
-- Consumes: Task 33 `Config::trace_timing` (`settings::Get().trace_timing`); Task 36 `Game.on`, `Game.on_game_loaded`, `Game.save`, `Game.load`, `Event.suppressed`, `Event.epoch`; Task 39 `game.state` diagnostics `events_suppressed_total`; Task 40 events `menu_open`, `cell_attach`, `activate`, `game_loaded`, and `livetest/support.py` `PLAYER`, `translate_player`; Task 41 `livetest/support.py` `new_save_name(tag)`, `wait_save_file(name)`, `load_save(game, name)`, `box_save_count`; v1 `pv::ResolveTarget` (`PapyrusValues.cpp`), `values.Form`/`Alias`, `errors.StaleReference`/`NotFound`/`TypeMismatch`, `livetest/s4test.env` (`SPY_S4_REF`, `SPY_PLAIN_QUEST`, `SPY_PLAIN_ALIAS`), `support.log_text`, `support.spy_env`.
-- Produces: the live proof of spec 8's save/load lifecycle on throwaway saves (Review Focus 3 and 5); the dev log line `values: <target> bound before call: <true|false>` (once per target per epoch, only with `trace_timing = true`; Task 44 and later probes may read it); `plugin/config/variants/trace-timing.ini` (the dev ini with `trace_timing = true`; Task 44 uses it); `livetest/results/binding_persistence.json`; RESULTS entries for the owner question from Task 29.
+- Consumes: Task 38 `plugin/config/variants/trace-timing.ini` (the dev ini with `trace_timing = true`; this task only checks and deploys it); Task 33 `Config::trace_timing` (`settings::Get().trace_timing`); Task 36 `Game.on`, `Game.on_game_loaded`, `Game.save`, `Game.load`, `Event.suppressed`, `Event.epoch`; Task 39 `game.state` diagnostics `events_suppressed_total` (one of the four event-hub keys Task 39 owns; this task adds none); Task 40 events `menu_open`, `cell_attach`, `activate`, `game_loaded`, and `livetest/support.py` `PLAYER`, `translate_player`; Task 41 `livetest/support.py` `new_save_name(tag)`, `wait_save_file(name)`, `load_save(game, name)`, `box_save_count`; v1 `pv::ResolveTarget` (`PapyrusValues.cpp`), `values.Form`/`Alias`, `errors.StaleReference`/`NotFound`/`TypeMismatch`, `livetest/s4test.env` (`SPY_S4_REF`, `SPY_PLAIN_QUEST`, `SPY_PLAIN_ALIAS`), `support.log_text`, `support.spy_env`.
+- Produces: the live proof of spec 8's save/load lifecycle on throwaway saves (Review Focus 3 and 5); the dev log line `values: <target> bound before call: <true|false>` (once per target per epoch, only with `trace_timing = true`; Task 44 and later probes may read it); `livetest/results/binding_persistence.json`; RESULTS entries for the owner question from Task 29.
 
 - [ ] **Step 1: The dev-only binding log in `ResolveTarget`**
 
@@ -53,9 +55,9 @@ with
 
 - [ ] **Step 2: The trace-timing variant ini**
 
-If `plugin/config/variants/trace-timing.ini` does not exist (Task 38 may have made it), create it from the dev ini and check it:
+Task 38 created `plugin/config/variants/trace-timing.ini`; this task does not create or edit it. Check it is there and differs from the dev ini only in `trace_timing` (missing → STOP: Task 38 is not done):
 ```bash
-test -f plugin/config/variants/trace-timing.ini || sed 's/^trace_timing = false$/trace_timing = true/' plugin/config/Skython.dev.ini > plugin/config/variants/trace-timing.ini
+test -f plugin/config/variants/trace-timing.ini || echo "STOP: no trace-timing.ini (Task 38 owns it)"
 grep -c '^trace_timing = true$' plugin/config/variants/trace-timing.ini     # 1
 diff plugin/config/Skython.dev.ini plugin/config/variants/trace-timing.ini  # exactly the trace_timing line differs
 ```
@@ -258,7 +260,7 @@ Append to `spikes/RESULTS.md`: `**Task 42, save/load lifecycle and binding persi
 - [ ] **Step 7: Commit**
 
 ```bash
-git add plugin/src/PapyrusValues.cpp plugin/config/variants/trace-timing.ini livetest/test_m2_lifecycle.py \
+git add plugin/src/PapyrusValues.cpp livetest/test_m2_lifecycle.py \
   livetest/results/binding_persistence.json livetest/results/new_saves.txt spikes/RESULTS.md
 git commit -m "test(live): save/load lifecycle on throwaway saves and the alias binding persistence measurement"
 ```

@@ -2,20 +2,20 @@
 
 Closes the plan: the README describes events, `game.save`/`game.load`, script settings and console echo, the test ESP for developers and the limits that stand (R45, R57/R58, object-array arguments); `PROTOCOL.md` gets a final consistency check; `spikes/RESULTS.md` gets an M2 summary and the consolidated removal list; the spec's text uses the shipped event names (and, only if the owner accepted decision 8, the generic acceptance framing); `docs/PINS.md` lists the new pinned artefacts; one final full live run; then the local annotated tag `m2`, never pushed.
 
-> Part of the [Skython M1.5/M2 plan](README.md). Read the index's **Global Constraints**, **Contracts** (events table and the name mapping under it) and **Gates** first. Steps use checkbox (`- [ ]`) syntax.
+> Part of the [Skython M1.5/M2 plan](README.md). Read the index's **Global Constraints**, **Owner decisions** (decision 8 gates Step 4's framing edits; decision 5: this task chooses no licence option), **Contracts** (events table and the name mapping under it, Test ESP) and **Gates** first. Steps use checkbox (`- [ ]`) syntax.
 
 > **Gate:** start only after Task 56 is done (and Tasks 33-55 before it), each with its RESULTS entry.
 >
 > **Runs on:** Linux (docs). Step 6 runs the game on the Windows box.
 >
-> **STOP and ask the owner (do not improvise) if:** any test fails in the final run, or skips for a reason other than the expected opt-ins listed in Step 6 (a `SKYTHON_LIVE` or missing `SPY_*` skip is a failure); `tools/gen_protocol.py --check` reports drift; a tracked build output (`SkythonTest.esp`, a `.pex`) is missing from git or differs from its recorded SHA-256 (Step 5); the tag `m2` already exists; owner decision 8 is unanswered (Step 4 then leaves the decision-8 edits out and says so in the report; that alone is not a STOP for the tag, but report it).
+> **STOP and ask the owner (do not improvise) if:** any test fails in the final run, or skips for a reason other than the expected opt-ins listed in Step 6 (a `SKYTHON_LIVE` or missing `SPY_*` skip is a failure); `tools/gen_protocol.py --check` reports drift; a tracked build output is missing from git, or `SkythonTest.esp` differs from its recorded SHA-256, or a `.pex` from its recorded stable hash (Step 5); the tag `m2` already exists; owner decision 8 has no recorded answer when Step 4 is reached (a STOP gate, index **Owner decisions**: the recommendation in `OWNER-DECISIONS-2026-10-02.md` is not an answer); a README or spec edit would choose a licence option for the DLLs (owner decision 5).
 
 **Files:**
 - Modify: `README.md`, `docs/specs/2026-09-30-skyrim-python-design.md`, `spikes/RESULTS.md`, `docs/PINS.md`
 - Check only (Task 33 owns them; report, do not edit): `protocol/PROTOCOL.md`, `protocol/protocol.json`, the generated files
 
 **Interfaces:**
-- Consumes: every RESULTS entry of Tasks 33-56 (Task 44's sink-detach outcome, Task 52's probe verdicts, Task 56's soak summary, every save and box file recorded); `livetest/results/soak.json`; `OWNER-DECISIONS-2026-10-02.md` (decision 8); the index's name mapping (spec 5 `game.loaded` → `game_loaded`; spec 4.6 "dying and death" → `dying`/`death`; one name per direction for equip/unequip, cell attach/detach, quest start/stop, menu open/close; "player location change" → `player_location`; "mod events" → `mod_event`; `Skython.Send` delivers `channel`).
+- Consumes: every RESULTS entry of Tasks 33-56 (Task 44's sink-detach outcome, Task 52's probe verdicts, Task 56's soak summary, every save and box file recorded); `livetest/results/soak.json`; the owner's recorded answer to decision 8 (the owner's reply, `.superpowers/sdd/README/progress.md`, or the controller's brief); the index's name mapping (spec 5 `game.loaded` → `game_loaded`; spec 4.6 "dying and death" → `dying`/`death`; one name per direction for equip/unequip, cell attach/detach, quest start/stop, menu open/close; "player location change" → `player_location`; "mod events" → `mod_event`; `Skython.Send` delivers `channel`).
 - Produces: the M2 README; spec draft 5; the RESULTS M2 summary and removal list; PINS entries; the local annotated tag `m2`.
 
 - [ ] **Step 1: README**
@@ -69,8 +69,8 @@ Each `on...` call returns a `Subscription`; `close()` it to stop (once `close()`
 - **Filters** are equality sets: `{"victim": [a, b]}` matches either; several fields must all match. Forms match by form id, strings ignoring case.
 - **A slow callback loses the oldest events, never the game's time.** Each subscription has its own queue (`max_queue=`, default 1024, at most 65536). When it is full the oldest waiting event is dropped and the next delivered event says how many (`event.dropped`; the gaps in `event.seq` are the same drops). The game never waits for Python.
 - **Loading screens:** events raised while a save loads are not queued, except `menu_open`/`menu_close`, `mod_event`, `channel` and the three game events; the subscription's next delivered event says how many were skipped (`event.suppressed`). `game_loaded` marks the end of the load.
-- **From Papyrus to Python:** `Skython.Send(string channel, string payload)` is a native global function of the Papyrus script `Skython` (`Data/Scripts/Skython.pex`; compile your scripts with `plugin/papyrus/Skython.psc` on the import path). A payload over 64 KiB is cut and `truncated` is then true. Channel names match ignoring case. See [`examples/papyrus_to_python.py`](examples/papyrus_to_python.py).
-- [[Task 44 outcome, one sentence: on FAIL "Event hooks stay registered for the whole session and do nothing while an event has no subscriber."; on PASS "An event's engine hook is removed while nobody subscribes to it and restored on the next subscription."]]
+- **From Papyrus to Python:** `Skython.Send(string channel, string payload)` is a native global function of the Papyrus script `Skython` (`Data/Scripts/Skython.pex`; compile your scripts with `plugin/papyrus/Skython.psc` on the import path). A payload over 64 KiB is cut and `truncated` is then true. A channel name is 1 to 256 bytes: an empty or longer one drops the call (one warning in `Skython.log`), it is never cut. Channel names match ignoring case. See [`examples/papyrus_to_python.py`](examples/papyrus_to_python.py).
+- [[Task 44 outcome: write exactly one of these two sentences, chosen by Task 44's RESULTS verdict. Probe FAIL (skip-only sinks): "Event hooks stay registered for the whole session and do nothing while an event has no subscriber." Probe PASS (attach on demand): "An event's engine hook is removed while nobody subscribes to it and restored on the next subscription; an event raised in the frame before that restore is not seen."]]
 
 ## Save and load
 
@@ -107,7 +107,7 @@ append to the **Properties.** bullet: ` Inherited properties work (tested on a s
 ```
 (g) In "Build and test", after the live-tests bullet add:
 ```markdown
-- Test plugin (development only, never shipped): `testesp/build.sh` rebuilds `testesp/SkythonTest.esp` with a small Mutagen program in `testesp/builder/` (Mutagen is GPL-3.0, so the builder is a separate development tool that is never distributed) and compiles the Papyrus sources with `tools/papyrus_compile.sh` (the Papyrus Compiler under Wine, headless); the SHA-256s of both outputs are in `docs/PINS.md`. On the test machine: `tools/box/box_deploy.sh --esp testesp/SkythonTest.esp` and `--test-pex` for its scripts, and `tools/box/box_plugins.sh add` (`plugins.txt` is backed up first and restored by `box_stop.sh`).
+- Test plugin (development only, never shipped): `testesp/build.sh` rebuilds `testesp/SkythonTest.esp` with a small Mutagen program in `testesp/builder/` (Mutagen is GPL-3.0-only, so the builder is a separate development tool that is never distributed) and compiles the Papyrus sources with `tools/papyrus_compile.sh` (the Papyrus Compiler under Wine, headless); `docs/PINS.md` holds the ESP's SHA-256 and each `.pex`'s stable hash (a `.pex` embeds compile times, user and machine, so its hash is taken with the times zeroed and matches only on the machine and account that built it). On the test machine: `tools/box/box_deploy.sh --esp testesp/SkythonTest.esp` and `--test-pex` for its scripts, and `tools/box/box_plugins.sh add` before each launch that needs the plugin (`plugins.txt` is backed up first and restored by `box_quit.sh`/`box_stop.sh`).
 - M1.5/M2 live tests start from the save `skythonbase` (in the test plugin's cell), which the `fresh_save` fixture loads: `SKYTHON_LIVE=1 uv run --project python pytest livetest/test_m2_*.py livetest/test_m15_*.py livetest/test_acceptance_scenario.py -q -rs`. The 30-minute soak is opt-in (`SPY_SOAK=1`); its last result is `livetest/results/soak.json`. The engine probes are written up in `docs/probes/`.
 ```
 Fill the one `[[...]]` from Task 44's RESULTS entry, then check:
@@ -148,13 +148,13 @@ Append to `spikes/RESULTS.md` (filled from the task entries, no bracket left):
 - Sink detach (Task 44): <PASS/FAIL, one line>. Console echo and script settings (Task 43): <one line>. Two-drain experiment (Task 38, record only): <one line>.
 - Test ESP (Tasks 45-49): built on Linux with Mutagen <version> and the headless Papyrus Compiler; `skythonbase` made. Own-script and alias arguments, LocationAlias (Task 50), property parent offset (Task 51): PASS. Probes (Task 52): 1 <verdict>, 2 <verdict>, 3 <verdict> (`docs/probes/`).
 - Acceptance (Task 55): <PASS through the bridge and in-process; owner decision 8: answer>. Examples (Task 54) live.
-- Final full run (Task 57 Step 6): <counts>.
+- Final full run (Task 57 Step 6): launch check <counts>; M1 suite on `s4test` <counts>; M1.5/M2 suite on `skythonbase` <counts>.
 
 ## Owner removal list (M1.5/M2 plan)
 
 Nothing here is removed without the owner's itemised yes.
 - Saves on the box: <every skython_* save named in Tasks 38-57, one per line>; `skythonbase.ess` (Task 49; keep while the live tests use it).
-- Box files: <every path from out/teardown-m2.txt this plan added: Data\SkythonTest.esp, the five .pex files, scripts\_testesp.py, scripts\livetest_events\, scripts\livetest_scenario\, scripts\livetest_settings\, the three example scripts, plugins.txt.bak>.
+- Box files: <every path from out/teardown-m2.txt this plan added: Data\SkythonTest.esp, the six .pex files (Skython.pex, SkythonTestQuestBase.pex, SkythonTestQuest.pex, SkythonTestAlias.pex, SkythonTestLocationAlias.pex, QF_SkythonTestQuest_01000800.pex), scripts\_testesp.py, scripts\livetest_events\, scripts\livetest_scenario\, scripts\livetest_settings\, the three example scripts, plugins.txt.bak>.
 ```
 The number of saves listed (excluding `skythonbase`) must equal `box_saves.sh count skython_` minus any `skython_*` save that existed before this plan (none expected); if not, find the missing name in the task entries before going on.
 
@@ -171,16 +171,16 @@ In `docs/specs/2026-09-30-skyrim-python-design.md`, make these replacements (eac
 2. `_skython.next_events` takes the consumer it drains (one per player script's `Game` and one per bridge connection); event frames carry `dropped` and `suppressed` counts (4.6).
 3. The v1 call surface lists the event helpers, `wait_for`, `save`, `load` and `settings` as shipped (4.7).
 ```
-(Add a fourth item only if decision 8 was accepted: `4. The v1 acceptance test is a generic scenario on the test ESP (8, 9); open question 5 is settled.`)
+(Add a fourth item only if decision 8 was accepted: `4. The v1 acceptance test is a generic scenario on the test ESP (4.6, 8, 9); open question 5 is settled.`)
 3. In 4.6, `A Python **event dispatch thread** blocks on \`_skython.next_events(timeout)\` with the GIL released and runs callbacks in order; a callback may make blocking game calls. Over the bridge, the same events are pushed as \`{event, sub, seq, epoch, data}\` frames.` → `A Python **event dispatch thread** per \`Game\` blocks on \`_skython.next_events(consumer, timeout)\` with the GIL released and runs callbacks in order; a callback may make blocking game calls. Over the bridge, the same events are pushed as \`{type: "event", event, sub, seq, epoch, data}\` frames, with \`dropped\` and \`suppressed\` counts when they are not zero.`
 4. In 4.6, `- **v1 events:** dying and death (from \`TESDeathEvent\`'s \`dead\` flag, exposed separately), hit, equip/unequip, container changed, cell attach/detach, quest stage, quest start/stop, player location change, activate, menu open/close, game loaded (the interactive signal), game saved, new game, and **mod events**.` → `- **v1 events:** \`dying\` and \`death\` (from \`TESDeathEvent\`'s \`dead\` flag, exposed separately), \`hit\`, \`equip\`/\`unequip\`, \`container_changed\`, \`cell_attach\`/\`cell_detach\`, \`quest_stage\`, \`quest_start\`/\`quest_stop\`, \`player_location\`, \`activate\`, \`menu_open\`/\`menu_close\`, \`game_loaded\` (the interactive signal), \`game_saved\`, \`new_game\`, \`mod_event\` and \`channel\`. Events raised during a load are suppressed except menus, \`mod_event\`, \`channel\` and the three game events (\`protocol/PROTOCOL.md\`).`
 5. In 4.6, `delivers \`{channel, payload}\` to subscribers of \`channel\`.` → `delivers a \`channel\` event \`{channel, payload, truncated}\` to subscribers of that channel.`
 6. In 4.7, `event helpers (\`game.on_death(actor, fn)\`, \`game.on_mod_event(name, fn)\`, \`game.on_channel(channel, fn)\`)` → `\`game.on(event, filter, fn)\` and helpers (\`on_death\`, \`on_dying\`, \`on_mod_event\`, \`on_channel\`, \`on_quest_stage\`, \`on_game_loaded\`), \`game.save(name)\`, \`game.load(name)\`, \`game.settings\``
 7. In 5, `` `game.loaded` fires at the interactive signal`` → `` the `game_loaded` event fires at the interactive signal``.
 
-Only if owner decision 8 was accepted (with the names it settled; below as proposed):
+Items 8-11 change spec sections 4.6, 8 and 9 and open question 5. First read the owner's recorded answer to decision 8: no recorded answer → STOP (Owner decisions); accepted → apply them with the names it settled (below as proposed); rejected → leave all four places as they are and apply only items 1-7:
 8. In 4.6, `This is how skyrim-dm's pre-authored dialogue fragments, quest stage fragments and trigger boxes report \`npc_told\`, \`npc_confronted\` and "location entered".` → `This is how a mod's dialogue fragments, quest stage fragments and trigger boxes report to Python.`
-9. In 8, the bullet starting `- **skyrim-dm acceptance test**, against the test ESP:` → `- **Generic acceptance scenario**, against the test ESP: one \`call_method\` of \`SkythonTestQuest.SetupScenario(npc, item, place, label)\` starts the quest, fills its aliases and sets and displays the objective; an item is placed; killing the target raises a death event, the quest reaches stage 100 and its stage fragment calls \`Skython.Send("skython_test", "stage_100")\`; the test reads the stage, objective state and alias fills back. Run once through the bridge and once in-process as a player script (\`livetest/test_acceptance_scenario.py\`). Consumers keep their own integration tests in their own repositories.`
+9. In 8, the bullet starting `- **skyrim-dm acceptance test**, against the test ESP:` → `- **Generic acceptance scenario**, against the test ESP: one \`call_method\` of \`SkythonTestQuest.SetupScenario(npc, item, place, label)\` starts the quest, fills its aliases and sets and displays the objective; an item is placed; killing the target (alias 0) raises a death event, the test ESP's death rule sets stage 100 and its stage fragment calls \`Skython.Send("skython_test", "stage_100")\`; the test reads the stage, objective state and alias fills back. Run once through the bridge and once in-process as a player script (\`livetest/test_acceptance_scenario.py\`). Consumers keep their own integration tests in their own repositories.`
 10. In 9, `**v1 = M0, M1, M1.5, M2, and the skyrim-dm acceptance test.**` → `**v1 = M0, M1, M1.5, M2, and the generic acceptance scenario.**`; in the M1.5 bullet `a quest script with \`SetupContract(...)\`` → `a quest script with \`SetupScenario(...)\`` and `Results to \`docs/probes/\` for skyrim-dm. Which repo owns skyrim-dm's production shell quest is decided with skyrim-dm's integration work before this milestone starts.` → `Results in \`docs/probes/\`.`; the bullet `- **skyrim-dm acceptance test** (section 8).` → `- **Generic acceptance scenario** (section 8).`
 11. Open question 5 → `5. Settled (owner decision 8, 2026-10-02): a consumer's production quest and its Papyrus script live in that consumer's own repository; Skython's test ESP is test data only.`
 
@@ -195,15 +195,16 @@ Expected: `names mapped`, then the date line and the Changes heading.
 
 ```bash
 git ls-files testesp/SkythonTest.esp plugin/papyrus/compiled testesp/compiled
-sha256sum testesp/SkythonTest.esp plugin/papyrus/compiled/Skython.pex testesp/compiled/*.pex
+testesp/build.sh --check | tail -1
+tools/papyrus_compile.sh --stable-hash plugin/papyrus/compiled/Skython.pex
 grep -n "SkythonTest.esp\|Skython.pex\|SkythonTest.*pex\|QF_SkythonTestQuest\|Mutagen\|8.0.424" docs/PINS.md
 ~/.dotnet/dotnet --version
 grep -n "Mutagen.Bethesda.Skyrim" testesp/builder/*.csproj
 ```
-Expected: git lists the ESP and all five `.pex` (the repository's `.gitignore` ignores `*.pex`, so Tasks 46 and 48 must have added them with an exception or `git add -f`; any missing: STOP); every SHA-256 equals its `docs/PINS.md` line; `8.0.424` and `23.4.0`. Add whatever line is missing to `docs/PINS.md` under a heading `## Test ESP and Papyrus (M1.5/M2 plan)`:
+Expected: git lists the ESP and all six `.pex` (`plugin/papyrus/compiled/Skython.pex` and the five test scripts; Task 46's `.gitignore` negations make them tracked; any missing: STOP); `TEST ESP BUILD MATCHES PINS` (the ESP's raw SHA-256 and each test `.pex`'s stable hash equal their `- pin` lines); `Skython.pex`'s stable hash equals `36082f6c01b9f9e125fe2a239e4a7d8afc787c7d2b3424182cecbdbcaad22341` (index Contracts) and its `docs/PINS.md` line; `8.0.424` and `23.4.0`. `.pex` files are never compared by raw SHA-256 (they embed compile times, user and machine). Add whatever line is missing to `docs/PINS.md` under a heading `## Test ESP and Papyrus (M1.5/M2 plan)`:
 ```markdown
-- `testesp/SkythonTest.esp` SHA-256 `<hash>` (Task 48 build); `plugin/papyrus/compiled/Skython.pex` `<hash>` (Task 46); `testesp/compiled/<name>.pex` `<hash>` for each of the four test scripts.
-- Built with .NET SDK 8.0.424 (`~/.dotnet/dotnet`) and `Mutagen.Bethesda.Skyrim` 23.4.0 (restored offline from `~/.nuget/packages`); Papyrus Compiler from the SimpleSkyrim copy under GE-Proton10-14's `wine64`, headless (`tools/papyrus_compile.sh`).
+- `testesp/SkythonTest.esp` SHA-256 `<hash>` (Task 48 build); `plugin/papyrus/compiled/Skython.pex` stable hash `<hash>` (Task 46); `testesp/compiled/<name>.pex` stable hash `<hash>` for each of the five test scripts (stable hash: `tools/papyrus_compile.sh --stable-hash`, times zeroed, reproducible on the same machine and account only).
+- Built with .NET SDK 8.0.424 (`~/.dotnet/dotnet`) and `Mutagen.Bethesda.Skyrim` 23.4.0 (GPL-3.0-only; restored offline from `~/.nuget/packages`); Papyrus Compiler from the SimpleSkyrim copy under GE-Proton10-14's `wine64`, headless, with `TESV_Papyrus_Flags.flg` (`tools/papyrus_compile.sh`).
 ```
 ```bash
 grep -n "<hash>" docs/PINS.md || echo "PINS filled"
@@ -219,27 +220,30 @@ ctest --test-dir core/build --output-on-failure
 uv run --no-project --python 3.14 --with pytest python -m pytest pyglue/tests -q
 (cd python && uv run --python 3.12 pytest -q && uv run --python 3.14 pytest -q)
 tools/box/test_box_tools.sh
-testesp/build.sh
+testesp/build.sh --check
 git status --short
 ```
 Expected: all pass; `testesp/build.sh` reports the hashes match `docs/PINS.md`; `git status` shows only this task's edits.
 
-Then the game (the deployed build is the one Task 56 ran; redeploy only if `git log` shows plugin or package changes since):
+Then the game, as **two suite invocations** (the `fresh_save` fixture reloads its save per module, so each suite runs on its own save): the M1 suite on `s4test`, then the M1.5/M2 suite on `skythonbase`. The main-menu test runs once right after launch, before any load, as the launch check (it cannot share an invocation with tests that need a loaded game). The deployed build is the one Task 56 ran; redeploy only if `git log` shows plugin or package changes since:
 ```bash
 tools/box/box_deploy.sh --package && tools/box/box_deploy.sh --scripts livetest/scripts
-tools/box/box_plugins.sh add
+tools/box/box_plugins.sh add                      # before the launch: invocation 2 loads skythonbase (Global Constraints)
 tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log 'python host: running' 600
 tools/box/box_session.sh up && source out/box-live.env && source livetest/s4test.env
 export SKYTHON_LIVE=1 SKYTHON_BOX=1
-uv run --project python pytest livetest/test_m1_mainmenu.py -q -rs              # at the main menu, before any load
+uv run --project python pytest livetest/test_m1_mainmenu.py -q -rs              # launch check: at the main menu, before any load
 uv run --project python python -c "import skython; g = skython.connect(); print(g.load('s4test', wait=True)['epoch']); g.close()"
+# Invocation 1: the M1 suite on s4test
 uv run --project python pytest livetest/test_m1_*.py -q -rs \
   --deselect livetest/test_m1_mainmenu.py --deselect livetest/test_m1_throughput.py
+# Invocation 2: the M1.5/M2 suite; each module's fresh_save loads skythonbase (the plugins.txt line was added before launch)
 uv run --project python pytest -q -rs \
   livetest/test_m2_events_batch1.py livetest/test_m2_events_batch2.py livetest/test_m2_saveload.py \
   livetest/test_m2_lifecycle.py livetest/test_m2_console_settings.py livetest/test_m2_sink_detach.py \
-  livetest/test_m15_own_script.py livetest/test_m15_properties.py livetest/test_m2_events_esp.py \
+  livetest/test_m15_send.py livetest/test_m15_base_save.py livetest/test_m15_own_script.py \
+  livetest/test_m15_properties.py livetest/test_m2_events_esp.py \
   livetest/test_m2_examples.py livetest/test_acceptance_scenario.py livetest/test_m2_soak.py
 tools/box/box_files.sh pull skse64.log Skython.log Skython/python.log
 grep -E "loaded correctly|no version data|disabled" out/box-skse/skse64.log
@@ -252,7 +256,7 @@ Not run here, on purpose: `test_m1_throughput.py` and `test_m2_drain_timing.py` 
 
 Expected: everything passes. The skip report (`-rs`) lists only: the low-cap test, the two `SPY_MANUAL` tests, the opt-in save test (`SPY_SAVE_TEST`), the eight startup variants, the soak (`SPY_SOAK`), and any other opt-in a Part E task declared with its own `SPY_*` switch (check each reason names a setup, not a missing value). Tests that save make new `skython_*` saves: add their names to the removal list (Step 3). `show` prints the backup; `git status` shows no tracked file rewritten by the run.
 
-Fill the "Final full run" line of the M2 summary with the pass/skip counts of the three pytest invocations.
+Fill the "Final full run" line of the M2 summary with the pass/skip counts of the launch check and the two suite invocations (M1 on `s4test`, M1.5/M2 on `skythonbase`).
 
 - [ ] **Step 7: Commit and tag (local only; never push)**
 
