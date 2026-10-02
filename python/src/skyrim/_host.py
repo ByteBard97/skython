@@ -16,7 +16,8 @@ Each script gets its own Game, so a script that closes its Game (`with game:` in
 anyone else's. reload(name) closes that script's Game after teardown(), so a thread teardown() did not stop
 gets ConnectionLost instead of driving the game; the new setup gets a fresh Game. Each load of a name takes a
 new generation: a load that a reload has replaced (its setup timed out, then the reload loaded the script again)
-records nothing when it finally finishes, closes the Game it made and does not run its setup.
+records nothing when it finally finishes, closes the Game it made and does not run its setup. reload()
+invalidates the running load's generation before teardown(), so this holds while teardown() runs too.
 No game is loaded while setup runs: in the game, main() runs when the data has loaded, at the main menu,
 so a needs_game call made in setup answers NotReady. Game work belongs on a thread that setup starts and
 that first calls game.wait_ready().
@@ -241,21 +242,20 @@ def _load_one(name: str) -> str:
                 else:
                     holder["stale"] = True
             setup = getattr(module, "setup", None)
-            if holder.get("stale"):
-                pass
-            elif not callable(setup):
-                holder["missing"] = True
-            else:
-                game = connect_in_process()  # the script's own Game: closing it closes no one else's
-                with _LOCK:  # recorded before setup runs, so reload can close it even if setup times out
-                    if current():
-                        _STATE["games"][name] = game
-                    else:
-                        holder["stale"] = True
-                if holder.get("stale"):
-                    game.close()  # a reload replaced this load: its Game must not drive the game
+            if not holder.get("stale"):
+                if not callable(setup):
+                    holder["missing"] = True
                 else:
-                    setup(game)
+                    game = connect_in_process()  # the script's own Game: closing it closes no one else's
+                    with _LOCK:  # recorded before setup runs, so reload can close it even if setup times out
+                        if current():
+                            _STATE["games"][name] = game
+                        else:
+                            holder["stale"] = True
+                    if holder.get("stale"):
+                        game.close()  # a reload replaced this load: its Game must not drive the game
+                    else:
+                        setup(game)
         except BaseException as e:  # noqa: BLE001 - SystemExit from a script is a failure, not an exit
             holder["error"] = f"{type(e).__name__}: {e}"
             holder["traceback"] = traceback.format_exc()
@@ -338,6 +338,9 @@ def reload(name: str) -> str:
         with _LOCK:
             module = _STATE["modules"].pop(name, None)  # a failed re-import must not leave it to be torn down again
             old_game = _STATE["games"].pop(name, None)
+            # Any load still running (a setup that timed out) is stale from here on: it may not record a Game or
+            # run setup while teardown runs, before the new load takes its own generation.
+            _STATE["generations"].pop(name, None)
         teardown = getattr(module, "teardown", None) if module is not None else None
         if callable(teardown):
             finished, error, tb = _run_with_timeout(teardown, f"script-teardown:{name}", SETUP_TIMEOUT_S)

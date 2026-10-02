@@ -435,3 +435,59 @@ def test_a_stale_load_never_overwrites_the_reloads_game(host, fake, tmp_path, mo
     assert stale.closed and not current.closed
     assert echoes(fake) == ["setup ran"]  # only the reload's setup ran
     assert host.status()["scripts"]["t24_gen"] == "ok"
+
+
+def test_a_stale_load_finishing_during_reloads_teardown_never_runs_setup(host, fake, tmp_path, monkeypatch):
+    # The first load times out while creating its Game. A reload starts and its teardown() blocks; the stale load
+    # gets its Game in that window. It must not record that Game or run setup: the reload removed the script.
+    import builtins
+    from skyrim import inprocess
+    real = inprocess.connect_in_process
+    release_connect = threading.Event()
+    made = []
+
+    def slow_first(*args, **kwargs):
+        if "module" in kwargs:  # the host's own Game (main()), not a script's
+            return real(*args, **kwargs)
+        game = real(*args, **kwargs)
+        made.append(game)
+        if len(made) == 1:
+            release_connect.wait(5)
+        return game
+
+    monkeypatch.setattr(inprocess, "connect_in_process", slow_first)
+    builtins.t24_teardown_started = threading.Event()
+    builtins.t24_teardown_release = threading.Event()
+    script(tmp_path, "t24_gen2", """
+    import builtins
+
+    def setup(game):
+        game.call("Fake", "Echo", "setup ran")
+
+    def teardown():
+        builtins.t24_teardown_started.set()
+        builtins.t24_teardown_release.wait(5)
+    """)
+    try:
+        host.main()
+        assert host.status()["scripts"]["t24_gen2"].startswith("timeout:")
+        monkeypatch.setattr(host, "SETUP_TIMEOUT_S", 5.0)  # the reload must wait for its blocked teardown
+        result = {}
+        reloader = threading.Thread(target=lambda: result.update(status=host.reload("t24_gen2")))
+        reloader.start()
+        assert builtins.t24_teardown_started.wait(5), "teardown did not start"
+        release_connect.set()  # the stale load gets its Game while the reload's teardown is still running
+        wait_until(lambda: not any(t.name == "script:t24_gen2" and t.is_alive() for t in threading.enumerate()),
+                   what="the stale load thread to finish")
+        builtins.t24_teardown_release.set()
+        reloader.join(10)
+        assert result.get("status") == "ok"
+        stale, current = made
+        assert host._STATE["games"]["t24_gen2"] is current
+        assert stale.closed and not current.closed
+        assert echoes(fake) == ["setup ran"]  # exactly one setup: the reload's
+    finally:
+        builtins.t24_teardown_release.set()
+        for attr in ("t24_teardown_started", "t24_teardown_release"):
+            if hasattr(builtins, attr):
+                delattr(builtins, attr)
