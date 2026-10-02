@@ -11,11 +11,15 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from skython.errors import ConnectionLost, NotReady
+
 PORT = 8765
 PLAYER = "Skyrim.esm|0x14"
 GAME_HOUR = "Skyrim.esm|0x38"
 
 stats = {"status": "waiting for a save to load"}
+stop = threading.Event()                        # set by teardown(): poll() ends, the server is shut down
+server = None
 
 PAGE = b"""<!doctype html><meta charset="utf-8"><title>Skyrim</title>
 <style>body{font:20px Georgia,serif;color:#eee;background:transparent;text-shadow:0 0 4px #000}
@@ -47,10 +51,17 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def poll(game):
-    game.wait_ready()
+    while not stop.is_set():                    # a long stay at the main menu is not an error
+        try:
+            game.wait_ready()
+            break
+        except NotReady:
+            continue
+        except ConnectionLost:                  # the script was reloaded or the game closed
+            return
     player, hour = game.form(PLAYER), game.form(GAME_HOUR)
-    while True:
-        b = game.batch()                        # seven reads, in order (one game task each: ordered, not atomic, not one frame)
+    while not stop.is_set():
+        b = game.batch()                        # seven reads, in order (one game task each: ordered, not atomic)
         for av in ("Health", "Magicka", "Stamina"):
             b.call_method(player, "Actor", "GetActorValue", av)
         b.call_method(player, "Actor", "GetGoldAmount")
@@ -58,7 +69,7 @@ def poll(game):
         b.call_method(player, "ObjectReference", "GetCurrentLocation")
         b.call_method(hour, "GlobalVariable", "GetValue")
         try:
-            results = b.run(stop_on_error=False)
+            results = b.run(stop_on_error=False)                         # all seven, even after a failure
             failed = [r for r in results if isinstance(r, Exception)]   # run() returns errors in place
             if failed:
                 raise failed[0]
@@ -67,12 +78,23 @@ def poll(game):
             stats.clear()
             stats.update(health=round(health), magicka=round(magicka), stamina=round(stamina), gold=gold,
                          level=level, location=place, time=f"{int(h):02d}:{int(h % 1 * 60):02d}")
+        except ConnectionLost:                  # the script was reloaded or the game closed
+            return
         except Exception as e:                  # paused, menu open, loading a save...: keep the last numbers
             print(f"live_dashboard: {e}")
-        time.sleep(1)
+        stop.wait(1)
 
 
 def setup(game):
+    global server
+    stop.clear()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     threading.Thread(target=poll, args=(game,), daemon=True).start()
+
+
+def teardown():                                 # on reload: free the port and stop polling
+    stop.set()
+    if server is not None:
+        server.shutdown()
+        server.server_close()
