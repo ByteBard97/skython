@@ -137,6 +137,11 @@ void BindAlias(RE::BGSBaseAlias* alias, const AliasRef& a, const TypeInfo& decla
         else out.SetObject(bound);
         return;
     }
+    // A parameter that is not an alias type at all (Form, ObjectReference, Actor): the alias is the wrong kind of
+    // value, whether scripted or not. Say so instead of blaming a missing script.
+    if (!sig::IsA(want, "Alias"))
+        throw ProtocolError(ErrorCode::type_mismatch, "parameter " + param + " expects " + canonical_script_name(want) + ", got " + desc +
+            " (an alias is not a " + canonical_script_name(want) + "; pass the form it holds instead, e.g. from ReferenceAlias.GetReference)");
     throw ProtocolError(ErrorCode::type_mismatch, "parameter " + param + " expects " + canonical_script_name(want) + ", got " + desc +
         " (a " + a.alias_type + " with no " + canonical_script_name(want) + " script object bound; v1 drives scripted aliases only)");
 }

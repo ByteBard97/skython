@@ -364,7 +364,7 @@ def test_alias_plain_is_not_dispatchable_as_reference_alias(game):
     except KeyError:
         pytest.skip("set SPY_PLAIN_QUEST/SPY_PLAIN_ALIAS (S7g cand 0: quest 0x0010FDD5, alias 0, plain)")
     alias = game.alias(game.resolve(form_id=quest_id), alias_id)
-    with pytest.raises(errors.TypeMismatch):
+    with pytest.raises(errors.TypeMismatch, match="script object bound"):
         game.call_method(alias, "ReferenceAlias", "GetReference")
 
 
@@ -397,4 +397,5 @@ def test_own_script_bytecode_member_function(game):
     quest_id, script, function = _own_script()
     quest = game.resolve(form_id=quest_id)
     first = game.call_method(quest, script, function)
+    assert isinstance(first, int), first  # the SPY_OWN getter returns an Int; None would make the compare vacuous
     assert game.call_method(quest, script, function) == first  # a side-effect-free getter answers the same twice

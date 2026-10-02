@@ -118,11 +118,13 @@ json Resolve(const json& args)
         if (!args["editor_id"].is_string()) throw ProtocolError(ErrorCode::bad_request, "editor_id must be a string");
         const auto eid = args["editor_id"].get<std::string>();
         // Verified at the pinned commit: LookupByEditorID tests its map pointer and returns nullptr, so no guard is
-        // needed. Editor ids are only populated when an editor-id-caching mod is installed, so null is common.
+        // needed. The game keeps editor ids for only some form types: quests resolve without an editor-id-caching mod
+        // (live finding, Task 29: CWCampaign), most other types need one (powerofthree's Tweaks), so null is common.
         form = RE::TESForm::LookupByEditorID(eid);
         if (!form)
             throw ProtocolError(ErrorCode::not_found, "no form with editor id " + eid +
                 " (the game keeps editor ids for only some form types unless powerofthree's Tweaks is installed)");
+        if (form->IsDeleted()) throw ProtocolError(ErrorCode::not_found, "form with editor id " + eid + " is deleted");  // as ResolveForm
     } else {
         json ref = args;
         ref["kind"] = "form";
