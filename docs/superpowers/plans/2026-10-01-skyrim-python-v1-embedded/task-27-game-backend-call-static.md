@@ -38,7 +38,7 @@ Rules this task implements (spec 4.3-4.5):
 - `GameBackend::Run` never blocks the caller (a Python thread inside `_skyrim.submit`): it queues exactly one `AddTask` and returns. The queued task checks `cancelled()` first (timed out, cancelled or a load started while queued) and does nothing if so.
 - `game.state` is answered **immediately** from `life::BaseState()` when no game is loaded or a save is loading. Only when a game is loaded does it queue one `AddTask` for `player` and `game_days_passed`, and that task rechecks `Loading()` before touching the engine.
 - In the task: recheck readiness, find the function, check every argument against the declared parameter types (no default values: the count must match), dispatch.
-- VM callback: it owns the call's `DynArgs` and deletes it after reading the result (S2); on a false `Dispatch*Call` return the dispatch site keeps the args and logs once (R37). It overrides `CanSave()` to return false (ruling R38, as SkyrimPlatform does): our functor is never written into a save. The base class already returns false at the pin (`src/RE/I/IStackCallbackFunctor.cpp:11`; the header comment reads `{ return false; }`), so the override makes the default explicit rather than changing it. **Primitives and `None` are converted on whatever thread the callback runs on** (no engine state). An object result or an array of objects always costs one more `AddTask`, even if the callback happens to run inside a task (it cannot tell by thread id, R49), because turning a Form into a reference calls `LookupByID`/`GetFile`. No Python runs on any of these threads (Global Constraints).
+- VM callback: it owns the call's `DynArgs` and deletes it after reading the result (S2); on a false `Dispatch*Call` return the dispatch site keeps the args and logs once (R37). It overrides `CanSave()` to return false (ruling R38, as SkyrimPlatform does): our functor is never written into a save. The base class already returns false at the pin (`src/RE/I/IStackCallbackFunctor.cpp:11`; the header comment reads `{ return false; }`), so the override makes the default explicit rather than changing it. **Primitives and `None` are converted on whatever thread the callback runs on** (no engine state). An object result or an array of objects needs `LookupByID`/`GetFile`, so it is converted inside an SKSE task: directly when the callback runs inside one of our own tasks (the VM can call it synchronously from `Dispatch*Call`), else through one more `AddTask`. "Inside one of our tasks" is a `thread_local bool t_inTask` that every task this plugin queues sets for its duration (RAII `InTask` guard, ruling R52), never a thread-id comparison (R49). No Python runs on any of these threads (Global Constraints).
 - Readiness at submit, deadlines, `busy`, load cancellation and late-result counting are the Dispatcher's (Task 18); this task does not duplicate them.
 - Member functions are looked up in the script's empty state only.
 - **Script lookup** (`sig::TypeOf`, S7b): `GetScriptObjectType` finds a script case-insensitively (`"actor"` finds Actor), so names are passed as given. After a failed lookup of an unknown name, the **next** `GetScriptObjectType` of that name returns true with an empty stub type (no parent, 0 functions, 0 properties); `GetScriptObjectTypeNoLoad` stays false for the stub. `TypeOf` therefore requires both calls to succeed. It does not reject a type merely for having no parent and no functions or properties: a legitimate empty base script looks the same. (NoLoad after a successful load of a real script was not measured in S7; if the cross-check rejects a real script such as `Utility` on the first live run, STOP and ask the owner, do not drop the check.)
@@ -614,6 +614,18 @@ void KeptOnRefusal(const std::string& qualified)
     });
 }
 
+// true while this thread runs a task this plugin queued (R52). Every AddTask lambda below starts with `InTask in;`.
+thread_local bool t_inTask = false;
+struct InTask
+{
+    InTask() : prev_(std::exchange(t_inTask, true)) {}
+    ~InTask() { t_inTask = prev_; }
+    InTask(const InTask&) = delete;
+    InTask& operator=(const InTask&) = delete;
+private:
+    bool prev_;
+};
+
 class Callback final : public RE::BSScript::IStackCallbackFunctor
 {
 public:
@@ -624,11 +636,12 @@ public:
         // and converted or queued; `result` is our own copy. The destructor does not free them (see Known limits).
         std::unique_ptr<DynArgs> owned{std::exchange(args_, nullptr)};
         // Primitives and None touch no engine state: convert here, on whatever thread the VM called us on.
-        // Objects (forms, aliases, arrays of them) need LookupByID/GetFile: always hop through AddTask. Never test the
-        // thread id to skip the hop: tasks run on varying job threads (R49), so no id means "inside a task".
-        if (!pv::NeedsMainThread(result)) return Convert(done_, result);
+        // Objects (forms, aliases, arrays of them) need LookupByID/GetFile, so they are converted inside an SKSE task:
+        // here if the VM called us synchronously from inside one of our tasks (t_inTask), else one more AddTask. Never
+        // test the thread id instead: tasks run on varying job threads (R49). R52.
+        if (!pv::NeedsMainThread(result) || t_inTask) return Convert(done_, result);
         auto done = done_;
-        SKSE::GetTaskInterface()->AddTask([done, result] { Convert(done, result); });
+        SKSE::GetTaskInterface()->AddTask([done, result] { InTask in; Convert(done, result); });
     }
     void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
     // Never written into a save (as SkyrimPlatform does): a save during a latent call does not record this functor,
@@ -744,6 +757,7 @@ public:
         if (op == "game.state") return State(std::move(done), std::move(cancelled));
         // Exactly one AddTask; never block the submitting Python thread.
         SKSE::GetTaskInterface()->AddTask([op, args, done, cancelled, progress] {
+            InTask in;
             if (cancelled()) return;  // timed out, cancelled or a load started while queued
             try {
                 ops::Run(op, args, done, cancelled, progress);
@@ -781,6 +795,7 @@ private:
         // Answer at once at the main menu or while loading; queue a task only when it can answer.
         if (!life::GameLoaded() || life::Loading()) return done(OpResult::Ok(std::move(s)));
         SKSE::GetTaskInterface()->AddTask([done, cancelled, s = std::move(s)]() mutable {
+            InTask in;
             if (cancelled()) return;
             try {
                 ops::AddStateExtras(s);
