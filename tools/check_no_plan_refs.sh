@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Fails when a tracked source, test or tool file contains a planning-note reference (task numbers, ruling tags),
-# a machine-specific path or address, or a private project name. docs/, spikes/ and vendored code (third_party/,
-# plugin/extern/) are not checked.
+# a machine-specific path (a Linux home folder) or address, or a private project name. docs/, spikes/ and vendored
+# code (third_party/, plugin/extern/) are not checked.
 # Usage: tools/check_no_plan_refs.sh        (exit 0 = clean; otherwise prints file:line for each hit)
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -15,7 +15,7 @@ pats=(
   "contr""oller"
   "sub""agent"
   "skyrim-${D}"
-  "/${H}/geoff"
+  "/${H}/[A-Za-z0-9_.-]+/"
   '192[.]168[.]'
 )
 re="$(IFS='|'; echo "${pats[*]}")"
