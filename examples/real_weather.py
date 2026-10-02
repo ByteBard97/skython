@@ -44,8 +44,8 @@ def run(game):
             key = next((k for codes, k in WEATHERS if code in codes), None)
             if key:
                 game.call_method(game.form(key), "Weather", "ForceActive", True)
-        except OSError:
-            pass                                # offline: keep whatever weather Skyrim has
+        except Exception as e:                  # offline, or the game is paused/loading: try next time
+            print(f"real_weather: {e}")
         time.sleep(EVERY_S)
 
 

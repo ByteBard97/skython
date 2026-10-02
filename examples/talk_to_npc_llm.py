@@ -51,13 +51,17 @@ def run(game):
     player = game.form(PLAYER)
     was_down = False
     while True:
-        down = game.call("Input", "IsKeyPressed", HOTKEY)
-        if down and not was_down:
-            try:
-                talk(game, player)
-            except OSError as e:                # the model server is not running, timed out, ...
-                game.call("Debug", "Notification", f"LLM unavailable: {e}")
-        was_down = down
+        try:
+            down = game.call("Input", "IsKeyPressed", HOTKEY)
+            if down and not was_down:
+                try:
+                    talk(game, player)
+                except OSError as e:            # the model server is not running, timed out, ...
+                    game.call("Debug", "Notification", f"LLM unavailable: {e}")
+            was_down = down
+        except Exception as e:                  # paused, menu open, loading a save...: try again shortly
+            print(f"talk_to_npc_llm: {e}")
+            time.sleep(1)
         time.sleep(0.1)
 
 

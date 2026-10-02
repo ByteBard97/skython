@@ -53,15 +53,22 @@ def poll(game):
         b = game.batch()                        # all seven reads run in one game frame
         for av in ("Health", "Magicka", "Stamina"):
             b.call_method(player, "Actor", "GetActorValue", av)
-        b.call_method(player, "ObjectReference", "GetGoldAmount")
+        b.call_method(player, "Actor", "GetGoldAmount")
         b.call_method(player, "Actor", "GetLevel")
         b.call_method(player, "ObjectReference", "GetCurrentLocation")
         b.call_method(hour, "GlobalVariable", "GetValue")
-        health, magicka, stamina, gold, level, location, h = b.run()
-        place = game.call_method(location, "Form", "GetName") if location else "the wilds"
-        stats.clear()
-        stats.update(health=round(health), magicka=round(magicka), stamina=round(stamina), gold=gold,
-                     level=level, location=place, time=f"{int(h):02d}:{int(h % 1 * 60):02d}")
+        try:
+            results = b.run(stop_on_error=False)
+            failed = [r for r in results if isinstance(r, Exception)]   # run() returns errors in place
+            if failed:
+                raise failed[0]
+            health, magicka, stamina, gold, level, location, h = results
+            place = game.call_method(location, "Form", "GetName") if location else "the wilds"
+            stats.clear()
+            stats.update(health=round(health), magicka=round(magicka), stamina=round(stamina), gold=gold,
+                         level=level, location=place, time=f"{int(h):02d}:{int(h % 1 * 60):02d}")
+        except Exception as e:                  # paused, menu open, loading a save...: keep the last numbers
+            print(f"live_dashboard: {e}")
         time.sleep(1)
 
 

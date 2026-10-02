@@ -123,6 +123,10 @@ tools/box/box_quit.sh   # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh
 ```
 (`test_m1_throughput.py` is deselected: Task 31 recorded the baseline that Step 1 copied into the README, and running it again would rewrite `livetest/results/throughput.json` with numbers that disagree with the README. The save loaded must be the one S7 ran on, for the property and alias tests.) Also run the `_skyrim` Linux suite the way Task 19 set it up. Expected: all pass. The skip report (`-rs`) lists only tests that need another setup: the startup-variant tests (Task 26), the low-cap test (run in Task 30 with its own ini) and the two `SPY_MANUAL` tests (run in Task 31). The main-menu tests ran in Tasks 27-29 before a save was loaded. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. Any skip about missing `SPY_S4_*` or `SPY_S7C_*` values means the alias or property tests did not run: set them and rerun.
 
+- [ ] **Step 2b: Run one example live**
+
+`examples/` (the modder-facing scripts in the top-level README) must not ship unrun. Deploy `examples/live_dashboard.py` with `tools/box/box_deploy.sh --scripts` (a folder holding just that file), relaunch, load the save, and from Linux through an ssh tunnel to the box's 127.0.0.1:8765 run `curl -s http://127.0.0.1:8765/stats`: the JSON must have numeric `health`, `level` and a `location` string. Record it in the task report. Fix any example whose Papyrus calls fail (wrong script name, missing parameter) before tagging.
+
 - [ ] **Step 3: Commit and tag (local only; never push)**
 
 ```bash

@@ -10,6 +10,8 @@ import socket
 import threading
 import time
 
+from skython.errors import StaleReference
+
 CHANNEL = "your_twitch_channel"   # lower case, without the #
 COMMAND = "!mudcrab"
 COOLDOWN_S = 10                   # per viewer
@@ -44,14 +46,21 @@ def run(game):
     for user, text in chat_messages(CHANNEL):
         if text.strip().lower() != COMMAND or time.time() - last_spawn.get(user, 0) < COOLDOWN_S:
             continue
-        alive = [c for c in alive if not game.call_method(c, "Actor", "IsDead")]
-        if len(alive) >= MAX_ALIVE:
-            continue
-        last_spawn[user] = time.time()
-        crab = game.call_method(player, "ObjectReference", "PlaceAtMe", mudcrab, 1, require_unpaused=True)
-        game.call_method(crab, "ObjectReference", "SetDisplayName", user, True)
-        game.call("Debug", "Notification", f"{user} summoned a mudcrab!")
-        alive.append(crab)
+        try:
+            alive = [c for c in alive if not game.call_method(c, "Actor", "IsDead")]
+            if len(alive) >= MAX_ALIVE:
+                continue
+            last_spawn[user] = time.time()
+            # Every Papyrus parameter must be passed: PlaceAtMe(form, count, forcePersist, initiallyDisabled)
+            crab = game.call_method(player, "ObjectReference", "PlaceAtMe", mudcrab, 1, False, False,
+                                    require_unpaused=True)
+            game.call_method(crab, "ObjectReference", "SetDisplayName", user, True)
+            game.call("Debug", "Notification", f"{user} summoned a mudcrab!")
+            alive.append(crab)
+        except StaleReference:
+            alive = []                           # a different save was loaded: the old crabs are gone
+        except Exception as e:                   # paused, menu open, loading...: skip this one
+            print(f"twitch_mudcrabs: {user}: {e}")
 
 
 def setup(game):

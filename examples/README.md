@@ -34,9 +34,13 @@ game.call("Debug", "Notification", reply["text"])
 player = game.form("Skyrim.esm|0x14")                                  # any form, by plugin and local ID
 health = game.call_method(player, "Actor", "GetActorValue", "Health")  # any Papyrus method
 game.call("Debug", "Notification", f"Health: {health:.0f}")             # any global Papyrus function
-b = game.batch(); b.call_method(player, "Actor", "GetLevel"); b.call_method(player, "ObjectReference", "GetGoldAmount")
+b = game.batch(); b.call_method(player, "Actor", "GetLevel"); b.call_method(player, "Actor", "GetGoldAmount")
 level, gold = b.run()                                                   # several calls in one game frame
 ```
+
+Pass every Papyrus parameter, including the ones Papyrus lets you leave out: the game does not expose Papyrus default values, so `PlaceAtMe(form)` is written `PlaceAtMe(form, 1, False, False)`. (Generated typed wrappers with defaults come later.) A Papyrus Float parameter takes a Python float (`3.0`, not `3`).
+
+Game calls can fail for ordinary reasons (the game is paused, a menu is open, a save is loading), so loops catch exceptions and try again; `print` goes to `python.log`.
 
 Scripts run on their own threads, so a slow network call never stalls the game; game calls are carried out safely on the game's own thread. Long-running work goes on a thread that `setup` starts and that first calls `game.wait_ready()` (no save is loaded while `setup` runs).
 
