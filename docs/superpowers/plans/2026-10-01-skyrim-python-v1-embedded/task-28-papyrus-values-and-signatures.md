@@ -14,7 +14,7 @@ Adapted from: branch `plan-out-of-process`, task 17b (`task-17b-papyrus-value-co
 
 **Files:**
 - Modify: `plugin/src/Signatures.cpp` (add `IsA`, `FindProperty`)
-- Modify: `plugin/src/PapyrusValues.cpp` (full replacement below)
+- Modify: `plugin/src/PapyrusValues.cpp` (full replacement below, **but carry over Task 27's `SourceFile(form)` fallback**: `TESForm::GetFile(0)` is null for the player (0x14) and other forms, so Task 27 (97532fd) added `SourceFile()` — `GetFile(0)`, else for a non-runtime id `TESDataHandler::LookupLoadedLightModByIndex((id >> 12) & 0xFFF)` for a light id or `LookupLoadedModByIndex(id >> 24)` — and made `KeyOrId` use it with core's `local_form_id(id)` (not `GetLocalFormID()`) and `DescribeForm` test `SourceFile(form)`. Every place the code below calls `GetFile(0)` or `GetLocalFormID()` to name a form must use those instead; `test_state_reports_player` must still give `Skyrim.esm|0x000014`. The light-plugin branch is untested live: if a light-plugin form is at hand on the box, add one assertion.)
 - Modify: `livetest/test_m1_calls.py` (replace one test, append others)
 
 **Interfaces:**
@@ -120,7 +120,7 @@ RE::BSScript::PropertyTypeInfo FindProperty(const std::string& script, const std
 
 - [ ] **Step 3: Papyrus values**
 
-Replace `plugin/src/PapyrusValues.cpp` with (everything from Task 27 is kept; added: `ResolveForm`, `FindBound`, `BindObject`, arrays, object results, alias detection):
+Replace `plugin/src/PapyrusValues.cpp` with (everything from Task 27 is kept, plus Task 27's `SourceFile()` fallback from the Files note above, which this listing predates; added: `ResolveForm`, `FindBound`, `BindObject`, arrays, object results, alias detection):
 ```cpp
 #include "PapyrusValues.h"
 #include "Lifecycle.h"
