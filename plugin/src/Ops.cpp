@@ -6,6 +6,7 @@
 #include "spy/refs.h"
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
+#include <format>
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -149,6 +150,119 @@ void CallMethod(const CallArgs& c, const Done& done)
         done(OpResult::Err(ErrorCode::vm_error, "the VM refused the call to " + qualified + " on " + target.desc));
     }
 }
+
+// v1 serves auto properties only. Their value is the property's auto variable in the bound script object, read and
+// written here directly (Object::variables). The plan's route, the VM's own GetPropertyValue, returned true and left
+// the value None for every auto property it read on the box (Task 30, launch 1: CWCampaignScript.currentAttackDelta,
+// an Int, read None), so it is not used; nor SetPropertyValue, its vtable neighbour. Object::GetProperty is not used
+// either: at the pin it indexes variables[] with the declaring class's own index and ignores the parents' variables.
+// A full property (Papyrus get/set code) is refused: its code would not run here. Nothing is synchronised with Papyrus
+// threads, and OnPropertyChanged does not fire (see the limits in Task 30).
+struct AutoProperty
+{
+    RE::BSScript::TypeInfo type;
+    std::uint32_t index;      // into Object::variables (parents' variables first)
+    std::string variableName; // the auto variable's name, for the one-time cross-check below
+};
+
+AutoProperty FindAutoProperty(const PropertyArgs& p)
+{
+    const auto slot = sig::FindPropertySlot(p.script, p.property);  // clear not_found before touching the object
+    if (slot.info.getFunction || slot.info.setFunction)
+        throw ProtocolError(ErrorCode::unsupported, p.script + "." + p.property + " is a full property (it has Papyrus "
+            "get/set code); v1 reads and writes auto properties only: call a Papyrus function on the script instead");
+    return {slot.info.type, slot.variableIndex, slot.variableName};
+}
+
+// The auto variable inside the bound object. The object's own type may extend `p.script`; its extra variables come
+// after the declaring class's, so the index holds for it too. Range-checked against the object's own layout.
+RE::BSScript::Variable& BackingVariable(const AutoProperty& a, const pv::Target& target, const PropertyArgs& p)
+{
+    auto* obj = target.object.get();
+    const auto* type = obj ? obj->GetTypeInfo() : nullptr;
+    if (!type || a.index >= type->GetTotalNumVariables())
+        throw ProtocolError(ErrorCode::vm_error, "the script object of " + target.desc + " has no storage for " + p.script + "." + p.property);
+    return obj->variables[a.index];
+}
+
+// Once per launch: the direct read's slot next to the slot CommonLib's Object::GetVariable finds by the auto
+// variable's name (it applies the parent offset its own way), so the log shows whether the two layouts agree.
+// (Task 30 launch 2 also logged the VM's GetPropertyValue here: true with a None value; no longer called.)
+void LogPropertySlot(const AutoProperty& a, const pv::Target& target, const PropertyArgs& p, const Variable& slot)
+{
+    static std::once_flag once;
+    std::call_once(once, [&] {
+        const auto* byName = a.variableName.empty() ? nullptr : target.object->GetVariable(RE::BSFixedString(a.variableName));
+        log::Info(std::format("ops: property slot for {}.{} on {}: index={} variable={} raw_type={:X} name_route={} initialized={}",
+            p.script, p.property, target.desc, a.index, a.variableName, static_cast<std::uintptr_t>(slot.GetType().GetRawType()),
+            !byName ? "not found" : (byName == &slot ? "same slot" : "DIFFERENT slot"), target.object->IsInitialized()));
+    });
+}
+
+json GetProperty(const PropertyArgs& p)
+{
+    const auto a = FindAutoProperty(p);
+    auto target = pv::ResolveTarget(p.object, p.script);
+    const auto& slot = BackingVariable(a, target, p);
+    LogPropertySlot(a, target, p, slot);
+    return pv::FromVariable(slot);  // inside this SKSE task (Run), so an object value is converted here
+}
+
+void SetProperty(const PropertyArgs& p)
+{
+    const auto a = FindAutoProperty(p);
+    auto target = pv::ResolveTarget(p.object, p.script);
+    auto& slot = BackingVariable(a, target, p);
+    Variable in;
+    pv::ToVariable(*p.value, a.type, p.property + " (property of " + p.script + ")", in);  // type_mismatch before any write
+    slot = in;
+}
+
+struct BatchState
+{
+    BatchArgs args;
+    std::size_t next = 0;
+    json results = json::array();
+    Done done;
+    Cancelled cancelled;
+    Progress progress;
+};
+// A step's `done` can run on a VM thread (primitive results are converted there) or inside an SKSE task. BatchState is
+// safe by ordering, not by thread: the next step is only queued from the previous step's `done`, so at most one step
+// is in flight and each access happens-before the next (the AddTask queue hand-off). No single "main thread" touches
+// it: SKSE tasks run on varying job threads (R49).
+// unmeasured: whether a task queued during a drain runs in the same drain; Task 31's meter (with the batch-step wrap)
+// shows it.
+
+void BatchStep(const std::shared_ptr<BatchState>& st);
+
+void QueueBatchStep(const std::shared_ptr<BatchState>& st)
+{
+    SKSE::GetTaskInterface()->AddTask([st] { ops::InTask in; BatchStep(st); });  // one task per step (spec 4.5)
+}
+
+void BatchStep(const std::shared_ptr<BatchState>& st)
+{
+    try {
+        if (st->cancelled()) return;
+        if (st->next == st->args.calls.size()) return st->done(OpResult::Ok({{"results", st->results}}));
+        const auto step = st->args.calls[st->next++];
+        Run(step.op, step.args, [st](OpResult r) {
+            st->results.push_back(r.ok ? json{{"ok", true}, {"result", r.result}}
+                                       : json{{"ok", false}, {"error", {{"code", to_string(r.code)}, {"message", r.message}, {"detail", r.detail}}}});
+            // Tell the Dispatcher (Task 18) how far we got, so a timeout can report it (the steps' side effects already happened).
+            if (st->progress) st->progress(json{{"completed", st->results.size()}, {"results", st->results}});
+            if (!r.ok && st->args.stop_on_error) return st->done(OpResult::Ok({{"results", st->results}}));
+            QueueBatchStep(st);
+        }, st->cancelled, Progress{});
+    } catch (const std::exception& e) {
+        log::Error(std::string("ops: batch step threw: ") + e.what());
+        st->done(OpResult::Err(ErrorCode::internal, "internal error in a batch step"));
+    } catch (...) {  // a main-thread task never lets an exception escape (Global Constraints)
+        log::Error("ops: batch step threw an unknown exception");
+        st->done(OpResult::Err(ErrorCode::internal, "internal error in a batch step"));
+    }
+}
 }
 
 void AddStateExtras(json& s)
@@ -177,7 +291,19 @@ void Run(const std::string& op, const json& args, Done done, Cancelled cancelled
         if (op == "papyrus.call_static") return CallStatic(parse_call_args(args, false), done);
         if (op == "form.resolve") return done(OpResult::Ok(Resolve(args)));
         if (op == "papyrus.call_method") return CallMethod(parse_call_args(args, true), done);
-        // Task 30 adds properties and batch.
+        if (op == "papyrus.get_property") return done(OpResult::Ok(GetProperty(parse_property_args(args, false))));
+        if (op == "papyrus.set_property") {
+            SetProperty(parse_property_args(args, true));
+            return done(OpResult::Ok(nullptr));
+        }
+        if (op == "papyrus.batch") {
+            auto st = std::make_shared<BatchState>();
+            st->args = parse_batch_args(args);  // refuses non-batchable steps (nested batches, game.state): bad_request
+            st->done = std::move(done);
+            st->cancelled = std::move(cancelled);
+            st->progress = std::move(progress);
+            return BatchStep(st);
+        }
         done(OpResult::Err(ErrorCode::unsupported, "op " + op + " is not available in this build"));
     } catch (const ProtocolError& e) {
         done(OpResult::Err(e.code, e.what()));
@@ -188,7 +314,5 @@ void Run(const std::string& op, const json& args, Done done, Cancelled cancelled
         log::Error("ops: " + op + " threw an unknown exception");
         done(OpResult::Err(ErrorCode::internal, "internal error"));
     }
-    (void)cancelled;  // used by papyrus.batch (Task 30)
-    (void)progress;
 }
 }

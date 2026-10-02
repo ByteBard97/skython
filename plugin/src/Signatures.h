@@ -18,4 +18,11 @@ std::vector<RE::BSScript::Variable> BindArgs(const RE::BSScript::IFunction& fn, 
 // The property `property` of `script` or its parents (its declared `type`; `getFunction`/`setFunction` set means a
 // full property). Throws not_found. (Task 28)
 RE::BSScript::PropertyTypeInfo FindProperty(const std::string& script, const std::string& property);
+// FindProperty plus where an auto property's value lives in a bound Object (Task 30). `variableIndex` indexes
+// Object::variables, which hold the root parent's variables first and the most derived class's last (CommonLib's
+// Object::GetVariable), so it is the property's autoVarIndex in its declaring class plus the variable counts of that
+// class's parents. `variableName` is the auto variable's name in the declaring class (empty if the index is out of
+// range there). Both are meaningful only when the property has no get/set function. Throws not_found.
+struct PropertySlot { RE::BSScript::PropertyTypeInfo info; std::uint32_t variableIndex = 0; std::string variableName; };
+PropertySlot FindPropertySlot(const std::string& script, const std::string& property);
 }

@@ -83,13 +83,27 @@ bool IsA(const std::string& script, const std::string& ancestor)
     return false;
 }
 
-RE::BSScript::PropertyTypeInfo FindProperty(const std::string& script, const std::string& property)
+PropertySlot FindPropertySlot(const std::string& script, const std::string& property)
 {
     auto info = TypeOf(script);
     if (!info) throw ProtocolError(ErrorCode::not_found, "no script named " + script + " is loaded");
     for (auto* t = info.get(); t; t = t->GetParent())
         for (std::uint32_t i = 0; i < t->GetNumProperties(); ++i)
-            if (IEquals(t->GetPropertyIter()[i].name.c_str(), property)) return t->GetPropertyIter()[i].info;  // a copy
+            if (IEquals(t->GetPropertyIter()[i].name.c_str(), property)) {
+                PropertySlot slot;
+                slot.info = t->GetPropertyIter()[i].info;  // a copy
+                std::uint32_t parentVars = 0;
+                for (auto* up = t->GetParent(); up; up = up->GetParent()) parentVars += up->GetNumVariables();
+                slot.variableIndex = parentVars + slot.info.autoVarIndex;
+                if (slot.info.autoVarIndex < t->GetNumVariables() && t->GetVariableIter())
+                    slot.variableName = t->GetVariableIter()[slot.info.autoVarIndex].name.c_str();
+                return slot;
+            }
     throw ProtocolError(ErrorCode::not_found, "script " + script + " has no property " + property);
+}
+
+RE::BSScript::PropertyTypeInfo FindProperty(const std::string& script, const std::string& property)
+{
+    return FindPropertySlot(script, property).info;
 }
 }
