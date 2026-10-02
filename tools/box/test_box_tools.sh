@@ -169,8 +169,12 @@ if "$B/box_saves.sh" count 'bad name*' >/dev/null 2>&1; then bad "box_saves.sh a
 grep -qF 'spikebase|spytest|s4test|skypy_r38_savecall' "$B/win/list.ps1" 2>/dev/null && ok "list.ps1 lists skypy_r38_savecall" || bad "list.ps1 does not list skypy_r38_savecall"
 
 # 6h. the SKSE modal dialog (R50): wait_log.ps1 exits 2 with DIALOG; box_shot.sh and its task
-grep -qF "MainWindowTitle -match '^SKSE Plugin Loader'" "$B/win/wait_log.ps1" 2>/dev/null && grep -qE '"DIALOG .*exit 2 \}' "$B/win/wait_log.ps1" \
-  && ok "wait_log.ps1: SKSE Plugin Loader window -> DIALOG, exit 2" || bad "wait_log.ps1 has no DIALOG branch"
+wl="$B/win/wait_log.ps1"
+grep -qF 'Start-ScheduledTask -TaskName SkyrimPythonShot' "$wl" 2>/dev/null && grep -qF "'^\s*SkyrimSE\s.*SKSE Plugin Loader'" "$wl" \
+  && grep -qF '"DIALOG $dlg"' "$wl" && grep -qE '^\s*exit 2$' "$wl" && grep -qF 'LastWriteTimeUtc -gt $t0' "$wl" \
+  && ok "wait_log.ps1: SkyrimPythonShot probe, new windows.txt with SKSE Plugin Loader -> DIALOG, exit 2" || bad "wait_log.ps1 has no DIALOG probe"
+grep -vE '^\s*#' "$wl" | grep -q 'MainWindowTitle' && bad "wait_log.ps1 still reads MainWindowTitle over ssh (always empty there)" || ok "wait_log.ps1 does not rely on MainWindowTitle over ssh"
+grep -qF '$nextProbe = (Get-Date).AddSeconds(15)' "$wl" && grep -qF '} catch { }' "$wl" && ok "dialog probe every 15 s, never fails the wait" || bad "dialog probe cadence/guard"
 grep -qF "Register-Ours 'SkyrimPythonShot' 'shot.ps1'" "$B/win/setup_task.ps1" 2>/dev/null && grep -qF "Register-Ours 'SkyrimPythonGame' 'launch.ps1'" "$B/win/setup_task.ps1" \
   && ok "setup_task.ps1 registers SkyrimPythonGame and SkyrimPythonShot" || bad "setup_task.ps1 task list"
 grep -qF "'SkyrimPythonGame','SkyrimPythonShot'" "$B/win/list.ps1" 2>/dev/null && ok "list.ps1 lists both tasks" || bad "list.ps1 does not list SkyrimPythonShot"
