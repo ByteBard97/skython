@@ -6,10 +6,12 @@ import itertools
 import json
 import os
 import sys
+import threading
 import time
 
 import pytest
 
+from fake_skython import FakeSkython
 from support import load_fixture
 from skython import _protocol_generated as g
 
@@ -20,7 +22,8 @@ _ids = itertools.count(1000)
 
 @pytest.fixture(scope="module")
 def real_module(tmp_path_factory):
-    """The real module, imported for this file only (the same pattern as test_real_module.py)."""
+    """The real module, imported for this file only (the same pattern as test_real_module.py). `module` requests it
+    without the function-scoped `fake`, so `before` is never a fake that is torn down by the time this is restored."""
     before = sys.modules.pop("_skython", None)
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("SKYTHON_FAKE_DIR", str(tmp_path_factory.mktemp("real-hub")))
@@ -41,9 +44,9 @@ def real_module(tmp_path_factory):
 
 @pytest.fixture(params=["fake", pytest.param("real", marks=pytest.mark.skipif(
     not MODULE_DIR, reason="SKYTHON_REAL_MODULE_DIR not set"))])
-def module(request, fake):
+def module(request):
     if request.param == "fake":
-        return fake
+        return request.getfixturevalue("fake")
     m = request.getfixturevalue("real_module")
     m._fake_set_not_ready(None)
     return m
@@ -291,6 +294,136 @@ def test_fake_push_event_refuses_what_the_real_module_refuses(module, event, dat
     with pytest.raises(ValueError) as info:
         module._fake_push_event(event, data)
     assert str(info.value) == message
+
+
+def test_next_events_refuses_a_negative_or_nan_timeout_with_the_real_text(module):
+    c = module.open_consumer()
+    for bad in (-1, -0.001, float("nan")):
+        with pytest.raises(ValueError) as info:
+            module.next_events(c, bad)
+        assert str(info.value) == "timeout must be a number of seconds, 0 or more"
+    module.close_consumer(c)
+
+
+def test_next_events_accepts_a_huge_timeout_and_returns_a_queued_event_at_once(module):
+    c = module.open_consumer()
+    subscribe(module, c, "channel", {"channel": ["huge"]})
+    push(module, "channel", chan("huge"))
+    t0 = time.monotonic()
+    frames = json.loads(module.next_events(c, 1e10))  # clamped (a week, then an hour per wait), not an overflow
+    assert time.monotonic() - t0 < 1.0 and [f["data"]["channel"] for f in frames] == ["huge"]
+    module.close_consumer(c)
+
+
+def _blocked_next(m, consumer, timeout=10.0):
+    """next_events on a thread; returns (thread, box) where box gets (text, seconds taken)."""
+    box = []
+
+    def run():
+        t0 = time.monotonic()
+        text = m.next_events(consumer, timeout)
+        box.append((text, time.monotonic() - t0))
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    time.sleep(0.2)  # let it block
+    assert t.is_alive() and not box
+    return t, box
+
+
+def test_a_blocked_next_events_returns_empty_when_its_consumer_is_closed(module):
+    c = module.open_consumer()
+    subscribe(module, c, "channel", {"channel": ["closing"]})
+    t, box = _blocked_next(module, c)
+    module.close_consumer(c)
+    t.join(3.0)
+    assert not t.is_alive() and box[0][0] == "[]" and box[0][1] < 3.0
+
+
+def test_a_blocked_next_events_returns_when_a_matching_event_is_pushed(module):
+    c = module.open_consumer()
+    subscribe(module, c, "channel", {"channel": ["wake"]})
+    t, box = _blocked_next(module, c)
+    push(module, "channel", chan("other"))  # does not match: it keeps waiting
+    time.sleep(0.2)
+    assert t.is_alive() and not box
+    push(module, "channel", chan("wake", "now"))
+    t.join(3.0)
+    assert not t.is_alive() and box[0][1] < 3.0
+    assert [f["data"]["payload"] for f in json.loads(box[0][0])] == ["now"]
+    module.close_consumer(c)
+
+
+def test_a_bool_int_filter_value_is_refused_with_cores_text(module):
+    c = module.open_consumer()
+    resp = rpc(module, g.OP_EVENTS_SUBSCRIBE, {"event": "quest_stage", "filter": {"stage": [True]}}, c)
+    assert err(resp) == ("bad_request", "filter value for quest_stage.stage must be an integer (a Papyrus Int), got true")
+    module.close_consumer(c)
+
+
+def test_int_filters_match_only_papyrus_ints(module):
+    c = module.open_consumer()
+    subscribe(module, c, "quest_stage", {"stage": [1, 10, -2**31]})
+    quest = {"kind": "form", "form_id": 7}
+    # true is not 1, 10.0 is not 10, and out-of-range ints never wrap onto -2**31 or 1.
+    for stage in (True, 10.0, 2**31, 2**32 + 1, -2**31 - 1, 2**64 - 2**31):
+        push(module, "quest_stage", {"quest": quest, "stage": stage})
+    push(module, "quest_stage", {"quest": quest, "stage": 10})
+    frames = drain(module, c, 1)
+    assert [f["data"]["stage"] for f in frames] == [10] and frames[0]["seq"] == 1
+    assert json.loads(module.next_events(c, 0.2)) == []
+    module.close_consumer(c)
+
+
+def test_form_filters_match_only_u32_integer_form_ids(module):
+    c = module.open_consumer()
+    subscribe(module, c, "death", {"victim": [{"kind": "form", "form_id": 0}, {"kind": "form", "form_id": 7}]})
+    for fid in (2**32, 2**32 + 7, 7.0, 0.0, -1, True, "7"):
+        push(module, "death", {"victim": {"kind": "form", "form_id": fid}, "killer": None})
+    push(module, "death", {"victim": {"kind": "form", "form_id": 7}, "killer": None})
+    frames = drain(module, c, 1)
+    assert [f["data"]["victim"]["form_id"] for f in frames] == [7] and frames[0]["seq"] == 1
+    assert json.loads(module.next_events(c, 0.2)) == []
+    module.close_consumer(c)
+
+
+def test_an_event_bigger_than_the_whole_byte_budget_drops_itself(module):
+    c = module.open_consumer()
+    subscribe(module, c, "channel", {"channel": ["big"]})
+    push(module, "channel", chan("big", "first"))
+    push(module, "channel", chan("big", "z" * (g.MAX_QUEUED_EVENT_BYTES_PER_CONSUMER + 1)))  # its oldest go, then it
+    push(module, "channel", chan("big", "last"))
+    frames = drain(module, c, 1)
+    assert [f["data"]["payload"] for f in frames] == ["last"]
+    assert frames[0]["seq"] == 3 and frames[0]["dropped"] == 2  # the seq gap equals dropped
+    assert json.loads(module.next_events(c, 0.1)) == []
+    module.close_consumer(c)
+
+
+def test_the_global_subscription_cap_has_cores_text(module):
+    # Consumers of at most max_subscriptions_per_consumer each, until the hub-wide cap answers busy. The real
+    # module's hub is process-wide, so subscriptions another test leaked would make it come earlier, never later.
+    consumers, made, refused = [], 0, None
+    try:
+        while refused is None and made <= g.MAX_SUBSCRIPTIONS:
+            c = module.open_consumer()
+            consumers.append(c)
+            for i in range(g.MAX_SUBSCRIPTIONS_PER_CONSUMER):
+                resp = rpc(module, g.OP_EVENTS_SUBSCRIBE, {"event": "channel", "filter": {"channel": [f"g{i}"]}}, c)
+                if not resp["ok"]:
+                    refused = err(resp)
+                    break
+                made += 1
+        assert refused == ("busy", f"too many event subscriptions ({g.MAX_SUBSCRIPTIONS})")
+        assert made <= g.MAX_SUBSCRIPTIONS
+        if isinstance(module, FakeSkython):
+            assert made == g.MAX_SUBSCRIPTIONS
+    finally:
+        for c in consumers:
+            module.close_consumer(c)
+    c = module.open_consumer()
+    assert subscribe(module, c, "death")["event"] == "death"  # closing them frees the cap
+    module.close_consumer(c)
 
 
 def test_event_field_types_are_the_protocol_names():

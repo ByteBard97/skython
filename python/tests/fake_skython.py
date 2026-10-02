@@ -90,6 +90,16 @@ _INT_MIN, _INT_MAX = -2**31, 2**31 - 1  # Papyrus Int
 _FRAME_OVERHEAD_BYTES = 96  # core's kEventFrameOverheadBytes
 _NOT_READY_TEXT = {"starting": "the game is still starting", "loading": "a game is loading"}  # core's not_ready_message
 _NO_HUB = "this build has no event hub"
+_MAX_TIMEOUT_SECONDS = 7.0 * 24 * 3600  # pymodule.cpp ToMs: a longer timeout is clamped to one week
+_MAX_NEXT_WAIT = 3600.0  # core's kMaxNextWait: EventHub::Next waits at most an hour per call
+
+
+def _to_seconds(timeout: float) -> float:
+    """pymodule.cpp ToMs: NaN or a negative timeout is ValueError with its text; longer than a week is a week."""
+    timeout = float(timeout)
+    if timeout != timeout or timeout < 0.0:
+        raise ValueError("timeout must be a number of seconds, 0 or more")
+    return min(timeout, _MAX_TIMEOUT_SECONDS)
 
 
 def _event_bytes(data) -> int:
@@ -317,10 +327,10 @@ class FakeHub:
         spec = _g.EVENTS.get(event) if isinstance(event, str) else None
         if spec is None:  # _op_problem (Task 33) refuses unknown events first; this is core's own check
             raise _bad(f"unknown event '{_clip_text(str(event), 64)}'")
+        flt = _parse_filter(event, spec, args.get("filter"))  # before max_queue, as core
         max_queue = args.get("max_queue", _g.DEFAULT_EVENT_QUEUE)
         if type(max_queue) is not int or not 1 <= max_queue <= _g.MAX_EVENT_QUEUE:
             raise _bad(f"max_queue must be an integer from 1 to {_g.MAX_EVENT_QUEUE}")
-        flt = _parse_filter(event, spec, args.get("filter"))
         with self._cond:
             if consumer not in self._consumers:
                 raise _bad(f"no event consumer {consumer} (never opened, or closed)")
@@ -374,8 +384,9 @@ class FakeHub:
             self._cond.notify_all()
 
     def next(self, consumer: int, timeout: float, max_events: int = _g.MAX_EVENTS_PER_NEXT) -> list[dict]:
-        """Events in push order across the consumer's subscriptions; [] on timeout, [] at once for an unknown consumer."""
-        deadline = time.monotonic() + max(0.0, timeout)
+        """Events in push order across the consumer's subscriptions; [] on timeout, [] at once for an unknown consumer.
+        One call waits at most _MAX_NEXT_WAIT seconds (core's kMaxNextWait); callers loop."""
+        deadline = time.monotonic() + min(max(0.0, timeout), _MAX_NEXT_WAIT)
         with self._cond:
             while True:
                 if consumer not in self._consumers or max_events <= 0:
@@ -620,9 +631,10 @@ class FakeSkython:
             self.hub.close_consumer(consumer)
 
     def next_events(self, consumer: int, timeout: float) -> str:
+        seconds = _to_seconds(timeout)  # checked first, as the real module (even with no hub)
         if self.hub is None:
             return "[]"
-        return json.dumps(self.hub.next(consumer, timeout), separators=(",", ":"), ensure_ascii=False)
+        return json.dumps(self.hub.next(consumer, seconds), separators=(",", ":"), ensure_ascii=False)
 
     def _fake_push_event(self, event: str, data_json: str) -> None:
         """As the real module, in its order and with its texts: an unknown event, data nested too deeply (checked on
