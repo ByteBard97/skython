@@ -737,6 +737,9 @@ tools/box/box_deploy.sh --scripts livetest/scripts
 tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
 tools/box/box_session.sh up && source out/box-live.env
+# The live-test env (Tasks 29-30), needed when test_m1_calls.py or test_m1_batch_props.py is rerun on s4test:
+export SPY_S4_QUEST=0x0010FDD5 SPY_S4_ALIAS=7 SPY_S4_REF=0x0001A677 SPY_PLAIN_QUEST=0x0010FDD5 SPY_PLAIN_ALIAS=0 SPY_OWN_QUEST=0x0001C4A1 SPY_OWN_SCRIPT=CWCampaignScript SPY_OWN_FUNCTION=getAttackDeltaMissionBonus SPY_OWN_INT_PROPERTY=currentAttackDelta
+export SPY_S7C_QUEST=0x001093E4 SPY_S7C_SCRIPT=QF_TGTQ01Handler_001093E4 SPY_S7C_PROPERTY=Alias_TGHandlerSilverMoldAlias SPY_S7C_KIND=Alias
 tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
 tools/box/box_console.sh "load spikebase"     # stands in for Continue; then Task 1b block B6
 tools/box/box_wait_log.sh Skython.log "lifecycle: interactive = true" 300

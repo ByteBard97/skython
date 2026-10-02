@@ -83,7 +83,7 @@ The bridge listens on `127.0.0.1` only, checks a token on every connection, and 
 - Papyrus runtime errors are invisible: a script error inside the function you called gives you `None` or a `Timeout`, never a `VmError` (that means only that the VM refused to dispatch). Have the function return a value you can check.
 - A paused game (inventory, journal, console open) does not run Papyrus: calls wait and may time out. Use `require_unpaused=True` or a generous timeout.
 - `game.batch()` keeps the order of its calls but is neither a transaction nor fast: each step is its own SKSE task, run in order. A primitive call costs about one task drain (~46 ms on the test machine) alone and two while a CPU-bound Python thread runs; a batch step took [batch.ms_per_step] ms in the M1 measurement. For changes that must land together, call one Papyrus function on your own script.
-- Property access serves auto properties only: a full property (one with Papyrus get/set code) is refused as `Unsupported`. Reads and writes are not synchronised with Papyrus threads running the same script, and `OnPropertyChanged` does not fire. Call a Papyrus function for anything that must be atomic or must notify.
+- Property writes are not synchronised with Papyrus threads and do not fire OnPropertyChanged-style events; full properties (with Papyrus get/set code) are not supported — call a Papyrus function instead.
 - Member functions are looked up in a script's empty state only; a function that exists only inside a named state is `UnknownFunction`.
 - `game.batch().run()` without a timeout gives the batch 5 s per step in total (capped at one hour); pass `timeout=` for a tighter bound.
 - Arrays of objects can be returned but not sent. An array argument holds at most 128 elements (`TypeMismatch`); results are passed through whatever their length.
@@ -123,7 +123,8 @@ tools/box/box_console.sh "load s4test"     # then Task 1b block B6
 tools/box/box_session.sh up && source out/box-live.env
 export SPY_S4_QUEST=0x0010FDD5 SPY_S4_ALIAS=7 SPY_S4_REF=0x0001A677   # the S4 row of spikes/RESULTS.md
 export SPY_S7C_QUEST=0x001093E4 SPY_S7C_SCRIPT=QF_TGTQ01Handler_001093E4 SPY_S7C_PROPERTY=Alias_TGHandlerSilverMoldAlias SPY_S7C_KIND=Alias   # as in Task 30
-export SPY_PLAIN_QUEST=0x0010FDD5 SPY_PLAIN_ALIAS=0 SPY_OWN_QUEST=0x... SPY_OWN_SCRIPT=... SPY_OWN_FUNCTION=...   # SPY_OWN_* from Task 29's record in spikes/RESULTS.md
+export SPY_PLAIN_QUEST=0x0010FDD5 SPY_PLAIN_ALIAS=0 SPY_OWN_QUEST=0x0001C4A1 SPY_OWN_SCRIPT=CWCampaignScript SPY_OWN_FUNCTION=getAttackDeltaMissionBonus   # SPY_OWN_* from Task 29's record in spikes/RESULTS.md
+export SPY_OWN_INT_PROPERTY=currentAttackDelta   # Task 30's record
 SKYTHON_LIVE=1 uv run --project python pytest livetest -q -rs --deselect livetest/test_m1_mainmenu.py --deselect livetest/test_m1_throughput.py
 git status --short    # clean: nothing in the run rewrote a tracked file
 tools/box/box_quit.sh   # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh (Task 1b Known issue)
