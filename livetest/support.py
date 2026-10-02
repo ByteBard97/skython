@@ -219,3 +219,42 @@ def steady_late_count(session, settle: float = 1.0, tries: int = 10) -> int:
             return now
         prev = now
     raise AssertionError("late_results_dropped kept changing")
+
+
+def subscribe(sock: socket.socket, event: str, filter: dict | None = None, req_id: int = 1,
+              max_queue: int | None = None) -> int:
+    """events.subscribe on a raw connection; returns the sub id. Event frames that arrive meanwhile are dropped by rpc,
+    so subscribe before triggering anything."""
+    args: dict = {"event": event}
+    if filter is not None:
+        args["filter"] = filter
+    if max_queue is not None:
+        args["max_queue"] = max_queue
+    r = rpc(sock, "events.subscribe", args, req_id)
+    assert r["ok"] is True, r
+    return r["result"]["sub"]
+
+
+def read_event(sock: socket.socket, timeout: float) -> dict | None:
+    """The next event frame within timeout seconds (responses are skipped), or None."""
+    deadline = time.monotonic() + timeout
+    while (left := deadline - time.monotonic()) > 0:
+        sock.settimeout(left)
+        try:
+            f = read_frame(sock)
+        except (socket.timeout, TimeoutError):
+            return None
+        if f.get("type") == "event":
+            return f
+    return None
+
+
+def read_events(sock: socket.socket, n: int, timeout: float) -> list[dict]:
+    """Up to n event frames within timeout seconds in total."""
+    out: list[dict] = []
+    deadline = time.monotonic() + timeout
+    while len(out) < n and (left := deadline - time.monotonic()) > 0:
+        if (f := read_event(sock, left)) is None:
+            break
+        out.append(f)
+    return out

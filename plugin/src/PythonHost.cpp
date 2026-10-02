@@ -2,6 +2,7 @@
 #include <pybind11/eval.h>
 #include "PythonHost.h"
 #include "GameBackend.h"
+#include "Events.h"
 #include "Log.h"
 #include "Settings.h"
 #include "spy/pymodule.h"
@@ -122,6 +123,7 @@ void Run(const Config cfg)
 
     ModuleHost host;
     host.dispatcher = &game::GetDispatcher();
+    host.events = &events::Hub();
     host.backend = "game";
     host.config_json = [=] {
         json j = config_to_json(cfg);

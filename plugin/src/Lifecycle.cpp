@@ -15,12 +15,14 @@ LifecycleState& State()
 }
 
 std::atomic_bool g_lastInteractive{ false };
+std::atomic_bool g_saveLoadInProgress{ false };  // Task 39 (R60): see SaveLoadInProgress in Lifecycle.h
 
 void NoteInteractive()
 {
     const bool now = State().interactive();
-    if (g_lastInteractive.exchange(now) != now)
-        log::Info(std::string("lifecycle: interactive = ") + (now ? "true" : "false") + ", epoch " + std::to_string(State().epoch()));
+    if (g_lastInteractive.exchange(now) == now) return;
+    log::Info(std::string("lifecycle: interactive = ") + (now ? "true" : "false") + ", epoch " + std::to_string(State().epoch()));
+    if (now) g_saveLoadInProgress.store(false);  // the save load or new game is over (Task 40 moves this to game_loaded)
 }
 
 struct MenuSink final : RE::BSTEventSink<RE::MenuOpenCloseEvent>
@@ -69,16 +71,19 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
         break;
     }
     case SKSE::MessagingInterface::kPreLoadGame:
+        g_saveLoadInProgress.store(true);
         State().on_pre_load_game();
         log::Info("lifecycle: loading a save");
         break;
     case SKSE::MessagingInterface::kPostLoadGame: {
         const bool ok = reinterpret_cast<std::uintptr_t>(m->data) != 0;  // a packed bool, not a pointer
+        if (!ok) g_saveLoadInProgress.store(false);  // a failed load raises no interactive signal of its own
         State().on_post_load_game(ok);
         log::Info(std::string("lifecycle: save load ") + (ok ? "succeeded" : "FAILED") + ", epoch " + std::to_string(State().epoch()));
         break;
     }
     case SKSE::MessagingInterface::kNewGame:
+        g_saveLoadInProgress.store(true);
         State().on_new_game();
         log::Info("lifecycle: new game, epoch " + std::to_string(State().epoch()));
         break;
@@ -98,4 +103,5 @@ std::uint32_t LoadsStarted() { return State().loads_started(); }
 std::optional<std::string> NotReadyReason(bool require_unpaused) { return State().not_ready_reason(require_unpaused); }
 std::vector<std::string> OpenMenus() { return State().open_menus(); }
 json BaseState() { return State().base_state(); }
+bool SaveLoadInProgress() noexcept { return g_saveLoadInProgress.load(); }
 }

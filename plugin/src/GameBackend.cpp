@@ -1,4 +1,5 @@
 #include "GameBackend.h"
+#include "Events.h"
 #include "Lifecycle.h"
 #include "Log.h"
 #include "Ops.h"
@@ -76,6 +77,11 @@ private:
         s["diagnostics"] = {{"late_results_dropped", d.LateResults()}, {"in_flight", d.InFlight()},
                             {"max_task_drain_ms", ops::Meter().MaxMs()}, {"max_task_drain_count", ops::Meter().MaxCount()},
                             {"max_task_drain_ms_count", ops::Meter().MaxMsCount()}};
+        auto& hub = events::Hub();
+        s["diagnostics"]["event_consumers"] = hub.Consumers();
+        s["diagnostics"]["event_subscriptions"] = hub.Subscriptions();
+        s["diagnostics"]["events_dropped_total"] = hub.DroppedTotal();
+        s["diagnostics"]["events_suppressed_total"] = hub.SuppressedTotal();
         return s;
     }
 
@@ -119,6 +125,7 @@ spy::Dispatcher& GetDispatcher()
         opts.default_timeout_ms = cfg.default_timeout_ms;
         opts.max_inflight_total = cfg.max_inflight_total;
         opts.on_late = [](const std::string& line) { log::Warn("game backend: " + line); };  // a result nobody waits for
+        opts.events = &events::Hub();  // events.subscribe / events.unsubscribe are answered by the hub (Task 35)
         auto* d = new spy::Dispatcher(Backend(), opts);
         d->StartReaper();
         log::Info("game backend: dispatcher ready (default timeout " + std::to_string(cfg.default_timeout_ms) +

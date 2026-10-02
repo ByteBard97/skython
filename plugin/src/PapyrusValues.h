@@ -27,4 +27,10 @@ json FromVariable(const RE::BSScript::Variable& v);      // 27 primitives and No
 bool NeedsMainThread(const RE::BSScript::Variable& v);   // Task 27. true for a non-None object or any array
 std::string TypeName(const RE::BSScript::TypeInfo& t);   // Task 27
 json FloatToJson(float f);                               // Task 27. core's encoder: shortest round-trip text; non-finite -> null
+// Task 39. Fills the FormType -> Papyrus class name table (canonical_script_name spelling, R56) through the VM, once.
+// Inside an SKSE task only. Idempotent; a second call rebuilds nothing.
+void BuildClassTable();
+// Task 39. DescribeForm without the VM: safe on any engine thread (event sinks). Reads the form id, the data handler's
+// load order, the base object, and the class table (type "Form" until BuildClassTable has run).
+FormRef DescribeFormForEvent(const RE::TESForm* form);
 }

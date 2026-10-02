@@ -4,9 +4,13 @@
 #include "Signatures.h"
 #include "spy/papyrus_names.h"
 #include "spy/refs.h"
+#include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <format>
 #include <mutex>
+#include <optional>
 
 // RE/Skyrim.h pulls in windows.h, whose GetObject macro (-> GetObjectA) breaks Variable::GetObject() (compile error C2039).
 // Any plugin .cpp that calls Variable::GetObject() needs this line after its includes (today only this file does).
@@ -52,6 +56,21 @@ Fingerprint LiveFingerprint(const RE::TESForm* form)
     if (const auto* ref = form->As<RE::TESObjectREFR>())
         if (const auto* b = ref->GetBaseObject()) base = b;
     return {KeyOrId(base), ScriptClassOf(form)};
+}
+
+// Task 39: written once inside an SKSE task, then published; sinks read it from any thread without a lock.
+using ClassTable = std::array<std::string, 256>;
+std::atomic<const ClassTable*> g_classTable{ nullptr };
+
+// The Papyrus class name for the form's type, or nullopt while the table is not built or has no entry for the type
+// (then the caller writes type "Form" and no fingerprint: a placeholder type would never match LiveFingerprint).
+std::optional<std::string> CachedClassOf(const RE::TESForm* form)
+{
+    const ClassTable* t = g_classTable.load(std::memory_order_acquire);
+    if (!t) return std::nullopt;
+    const auto& name = (*t)[static_cast<std::uint8_t>(form->GetFormType())];
+    if (name.empty()) return std::nullopt;
+    return name;
 }
 
 std::string Describe(const FormRef& r)
@@ -455,5 +474,49 @@ json FromVariable(const Variable& v)
         return ObjectToJson(*obj);
     }
     throw ProtocolError(ErrorCode::unsupported, "the result has a type protocol v1 cannot return");
+}
+
+void BuildClassTable()
+{
+    if (g_classTable.load(std::memory_order_acquire)) return;
+    auto* vm = VM();
+    if (!vm) {  // never expected inside an SKSE task after kDataLoaded; events then keep type "Form", no fingerprint
+        log::Error("events: class table not built: the Papyrus VM is not available; event forms carry type Form");
+        return;
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    auto* table = new ClassTable();  // immortal: sinks may read it during process exit
+    std::size_t filled = 0;
+    for (std::size_t t = 0; t < static_cast<std::size_t>(RE::FormType::Max); ++t) {
+        RE::BSTSmartPointer<RE::BSScript::ObjectTypeInfo> info;
+        if (vm->GetScriptObjectType(static_cast<RE::VMTypeID>(t), info) && info) {
+            (*table)[t] = canonical_script_name(info->GetName());
+            ++filled;
+        }
+    }
+    g_classTable.store(table, std::memory_order_release);
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    log::Info(std::format("events: class table built ({} form types in {:.2f} ms; Actor = {})", filled, ms,
+                          (*table)[static_cast<std::size_t>(RE::FormType::ActorCharacter)]));
+}
+
+FormRef DescribeFormForEvent(const RE::TESForm* form)
+{
+    FormRef r;
+    r.form_id = form->GetFormID();
+    const auto cls = CachedClassOf(form);
+    r.type = cls.value_or("Form");
+    r.epoch = life::Epoch();
+    if (is_runtime_form_id(*r.form_id)) {
+        if (cls) {  // only an exact class name can match LiveFingerprint's {base, type}; else no fingerprint at all
+            const RE::TESForm* base = form;
+            if (const auto* ref = form->As<RE::TESObjectREFR>())
+                if (const auto* b = ref->GetBaseObject()) base = b;
+            r.fingerprint = Fingerprint{ KeyOrId(base), *cls };
+        }
+    } else if (SourceFile(form)) {
+        r.form_key = KeyOrId(form);
+    }
+    return r;
 }
 }

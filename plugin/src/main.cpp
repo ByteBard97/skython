@@ -1,3 +1,5 @@
+#include "Events.h"
+#include "GameBackend.h"
 #include "Lifecycle.h"
 #include "Log.h"
 #include "PythonHost.h"
@@ -64,7 +66,11 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
 {
     try {
         spy::life::OnMessage(m);
-        if (m->type == SKSE::MessagingInterface::kDataLoaded) spy::host::Start(spy::settings::Get());
+        if (m->type == SKSE::MessagingInterface::kDataLoaded) {
+            spy::game::GetDispatcher();      // the dispatcher (and through it the hub) exists first
+            spy::events::RegisterSinks();    // before Python starts: no subscription can race the sink setup (Task 44 relies on it)
+            spy::host::Start(spy::settings::Get());
+        }
     } catch (const std::exception& e) {
         spy::log::Error(std::string("message handler threw: ") + e.what());
     } catch (...) {

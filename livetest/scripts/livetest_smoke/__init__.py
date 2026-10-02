@@ -15,6 +15,7 @@ import time
 
 import _skython
 from skython import _host, errors
+from skython.values import Form
 
 log = logging.getLogger("livetest_smoke")
 PLAYER_ID = 0x14
@@ -146,6 +147,23 @@ def _sweep(cmd: dict) -> dict:
     return {"calls": rows}
 
 
+def _mod_event(game, event_name: str) -> dict:
+    """In-process: subscribe through Game.on_mod_event, raise the event with Form.SendModEvent, report what arrived."""
+    got: list = []
+    done = threading.Event()
+
+    def on_event(ev) -> None:
+        sender = ev.data.get("sender")
+        got.append({"name": ev.data["name"], "str_arg": ev.data["str_arg"], "num_arg": ev.data["num_arg"],
+                    "sender": sender.form_id if sender is not None else None, "seq": ev.seq, "epoch": ev.epoch})
+        done.set()
+
+    with game.on_mod_event(event_name, on_event):
+        game.call_method(Form(form_id=0x14), "Form", "SendModEvent", event_name, "in-process", 2.5)
+        done.wait(10)
+    return {"received": got}
+
+
 def _handle(game, cmd: dict) -> dict:
     global _spin_thread, _spin_loops
     name = cmd.get("cmd")
@@ -165,6 +183,8 @@ def _handle(game, cmd: dict) -> dict:
         return _bench(game, int(cmd.get("calls", 300)))
     if name == "sweep":
         return _sweep(cmd)
+    if name == "mod_event":
+        return _mod_event(game, str(cmd.get("event", "skython_smoke")))
     return {"error": f"unknown command {name!r}"}
 
 
