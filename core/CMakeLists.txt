@@ -7,7 +7,7 @@ target_include_directories(spy_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/../third_party)
 target_compile_features(spy_core PUBLIC cxx_std_20)
-# The Linux build of the _skyrim extension module (Task 19) links this static library into a shared object.
+# The Linux build of the _skython extension module (Task 19) links this static library into a shared object.
 set_target_properties(spy_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 find_package(Threads REQUIRED)
 target_link_libraries(spy_core PUBLIC Threads::Threads)
