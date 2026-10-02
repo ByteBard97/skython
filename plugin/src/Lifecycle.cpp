@@ -2,11 +2,15 @@
 #include "ConsoleEcho.h"
 #include "Events.h"
 #include "Log.h"
+#include "Ops.h"
 #include "SaveLoad.h"
 #include "spy/lifecycle_state.h"
 #include <RE/Skyrim.h>
 #include <atomic>
+#include <chrono>
 #include <cstring>
+#include <format>
+#include <thread>
 
 namespace spy::life {
 namespace {
@@ -21,8 +25,19 @@ LifecycleState& State()
 std::atomic_bool g_lastInteractive{ false };
 std::atomic_bool g_saveLoadInProgress{ false };  // Task 39 (R60): see SaveLoadInProgress in Lifecycle.h
 // game_loaded waits for the interactive transition (S6: kPostLoadGame comes before the Loading Menu closes).
-// 0 = nothing pending, 1 = a save load succeeded, 2 = a new game started.
+// 0 = nothing pending, 1 = a save load succeeded, 2 = a new game started, 3 = the world-start gate started a world
+// (Task 48b: a console coc from the main menu, which raises neither kPostLoadGame nor kNewGame).
 std::atomic_int g_pendingLoaded{ 0 };
+
+// Task 48b (R70): the world-start check. While core's gate is open, one SKSE task at a time checks that the player
+// has a parent cell and 3D. A task never re-queues itself (Global Constraints; SKSE drains its queue until it is
+// empty, so it would spin): if the player is not in the world yet, a short-lived thread queues the next check
+// kWorldCheckDelay later, at most kWorldCheckAttempts times per gate opening. Any later menu event also queues one.
+constexpr auto kWorldCheckDelay = std::chrono::milliseconds(100);
+constexpr int kWorldCheckAttempts = 100;  // about 10 s
+std::atomic_bool g_worldCheckQueued{ false };
+std::atomic_int g_worldCheckMisses{ 0 };
+void QueueWorldCheck() noexcept;
 
 void NoteInteractive()
 {
@@ -34,8 +49,71 @@ void NoteInteractive()
     g_saveLoadInProgress.store(false);  // R60: the save load / new game ends here, right before game_loaded is pushed
     if (pending == 0) return;
     // No lifecycle lock is held here (Lifecycle.cpp has none): Push takes only the hub's mutex.
-    events::Push("game_loaded", json{ { "new_game", pending == 2 } });  // the hub stamps the new epoch
+    // A gate start (3) has no save behind it either, so it reports new_game true; it raises no new_game event (that
+    // event is kNewGame's, and SKSE sends kNewGame only for the CharGen quest).
+    events::Push("game_loaded", json{ { "new_game", pending != 1 } });  // the hub stamps the new epoch
     log::Info("events: game_loaded epoch " + std::to_string(State().epoch()));
+}
+
+void CheckWorld()
+{
+    g_worldCheckQueued.store(false);
+    if (!State().world_start_pending()) {
+        g_worldCheckMisses.store(0);
+        return;
+    }
+    auto* pc = RE::PlayerCharacter::GetSingleton();
+    auto* cell = pc ? pc->GetParentCell() : nullptr;
+    const bool has3D = pc && pc->Get3D() != nullptr;
+    // In the world = a parent cell and 3D (DevBench's playerLoaded is the 3D test; it is false at the main menu).
+    if (!cell || !has3D) {
+        const int misses = ++g_worldCheckMisses;
+        if (misses == 1)
+            log::Info(std::format("lifecycle: world-start gate open, player not in the world yet (cell {}, 3D {}); retrying",
+                cell ? "yes" : "no", has3D ? "yes" : "no"));
+        if (misses >= kWorldCheckAttempts) {
+            log::Warn("lifecycle: world-start gate open but the player is not in the world after " + std::to_string(misses) +
+                      " checks; waiting for the next menu event");
+            g_worldCheckMisses.store(0);
+            return;
+        }
+        std::thread([] {
+            std::this_thread::sleep_for(kWorldCheckDelay);
+            QueueWorldCheck();
+        }).detach();
+        return;
+    }
+    g_worldCheckMisses.store(0);
+    // Pending first, then the state change (as for kNewGame): a racing menu event's NoteInteractive then pushes it.
+    g_pendingLoaded.store(3);
+    if (!State().on_player_in_world()) {  // a load, a new game or a menu got there first
+        int expected = 3;
+        g_pendingLoaded.compare_exchange_strong(expected, 0);
+        return;
+    }
+    log::Info(std::format("lifecycle: world started without kNewGame or a save load (console coc from the main menu); "
+                          "player cell {:08X}, epoch {}",
+        cell->GetFormID(), State().epoch()));
+    NoteInteractive();
+}
+
+void QueueWorldCheck() noexcept
+{
+    try {
+        if (!State().world_start_pending() || g_worldCheckQueued.exchange(true)) return;
+        SKSE::GetTaskInterface()->AddTask([] {
+            ops::InTask in;
+            ops::Measured measured;
+            try {
+                CheckWorld();
+            } catch (...) {
+                g_worldCheckQueued.store(false);
+                log::Error("lifecycle: world-start check threw");
+            }
+        });
+    } catch (...) {
+        g_worldCheckQueued.store(false);
+    }
 }
 
 struct MenuSink final : RE::BSTEventSink<RE::MenuOpenCloseEvent>
@@ -53,8 +131,10 @@ struct MenuSink final : RE::BSTEventSink<RE::MenuOpenCloseEvent>
             else if (name == RE::MainMenu::MENU_NAME && e->opening) {
                 log::Info("lifecycle: Main Menu opened; no game loaded");
                 console::FlushHeld();  // queues one SKSE task for lines held before the console existed (Task 43)
-            }
+            } else if (name == RE::MainMenu::MENU_NAME)
+                log::Info("lifecycle: Main Menu closed");
             NoteInteractive();
+            QueueWorldCheck();  // Task 48b: no-op unless the world-start gate is open
         } catch (...) {
             log::Error("lifecycle: menu sink threw");
         }
@@ -103,7 +183,13 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
     case SKSE::MessagingInterface::kNewGame:
         g_pendingLoaded.store(2);
         g_saveLoadInProgress.store(true);  // Task 39 (R60)
-        State().on_new_game();
+        if (!State().on_new_game()) {
+            // The world-start gate already started this world and pushed its game_loaded (Task 48b): undo.
+            int expected = 2;
+            g_pendingLoaded.compare_exchange_strong(expected, 0);
+            g_saveLoadInProgress.store(false);
+            log::Info("lifecycle: kNewGame after the world-start gate started this world; no second game_loaded");
+        }
         events::Push("new_game", json::object());
         log::Info("lifecycle: new game, epoch " + std::to_string(State().epoch()));
         break;

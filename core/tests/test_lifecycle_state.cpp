@@ -1,5 +1,6 @@
 #include "doctest/doctest.h"
 #include "spy/lifecycle_state.h"
+#include <atomic>
 #include <thread>
 #include <vector>
 
@@ -277,4 +278,233 @@ TEST_CASE("events and queries from several threads at once do not race (run unde
     for (auto& th : threads) th.join();
     CHECK(s.loads_started() == 2000u);
     CHECK(s.epoch() == 2000u);
+}
+
+// Task 48b (ruling R70): a world started from the main menu without kNewGame or a save load (a console coc). SKSE
+// sends kNewGame only from its hook on the CharGen quest's NewGame, so a coc never raises it. The plugin asks
+// world_start_pending() after each menu event and, while it is true, checks the player's parent cell on the main
+// thread and calls on_player_in_world().
+namespace {
+// Main menu, then `coc <cell>`: the Loading Menu opens, the Main Menu closes, the Loading Menu closes.
+void CocFromMainMenu(LifecycleState& s)
+{
+    s.on_menu(LM, true);
+    s.on_menu(MM, false);
+    s.on_menu(LM, false);
+}
+}
+
+TEST_CASE("coc from the main menu: the gate opens after the Loading Menu closes and the world starts once")
+{
+    AtMainMenu s;
+    CHECK_FALSE(s.world_start_pending());
+    s.on_menu(LM, true);
+    s.on_menu(MM, false);
+    CHECK_FALSE(s.world_start_pending());  // behind the loading screen
+    s.on_menu(LM, false);
+    CHECK(s.world_start_pending());
+    CHECK(s.not_ready_reason() == "no_game");
+    CHECK(s.on_player_in_world());
+    CHECK(s.interactive());
+    CHECK(s.game_loaded());
+    CHECK(s.epoch() == 1);
+    CHECK(s.loads_started() == 0);  // not a world reset
+    CHECK_FALSE(s.world_start_pending());
+    CHECK_FALSE(s.on_player_in_world());  // a second check starts nothing
+    CHECK(s.epoch() == 1);
+}
+
+TEST_CASE("coc from the main menu: the player has no cell yet when the gate opens, the world starts on a later check")
+{
+    AtMainMenu s;
+    CocFromMainMenu(s);
+    REQUIRE(s.world_start_pending());
+    // The plugin found no parent cell and retries next frame; the gate stays open meanwhile.
+    s.on_menu("HUD Menu", true);
+    CHECK(s.world_start_pending());
+    CHECK(s.on_player_in_world());
+    CHECK(s.epoch() == 1);
+    CHECK_FALSE(s.on_player_in_world());
+}
+
+TEST_CASE("the startup Loading Menu that closes under the Main Menu does not open the gate")
+{
+    LifecycleState s;
+    s.on_data_loaded();
+    s.on_menu(MM, true);
+    s.on_menu(LM, false);  // Task 48 R69 launch 1: 'Main Menu opened' then 'Loading Menu closed'
+    CHECK_FALSE(s.world_start_pending());
+    CHECK_FALSE(s.on_player_in_world());
+    CHECK(s.epoch() == 0);
+}
+
+TEST_CASE("after a quit to the main menu, closing the Main Menu alone does not open the gate (a stale cell cannot start a world)")
+{
+    AtMainMenu s;
+    CocFromMainMenu(s);
+    REQUIRE(s.on_player_in_world());
+    s.on_menu(MM, true);  // quit to the main menu
+    CHECK(s.not_ready_reason() == "no_game");
+    s.on_menu(MM, false);  // the Main Menu closes before the next coc's Loading Menu opens
+    CHECK_FALSE(s.world_start_pending());
+    CHECK_FALSE(s.on_player_in_world());
+    s.on_menu(LM, true);
+    s.on_menu(LM, false);
+    CHECK(s.world_start_pending());
+    CHECK(s.on_player_in_world());
+    CHECK(s.epoch() == 2);
+    CHECK(s.loads_started() == 1);  // the quit, not the second start
+}
+
+TEST_CASE("before data is loaded the gate never opens")
+{
+    LifecycleState s;
+    s.on_menu(MM, true);
+    CocFromMainMenu(s);
+    CHECK_FALSE(s.world_start_pending());
+    CHECK_FALSE(s.on_player_in_world());
+}
+
+TEST_CASE("a save load from the main menu never opens the gate, in either order")
+{
+    for (const bool menu_first : {true, false}) {
+        AtMainMenu s;
+        s.on_pre_load_game();
+        s.on_menu(LM, true);
+        s.on_menu(MM, false);
+        if (menu_first) s.on_menu(LM, false);
+        CHECK_FALSE(s.world_start_pending());
+        CHECK_FALSE(s.on_player_in_world());
+        s.on_post_load_game(true);
+        if (!menu_first) s.on_menu(LM, false);
+        CHECK_FALSE(s.world_start_pending());
+        CHECK_FALSE(s.on_player_in_world());
+        CHECK(s.interactive());
+        CHECK(s.epoch() == 1);
+        CHECK(s.loads_started() == 1);
+    }
+}
+
+TEST_CASE("a failed load from the main menu starts no world, even if the menus then close")
+{
+    AtMainMenu s;
+    s.on_pre_load_game();
+    s.on_menu(LM, true);
+    s.on_menu(MM, false);
+    s.on_post_load_game(false);
+    s.on_menu(LM, false);
+    CHECK_FALSE(s.world_start_pending());
+    CHECK_FALSE(s.on_player_in_world());
+    CHECK(s.epoch() == 0);
+    CHECK_FALSE(s.game_loaded());
+}
+
+TEST_CASE("new game: kNewGame before the Loading Menu closes starts the world, the gate stays shut")
+{
+    AtMainMenu s;
+    s.on_menu(LM, true);
+    s.on_menu(MM, false);
+    CHECK(s.on_new_game());
+    s.on_menu(LM, false);
+    CHECK_FALSE(s.world_start_pending());
+    CHECK_FALSE(s.on_player_in_world());
+    CHECK(s.interactive());
+    CHECK(s.epoch() == 1);
+}
+
+TEST_CASE("new game: a late kNewGame after the gate already started the world counts nothing again")
+{
+    AtMainMenu s;
+    CocFromMainMenu(s);
+    REQUIRE(s.on_player_in_world());
+    CHECK_FALSE(s.on_new_game());  // the same world: no second epoch, the plugin pushes no second game_loaded
+    CHECK(s.epoch() == 1);
+    CHECK(s.interactive());
+    CHECK(s.loads_started() == 0);
+}
+
+TEST_CASE("a later kNewGame in another world still starts it")
+{
+    AtMainMenu s;
+    CocFromMainMenu(s);
+    REQUIRE(s.on_player_in_world());
+    s.on_menu(MM, true);  // quit
+    s.on_menu(LM, true);
+    s.on_menu(MM, false);
+    CHECK(s.on_new_game());
+    s.on_menu(LM, false);
+    CHECK(s.epoch() == 2);
+    CHECK_FALSE(s.on_player_in_world());
+}
+
+TEST_CASE("loading a save in a world the gate started is an ordinary load")
+{
+    AtMainMenu s;
+    CocFromMainMenu(s);
+    REQUIRE(s.on_player_in_world());
+    s.on_pre_load_game();
+    CHECK(s.not_ready_reason() == "loading");
+    s.on_menu(LM, true);
+    s.on_post_load_game(true);
+    s.on_menu(LM, false);
+    CHECK_FALSE(s.world_start_pending());
+    CHECK_FALSE(s.on_player_in_world());
+    CHECK(s.interactive());
+    CHECK(s.epoch() == 2);
+    CHECK(s.loads_started() == 1);
+}
+
+TEST_CASE("an ordinary coc Loading Menu in a running game never opens the gate")
+{
+    AtMainMenu s;
+    CocFromMainMenu(s);
+    REQUIRE(s.on_player_in_world());
+    s.on_menu(LM, true);
+    s.on_menu(LM, false);
+    CHECK_FALSE(s.world_start_pending());
+    CHECK_FALSE(s.on_player_in_world());
+    CHECK(s.epoch() == 1);
+}
+
+TEST_CASE("the gate and its checks from several threads at once start exactly one world (TSan/ASan)")
+{
+    AtMainMenu s;
+    CocFromMainMenu(s);
+    std::atomic<int> started{0};
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 4; ++t)
+        threads.emplace_back([&] {
+            for (int i = 0; i < 500; ++i) {
+                (void)s.world_start_pending();
+                if (s.on_player_in_world()) ++started;
+                (void)s.base_state();
+            }
+        });
+    for (auto& th : threads) th.join();
+    CHECK(started.load() == 1);
+    CHECK(s.epoch() == 1);
+}
+
+TEST_CASE("coc from the main menu when the Main Menu closes after the Loading Menu: the gate opens on the Main Menu close")
+{
+    AtMainMenu s;
+    s.on_menu(LM, true);
+    s.on_menu(LM, false);
+    CHECK_FALSE(s.world_start_pending());  // the Main Menu is still up
+    s.on_menu(MM, false);
+    CHECK(s.world_start_pending());
+    CHECK(s.on_player_in_world());
+    CHECK(s.epoch() == 1);
+}
+
+TEST_CASE("a Loading Menu that opened before the Main Menu and closes under it does not count")
+{
+    LifecycleState s;
+    s.on_data_loaded();
+    s.on_menu(LM, true);   // the startup loading screen
+    s.on_menu(MM, true);   // arms the gate
+    s.on_menu(LM, false);  // no Loading Menu opened since the arm
+    s.on_menu(MM, false);
+    CHECK_FALSE(s.world_start_pending());
+    CHECK_FALSE(s.on_player_in_world());
 }
