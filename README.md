@@ -8,7 +8,7 @@ Status: in development, not released. The Linux-side code (core, dispatcher, Pyt
 
 In scope: embedding or hosting Python, a generic Papyrus call dispatcher, typed Python stubs generated from Papyrus `.psc` headers, an event layer, game-thread safety, packaging for non-technical players.
 
-Out of scope: skyrim-dm (quest and contract generation), text-to-speech, lip sync, language models. skyrim-dm will drive the game through Skython's dev bridge.
+Out of scope: any particular mod's content (quests, dialogue, generation), text-to-speech, lip sync, language models. Skython is a general-purpose bridge; mods like those are built on top of it.
 
 ## Constraints
 
@@ -18,7 +18,6 @@ Skyrim only (AE 1.6.1170 target, SE 1.5.97 optional); developed and played on Li
 
 - `Chronicle`: has a working SKSE plugin (ChronicleBridge), an HTTP protocol, and a live-test harness over DevBench.
 - `skyrim-re-toolkit`: runtime inspection plugin, verified class layouts, CommonLibSSE-NG parsing.
-- `skyrim-dm`: the contract generator that drives the game through Skython.
 
 ## Docs
 
