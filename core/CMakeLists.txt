@@ -21,4 +21,5 @@ if(SPY_CORE_TESTS)
   target_compile_definitions(spy_core_tests PRIVATE
     SPY_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../protocol/v1/fixtures")
   add_test(NAME spy_core_tests COMMAND spy_core_tests)
+  set_tests_properties(spy_core_tests PROPERTIES TIMEOUT 300)  # a lock regression in the on_wanted test hangs
 endif()

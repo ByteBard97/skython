@@ -359,6 +359,9 @@ def test_mode_specific_behaviour(game):
         return
     # Attach on demand: subscribe -> attached, unsubscribe -> detached, subscribe again -> attached and delivering.
     for round_ in range(2):
+        before = log_text()
+        attached0 = before.count("events: sink attached activate")
+        detached0 = before.count("events: sink detached activate")
         sub = game.on("activate", {"activator": [PLAYER]}, q.put)
         try:
             assert pick_up(game, 1) == 1
@@ -368,8 +371,9 @@ def test_mode_specific_behaviour(game):
             sub.close()
         time.sleep(1.0)
         text = log_text()
-        assert text.count("events: sink attached activate") >= round_ + 1
-        assert text.count("events: sink detached activate") >= round_ + 1
+        # Exactly one new attach and one new detach per round (counts from earlier tests are subtracted).
+        assert text.count("events: sink attached activate") == attached0 + 1, round_
+        assert text.count("events: sink detached activate") == detached0 + 1, round_
     # The reference an event named is gone (picked up): its next use raises, never crashes, never vanishes silently.
     with pytest.raises((errors.NotFound, errors.StaleReference)):
         game.call_method(target, "ObjectReference", "GetBaseObject")
@@ -381,13 +385,15 @@ def test_rapid_subscribe_close_ends_attached(game):
     activate sink attached and delivering (attach-on-demand mode only)."""
     if not detach_mode():
         pytest.skip("skip-only mode: sinks never detach")
+    start = len(re.findall(r"events: sink (?:attached|detached) activate", log_text()))
     for _ in range(200):
         game.on("activate", {"activator": [PLAYER]}, lambda ev: None).close()
     q: queue.Queue = queue.Queue()
     with game.on("activate", {"activator": [PLAYER]}, q.put):
         time.sleep(2.0)                                      # every queued reconcile task has run
-        lines = re.findall(r"events: sink (attached|detached) activate", log_text())
-        assert lines and lines[-1] == "attached", lines[-5:]
+        lines = re.findall(r"events: sink (attached|detached) activate", log_text())[start:]
+        assert "detached" in lines, lines  # the cycles really detached at least once
+        assert lines[-1] == "attached", lines[-5:]
         assert pick_up(game, 1) == 1
         q.get(timeout=10.0)
     remove_swords(game)
@@ -432,7 +438,9 @@ TEST_CASE("event hub: on_wanted reports 0->1 and 1->0 per event, outside the loc
     spy::EventHub* self = nullptr;
     spy::EventHubOptions opts{ .epoch = [] { return 1u; }, .loading = [] { return false; },
                                .on_wanted = [&](std::string_view e, bool w) {
-                                   (void)self->Wants(e);  // re-entering the hub here must not deadlock
+                                   (void)self->Wants(e);
+                                   self->CloseConsumer(self->OpenConsumer());  // takes the hub's lock: deadlocks if
+                                                                               // called under it
                                    calls.emplace_back(std::string(e), w);
                                } };
     spy::EventHub hub(opts);
@@ -448,6 +456,22 @@ TEST_CASE("event hub: on_wanted reports 0->1 and 1->0 per event, outside the loc
     hub.Subscribe(c, { { "event", "death" } });
     hub.CloseConsumer(c);  // drops the death subscription: 1 -> 0
     CHECK(calls.back() == std::pair<std::string, bool>{ "death", false });
+}
+
+TEST_CASE("event hub: an on_wanted that throws never breaks the hub")
+{
+    int calls = 0;
+    spy::EventHub hub(spy::EventHubOptions{ .epoch = [] { return 1u; }, .loading = [] { return false; },
+                                            .on_wanted = [&](std::string_view, bool) { ++calls; throw std::runtime_error("x"); } });
+    const auto c = hub.OpenConsumer();
+    const auto s = hub.Subscribe(c, { { "event", "activate" } })["sub"].get<spy::SubId>();
+    CHECK(hub.Wants("activate"));
+    hub.Unsubscribe(c, s);
+    CHECK_FALSE(hub.Wants("activate"));
+    hub.Subscribe(c, { { "event", "death" } });
+    hub.CloseConsumer(c);
+    CHECK_FALSE(hub.Wants("death"));
+    CHECK(calls == 4);
 }
 ```
 Run `cmake --build core/build -j && ./core/build/spy_core_tests -tc="event hub: on_wanted*"` → FAIL (no member `on_wanted` in `EventHubOptions`).
@@ -519,7 +543,7 @@ void OnWanted(std::string_view event, bool)
     }
 }
 ```
-(add `#include <algorithm>`). In `RegisterSinks`, after `RegisterWorldSinks();` add `log::Info("events: sinks attach on demand");`.
+(add `#include <algorithm>`). In `RegisterSinks`, after `RegisterWorldSinks();` add `log::Info("events: sinks attach on demand (" + std::to_string(Sinks().size()) + " sinks)");` (the review added the count; waits and `detach_mode()` match the prefix `events: sinks attach on demand`).
 
 `plugin/src/EventSinks.cpp`, `RegisterBatch1`: replace the four `AddEventSink` lines with entries (keep the null checks and the `events: sinks registered (batch 1)` line, whose meaning becomes "known and ready to attach"):
 ```cpp
