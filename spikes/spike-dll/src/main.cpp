@@ -770,6 +770,72 @@ std::string S4Idx(std::size_t idx)
 }
 }
 
+namespace spike {
+std::atomic_int g_sends{0}, g_modEvents{0};
+std::string g_lastSend, g_lastMod, g_sendTid, g_modTid;  // guarded by g_mx
+std::mutex g_mx;
+
+void NativeSend(RE::StaticFunctionTag*, RE::BSFixedString channel, RE::BSFixedString payload)
+{
+    std::lock_guard l(g_mx);
+    g_lastSend = std::format("{}|{}", channel.c_str(), payload.c_str());
+    g_sendTid = Tid();
+    g_sends.fetch_add(1);
+}
+
+bool RegisterPapyrus(RE::BSScript::IVirtualMachine* vm)
+{
+    vm->RegisterFunction("Send"sv, "SkyrimPython"sv, NativeSend);  // verify the RegisterFunction overload by grepping the submodule
+    return true;
+}
+
+struct ModSink : RE::BSTEventSink<SKSE::ModCallbackEvent>
+{
+    RE::BSEventNotifyControl ProcessEvent(const SKSE::ModCallbackEvent* e, RE::BSTEventSource<SKSE::ModCallbackEvent>*) override
+    {
+        if (e && e->eventName == "spyTest") {
+            std::lock_guard l(g_mx);
+            // {:.6f}: std::format prints a float 42.0f as "42", not "42.000000"
+            g_lastMod = std::format("{}|{}|{:.6f}", e->eventName.c_str(), e->strArg.c_str(), e->numArg);
+            g_modTid = Tid();
+            g_modEvents.fetch_add(1);
+        }
+        return RE::BSEventNotifyControl::kContinue;
+    }
+};
+
+std::string S5()
+{
+    // Counters are never reset by earlier runs: compare against the values at the start of THIS run.
+    const int ev0 = g_modEvents.load(), sends0 = g_sends.load();
+    {
+        std::lock_guard l(g_mx);
+        g_lastMod.clear(); g_lastSend.clear(); g_modTid.clear(); g_sendTid.clear();
+    }
+    auto r = OnMainThread([](std::function<void(std::string)> finish) {
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        auto* policy = vm->GetObjectHandlePolicy();
+        // Handle type for an Actor form: verify by grepping how CommonLibSSE-NG maps form types to VMTypeID.
+        auto handle = policy->GetHandleForObject(static_cast<RE::VMTypeID>(RE::FormType::ActorCharacter), player);
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> none;
+        const bool a = vm->DispatchMethodCall(handle, RE::BSFixedString("Form"), RE::BSFixedString("SendModEvent"),
+            RE::MakeFunctionArguments(RE::BSFixedString("spyTest"), RE::BSFixedString("hello"), 42.0f), none);
+        const bool b = vm->DispatchStaticCall(RE::BSFixedString("SkyrimPython"), RE::BSFixedString("Send"),
+            RE::MakeFunctionArguments(RE::BSFixedString("chan"), RE::BSFixedString("{\"x\":1}")), none);
+        finish(std::format("dispatched(modEvent={},send={})", a, b));
+    }, std::chrono::seconds(10));
+    // Bounded wait for both to land (was a fixed sleep).
+    WaitUntil([&] { return g_modEvents.load() > ev0 && g_sends.load() > sends0; }, std::chrono::seconds(10));
+    std::lock_guard l(g_mx);
+    const int evD = g_modEvents.load() - ev0, sendD = g_sends.load() - sends0;
+    const bool pass = evD == 1 && sendD == 1 && g_lastMod == "spyTest|hello|42.000000" && g_lastSend == "chan|{\"x\":1}";
+    const auto mainTid = TidOf(g_mainTid.load());
+    return std::format("S5 {} dispatch={} mod_events_delta={} last_mod={} mod_tid={} sends_delta={} last_send={} send_tid={} main_tid={}",
+        pass ? "PASS" : "FAIL", r, evD, g_lastMod, g_modTid, sendD, g_lastSend, g_sendTid, mainTid);
+}
+}
+
 // Handle has a namespace block of its own: Tasks 3-9 add their code as new `namespace spike { ... }` blocks
 // directly above this one, after Log and ParseInt, which they use.
 namespace spike {
@@ -785,6 +851,7 @@ std::string Handle(const std::string& line)
         py::SetCaller(&CallRealTime);
         return "PY_ARM_RT OK";
     }
+    if (line == "s5") return S5();
     if (line == "s4") return S4();
     if (line == "s4loc") return S4Loc();
     if (line.rfind("s4bound ", 0) == 0) return S4Bound(static_cast<std::size_t>(ParseInt(line.substr(8), 0)));
@@ -825,6 +892,7 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
     case SKSE::MessagingInterface::kDataLoaded:
         spike::Log("kDataLoaded");
         spike::g_dataLoaded.store(true);
+        { static spike::ModSink sink; SKSE::GetModCallbackEventSource()->AddEventSink(&sink); }
         if (spike::py::AutostartRequested())  // run B (Step 7): the real plugin's timing; py::Load ran in SKSEPluginLoad
             spike::Log("spike: autostart at kDataLoaded " + spike::py::Init(true));
         break;
@@ -838,6 +906,7 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse)
 {
     SKSE::Init(skse, { .log = false });  // InitInfo aggregate (SKSE/API.h); the old Init(skse, bool) is [[deprecated]]
     SetupLog();
+    SKSE::GetPapyrusInterface()->Register(spike::RegisterPapyrus);
     spike::Log(std::format("SkyrimPythonSpike loading on Skyrim {}", REL::Module::get().version().string(".")));  // string() alone joins with '-' (1-6-1170-0)
     if (spike::py::AutostartRequested())  // run B (Step 7): python314.dll + SpikePyCore.dll at plugin load
         spike::Log("spike: autostart at plugin load " + spike::py::Load());
