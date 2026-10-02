@@ -149,6 +149,7 @@ void RegisterSinks()
     });
     RegisterBatch1();
     RegisterWorldSinks();
-    log::Info("events: sinks attach on demand");
+    // A batch whose source was null logged an error and added no entries; the line names how many sinks exist.
+    log::Info("events: sinks attach on demand (" + std::to_string(Sinks().size()) + " sinks)");
 }
 }

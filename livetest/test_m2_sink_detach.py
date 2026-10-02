@@ -141,6 +141,9 @@ def test_mode_specific_behaviour(game):
         return
     # Attach on demand: subscribe -> attached, unsubscribe -> detached, subscribe again -> attached and delivering.
     for round_ in range(2):
+        before = log_text()
+        attached0 = before.count("events: sink attached activate")
+        detached0 = before.count("events: sink detached activate")
         sub = game.on("activate", {"activator": [PLAYER]}, q.put)
         try:
             assert pick_up(game, 1) == 1
@@ -150,8 +153,9 @@ def test_mode_specific_behaviour(game):
             sub.close()
         time.sleep(1.0)
         text = log_text()
-        assert text.count("events: sink attached activate") >= round_ + 1
-        assert text.count("events: sink detached activate") >= round_ + 1
+        # Exactly one new attach and one new detach per round (counts from earlier tests are subtracted).
+        assert text.count("events: sink attached activate") == attached0 + 1, round_
+        assert text.count("events: sink detached activate") == detached0 + 1, round_
     # The reference an event named is gone (picked up): its next use raises, never crashes, never vanishes silently.
     with pytest.raises((errors.NotFound, errors.StaleReference)):
         game.call_method(target, "ObjectReference", "GetBaseObject")
@@ -163,13 +167,15 @@ def test_rapid_subscribe_close_ends_attached(game):
     activate sink attached and delivering (attach-on-demand mode only)."""
     if not detach_mode():
         pytest.skip("skip-only mode: sinks never detach")
+    start = len(re.findall(r"events: sink (?:attached|detached) activate", log_text()))
     for _ in range(200):
         game.on("activate", {"activator": [PLAYER]}, lambda ev: None).close()
     q: queue.Queue = queue.Queue()
     with game.on("activate", {"activator": [PLAYER]}, q.put):
         time.sleep(2.0)                                      # every queued reconcile task has run
-        lines = re.findall(r"events: sink (attached|detached) activate", log_text())
-        assert lines and lines[-1] == "attached", lines[-5:]
+        lines = re.findall(r"events: sink (attached|detached) activate", log_text())[start:]
+        assert "detached" in lines, lines  # the cycles really detached at least once
+        assert lines[-1] == "attached", lines[-5:]
         assert pick_up(game, 1) == 1
         q.get(timeout=10.0)
     remove_swords(game)

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <fstream>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -657,7 +658,9 @@ TEST_CASE("event hub: on_wanted reports 0->1 and 1->0 per event, outside the loc
     spy::EventHub* self = nullptr;
     spy::EventHubOptions opts{ .epoch = [] { return 1u; }, .loading = [] { return false; },
                                .on_wanted = [&](std::string_view e, bool w) {
-                                   (void)self->Wants(e);  // re-entering the hub here must not deadlock
+                                   (void)self->Wants(e);
+                                   self->CloseConsumer(self->OpenConsumer());  // takes the hub's lock: deadlocks if
+                                                                               // called under it
                                    calls.emplace_back(std::string(e), w);
                                } };
     spy::EventHub hub(opts);
@@ -673,4 +676,20 @@ TEST_CASE("event hub: on_wanted reports 0->1 and 1->0 per event, outside the loc
     hub.Subscribe(c, { { "event", "death" } });
     hub.CloseConsumer(c);  // drops the death subscription: 1 -> 0
     CHECK(calls.back() == std::pair<std::string, bool>{ "death", false });
+}
+
+TEST_CASE("event hub: an on_wanted that throws never breaks the hub")
+{
+    int calls = 0;
+    spy::EventHub hub(spy::EventHubOptions{ .epoch = [] { return 1u; }, .loading = [] { return false; },
+                                            .on_wanted = [&](std::string_view, bool) { ++calls; throw std::runtime_error("x"); } });
+    const auto c = hub.OpenConsumer();
+    const auto s = hub.Subscribe(c, { { "event", "activate" } })["sub"].get<spy::SubId>();
+    CHECK(hub.Wants("activate"));
+    hub.Unsubscribe(c, s);
+    CHECK_FALSE(hub.Wants("activate"));
+    hub.Subscribe(c, { { "event", "death" } });
+    hub.CloseConsumer(c);
+    CHECK_FALSE(hub.Wants("death"));
+    CHECK(calls == 4);
 }
