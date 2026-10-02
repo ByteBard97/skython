@@ -2,9 +2,13 @@
 
 Spec 8's M2 soak: 30 minutes on `skythonbase` with a subscription to every v1 event (filters where the table requires one), one bridge subscriber and one in-process subscriber, a call per second, `Skython.Send` and quest stage changes, item moves, and one save to a new throwaway save plus one load in the middle. Every 30 s the run records the bridge's `in_flight`, the event hub's consumers, subscriptions and dropped/suppressed totals, the drain meter, and the game process's memory (Python runs inside it). Pass = no crash, callbacks still delivering at the end, no memory growth trend beyond the queue bounds, subscriptions back at their count, drain and latency within recorded limits (Review Focus 1).
 
+**Binding growth (record only, not a pass criterion; Task 42 measured that a call binds its form or alias in the Papyrus VM and the binding is saved):** record the size of the soak's save (`skython_t56_<ts>.ess`) next to the size of `skythonbase.ess` (both read on the box with `bssh` `(Get-Item <path>).Length`), and, if `game.state` already offers a count of `PackHandle` binds (no plugin code is added for it here), that count at the start and the end. Write them to `soak.json`'s summary as `binding_growth` (`{"base_save_bytes", "soak_save_bytes", "packhandle_binds_start", "packhandle_binds_end"}`, `null` where unavailable) and into the RESULTS line, for Task 57's README limits.
+
 > Part of the [Skython M1.5/M2 plan](README.md). Read the index's **Global Constraints** (Saves; no credentials), **Contracts** (events table, C++ `EventHub`, Plugin: the four `game.state` diagnostics keys Task 39 owns, Live tests: `_testesp`) and **Review Focus** 1 and 5 first. Steps use checkbox (`- [ ]`) syntax.
 
 > **Gate:** start only after Tasks 50 (`_testesp`) and 53 (`livetest_events`) are done (Task 55 need not be: this task uses only the deployed build and the ESP, not the acceptance scenario, so a re-planned Task 55 after a decision-8 rejection does not block it); Gate 0 (owner decision 7) accepted for the box steps (index **Owner decisions**).
+>
+> **Cold forms (Task 42):** if this task needs a form with no bound script object ("a cold form"), verify it on the save in use through the dev trace line `values: <form> bound before call: false` (`trace_timing`), never assume it from a form being obscure: on `s4test` the Steel War Axe and Iron Dagger were already bound, the Steel Mace (`0x013988`) and Iron Mace (`0x013982`) were cold; `skythonbase` may differ.
 >
 > **Runs on:** Linux (tests), then the Windows box + game for about 35 minutes. No plugin code changes in this task.
 >

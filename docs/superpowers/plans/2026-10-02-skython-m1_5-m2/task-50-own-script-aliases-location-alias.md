@@ -6,6 +6,8 @@ Carry-forward from the v1 plan: alias **arguments** had no live test (Task 29: n
 
 > **Gate:** start only after Task 49 is done: the base save `skythonbase` exists on the box (in `SkythonTestCell`), `SkythonTest.esp` and the six decision-7 `.pex` files are deployed, and `fresh_save` prefers `skythonbase`. **Decision-8 names:** `SCENARIO_FUNCTION` and `CHANNEL` in `_testesp.py` are taken from Task 48's RESULTS entry (its line "decision-8 names used: scenario function `...`, channel `...`"), never from the defaults below when that line names others; no such line in `spikes/RESULTS.md` → STOP (Task 48 is not done).
 >
+> **Cold forms (Task 42):** if this task needs a form with no bound script object ("a cold form"), verify it on the save in use through the dev trace line `values: <form> bound before call: false` (`trace_timing`), never assume it from a form being obscure: on `s4test` the Steel War Axe and Iron Dagger were already bound, the Steel Mace (`0x013988`) and Iron Mace (`0x013982`) were cold; `skythonbase` may differ.
+>
 > **Runs on:** Linux (the test files), then the Windows box + game through the dev bridge.
 >
 > **STOP and ask the owner (do not improvise) if:** `discover()` finds any value that differs from the index's **Test ESP** contract (alias ids/types/names, the NPC, objective 10): that is a Task 48 defect, never something this task adapts to; `Quest.Start` on `SkythonTestQuest` returns False; any LocationAlias call answers `type_mismatch` "no ... script object bound" (alias 3 must carry `SkythonTestLocationAlias`: a Task 48 defect); `LocationAlias.Clear` leaves the location filled; `Skyrim.esm|0x018A56` does not resolve to a `Location`; a live test crashes the game; `plugins.txt` differs from its backup in any line other than ours.

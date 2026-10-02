@@ -4,6 +4,8 @@
 >
 > **Depends on:** Task 40 (both sink batches), Task 38 (`plugin/config/variants/trace-timing.ini`, the dev ini with `trace_timing = true`: `_skython._probe_sink_cycles` exists only with it), Task 35 (`ModuleHost`, built with named fields), Task 34 (`EventHubOptions`).
 >
+> **Cold forms (Task 42):** if this task needs a form with no bound script object ("a cold form"), verify it on the save in use through the dev trace line `values: <form> bound before call: false` (`trace_timing`), never assume it from a form being obscure: on `s4test` the Steel War Axe and Iron Dagger were already bound, the Steel Mace (`0x013988`) and Iron Mace (`0x013982`) were cold; `skythonbase` may differ.
+>
 > **Runs on:** the Windows build box and the game on the box ([v1 Task 1c](../2026-10-01-skyrim-python-v1-embedded/task-01c-part-c-on-the-box.md)); Part 2's core change also on Linux.
 >
 > **STOP and ask the owner (do not improvise) if:** the probe crashes the game a second time after one clean relaunch (one crash is a FAIL result to record; two means something else is wrong); the game does not reach the main menu within 10 minutes; the box does not answer `ssh` within 10 s. A probe FAIL is **not** a STOP: record it, skip Part 2, run Part 3 in skip-only mode.

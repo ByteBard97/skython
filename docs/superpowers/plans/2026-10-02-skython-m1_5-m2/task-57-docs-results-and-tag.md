@@ -99,10 +99,12 @@ A settings file that does not parse marks its script as failed (`python.log` say
 See [`examples/`](examples/): Twitch chat spawning named mudcrabs, talking to NPCs through a language model, a live stats overlay for OBS, real-world weather sync, a kill tracker, your own Papyrus script reporting to Python with `Skython.Send`, and a quest-stage notifier, each in one Python file.
 ```
 (e) At the end of the bridge paragraph that ends `... (this project's own tests reach the Windows test machine from Linux that way).` add: ` The bridge protocol is 1.1 (events and save/load); a 1.0 client still connects. Events reach a bridge client exactly as they reach a script.`
-(f) In "Limits to know about": replace the **Aliases.** bullet with
+(f) In "Limits to know about": replace the **Aliases.** bullet with these two bullets
 ```markdown
 - **Aliases.** Only aliases that carry a script (`ReferenceAlias`, `LocationAlias`, or a script extending them) work as call targets, arguments and results; a plain alias is `TypeMismatch` (Skython never attaches a script on demand, because that would leak into saves). An alias argument passes the script object already bound to that alias. An alias whose id is 0xFFFF would decode as its quest (form handles carry 0xFFFF in the high 32 bits; one quest sampled).
+- **Bindings are saved.** Calling a method on a form or alias binds it in the Papyrus VM, as any Papyrus script would; that binding is saved (measured, Task 42). Scripts that touch many thousands of distinct forms grow the save accordingly.
 ```
+(The new **Bindings are saved.** bullet may quote Task 56's `binding_growth` numbers in one clause; no bracket left.)
 in the **Call cost.** bullet replace `the bridge costs a second drain, cause not yet measured` with Task 38's one-line finding from its RESULTS entry (for example `the bridge costs a second drain because <Task 38's measured cause>`; no bracket left); append to the **Properties.** bullet: ` Inherited properties work (tested on a script whose parent script has its own properties).`; and replace the bullet `- Not in M1: events, and loading or saving the game from Python (\`game.load\` / \`game.save\`). Both come in M2.` with
 ```markdown
 - **Events** are delivered at most once and can be dropped when a callback falls behind or a save is loading (see Events); there is no history, so subscribe before the moment you care about. A callback that raises is logged, and the next event still arrives.
