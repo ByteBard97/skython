@@ -101,13 +101,21 @@ def test_activate(game):
 def test_menu_open_and_close(game):
     q, sub_o = collect(game, "menu_open", {"menu": ["inventorymenu"]})  # case-insensitive string filter
     sub_c = game.on("menu_close", {"menu": ["InventoryMenu"]}, q.put)
+    opened = False
     try:
+        opened = True  # set before the call: a failure partway through may still have opened it
         box_menu("open", "InventoryMenu")
         time.sleep(1.0)
         box_menu("close", "InventoryMenu")
+        opened = False
         got = take(q, 2, 15.0)
         assert [(e.name, e.data["menu"]) for e in got] == [("menu_open", "InventoryMenu"), ("menu_close", "InventoryMenu")], got
     finally:
+        if opened:  # never leave the game paused in the inventory
+            try:
+                box_menu("close", "InventoryMenu")
+            except Exception as exc:  # noqa: BLE001
+                print(f"menu: cleanup close failed: {exc!r}")
         sub_o.close()
         sub_c.close()
 
@@ -137,8 +145,9 @@ def test_cell_attach_and_detach_without_a_loading_screen(game):
 
 def test_hit_between_two_spawned_actors(game):
     a, b = spawn(game, WOLF, 1200.0), spawn(game, WOLF, 1400.0)
-    # target AND aggressor (filters AND across fields): a hit on `a` by a guard or another creature never matches.
-    q, sub = collect(game, "hit", {"target": [a], "aggressor": [b]})
+    # target AND aggressor (filters AND across fields), both directions: a hit by or on a guard or another creature
+    # never matches, and either wolf may land the first hit.
+    q, sub = collect(game, "hit", {"target": [a, b], "aggressor": [a, b]})
     try:
         neutral_fight(game, a, b)
         got = take(q, 1, 20.0)
@@ -146,7 +155,9 @@ def test_hit_between_two_spawned_actors(game):
             neutral_fight(game, a, b, aggression=3.0)
             got = take(q, 1, 20.0)
             print("hit: needed aggression 3")
-        assert got and got[0].data["target"].form_id == a.form_id and got[0].data["aggressor"].form_id == b.form_id, got
+        assert got, "no hit between the two wolves"
+        target, aggressor = got[0].data["target"].form_id, got[0].data["aggressor"].form_id
+        assert {target, aggressor} == {a.form_id, b.form_id} and target != aggressor, got
         assert all(isinstance(got[0].data[k], bool) for k in ("power_attack", "sneak_attack", "bash_attack", "blocked"))
     finally:
         sub.close()
@@ -169,6 +180,7 @@ def test_hit_flood_never_stalls_the_game(game, session):
     # AND across fields: a hit by or on a guard or anyone else never matches. Both directions, because near Whiterun
     # the wolves also fight guards and townsfolk, and one direction alone came back empty in a 35 s run (Task 40 live).
     flt = {"target": [to_wire(a), to_wire(b)], "aggressor": [to_wire(a), to_wire(b)]}
+    held = None
     try:
         neutral_fight(game, a, b)
         time.sleep(5.0)
@@ -201,6 +213,7 @@ def test_hit_flood_never_stalls_the_game(game, session):
         stop.set()
         t.join(5)
         released = command("release_sub", consumer=held["consumer"])
+        held = None  # released: nothing for finally to do
         diag = diagnostics(game)
         print(f"flood: frames={len(frames)} held={released} p50 before={before} during={during} "
               f"drain before={drain_before} after={diag['max_task_drain_ms']} dropped_total={diag['events_dropped_total']}")
@@ -215,6 +228,11 @@ def test_hit_flood_never_stalls_the_game(game, session):
         assert diag["max_task_drain_ms"] <= max(drain_before, 5.0), (drain_before, diag["max_task_drain_ms"])
     finally:
         stop.set()
+        if held and "consumer" in held:  # an assert or error before the release: never leave it subscribed
+            try:
+                command("release_sub", consumer=held["consumer"])
+            except Exception as exc:  # noqa: BLE001
+                print(f"flood: cleanup release_sub failed: {exc!r}")
         s.close()
         cleanup(game, a, b)
         game.call_method(PLAYER, "Actor", "SetGhost", False)
