@@ -166,7 +166,7 @@ Result: `{"results":[{"ok":true,"result":v}|{"ok":false,"error":{...}}]}`
 | `bool` | true or false |
 | `call_list` | 1..max_batch_calls objects `{"op", "args"}` |
 
-## Plugin ini keys (`SkyrimPython.ini`)
+## Plugin ini keys (`Skython.ini`)
 
 | Key | Type | Default | Range | Meaning |
 |---|---|---|---|---|
@@ -175,7 +175,7 @@ Result: `{"results":[{"ok":true,"result":v}|{"ok":false,"error":{...}}]}`
 | `bridge_enabled` | bool | false | - | Run the dev bridge (loopback TCP for an external process). Off in the shipped ini, on in the dev ini. |
 | `port` | u16 | 45977 | 0..65535 | Dev bridge TCP port on 127.0.0.1; 0 picks a free port. |
 | `fixed_token` | token | (empty) | - | Development only: a fixed 32-hex bridge token. Empty means a random token per start. |
-| `session_file` | path | (empty) | - | Where the bridge writes its session file. Empty means <SKSE log dir>/SkyrimPython/session.json. |
+| `session_file` | path | (empty) | - | Where the bridge writes its session file. Empty means <SKSE log dir>/Skython/session.json. |
 | `default_timeout_ms` | u32 | 5000 | 1..3600000 | Timeout applied to a call that sends none. |
 | `max_inflight_per_connection` | u32 | 256 | 1..4294967295 | Requests one dev-bridge connection may have in flight. |
 | `max_inflight_total` | u32 | 1024 | 1..4294967295 | Requests in flight in the whole plugin (in-process and bridge together). |
@@ -185,9 +185,9 @@ Result: `{"results":[{"ok":true,"result":v}|{"ok":false,"error":{...}}]}`
 
 Dev bridge only; an in-process script needs no discovery.
 
-- Host: `127.0.0.1`. Session file: `SkyrimPython/session.json` under the game's SKSE log directory unless `session_file` says otherwise.
+- Host: `127.0.0.1`. Session file: `Skython/session.json` under the game's SKSE log directory unless `session_file` says otherwise.
 - Session file fields: `port`, `token`, `pid`, `plugin_version`, `protocol`.
-- Environment variables: `SKYRIM_PYTHON_SESSION` (path of a session file), or `SKYRIM_PYTHON_PORT` together with `SKYRIM_PYTHON_TOKEN`.
+- Environment variables: `SKYTHON_SESSION` (path of a session file), or `SKYTHON_PORT` together with `SKYTHON_TOKEN`.
 
 ## Client defaults
 

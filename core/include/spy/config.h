@@ -15,7 +15,7 @@ struct Config
     bool bridge_enabled = config_defaults::kBridgeEnabled;    // the dev bridge; false in the shipped ini
     std::uint16_t port = config_defaults::kPort;              // dev bridge port; 0 = pick a free port
     std::string fixed_token{config_defaults::kFixedToken};    // empty: a random token per start
-    std::string session_file{config_defaults::kSessionFile};  // empty: <SKSE log dir>/SkyrimPython/session.json
+    std::string session_file{config_defaults::kSessionFile};  // empty: <SKSE log dir>/Skython/session.json
     std::uint32_t default_timeout_ms = config_defaults::kDefaultTimeoutMs;  // kMinTimeoutMs .. kMaxTimeoutMs
     std::uint32_t max_inflight_per_connection = config_defaults::kMaxInflightPerConnection;  // dev bridge; at least 1
     std::uint32_t max_inflight_total = config_defaults::kMaxInflightTotal;  // dispatcher; at least 1

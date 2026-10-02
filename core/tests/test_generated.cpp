@@ -85,7 +85,7 @@ TEST_CASE("the v1 wire contract is pinned: change these literals only together w
     CHECK(spy::config_defaults::kMaxInflightPerConnection == 256u);
     CHECK(spy::config_defaults::kMaxInflightTotal == 1024u);
     CHECK(spy::discovery::kHost == "127.0.0.1");
-    CHECK(spy::discovery::kEnvSession == "SKYRIM_PYTHON_SESSION");
+    CHECK(spy::discovery::kEnvSession == "SKYTHON_SESSION");
     CHECK(spy::discovery::kSessionFileName == "session.json");
 
     const std::vector<std::string> codes = {"not_ready", "busy", "bad_request", "unknown_function", "type_mismatch", "stale_reference",

@@ -1,11 +1,11 @@
-# skyrim-python protocol v1
+# Skython protocol v1
 
 Every number and name below is in [PROTOCOL.generated.md](PROTOCOL.generated.md), which is generated from `protocol.json` (error codes, ops and their arguments, limits, defaults). This file explains the rules and says "the `max_frame_bytes` limit" where it means a number. If this text and a generated table seem to disagree, the table is right: report the sentence here.
 
 ## Two modes, one message format
 The same request and response objects are used in both modes:
-- **In-process** (a Python script running inside the game): the `skyrim` package serialises a request object to JSON text and hands it to the built-in `_skyrim` module (`_skyrim.call` or `_skyrim.submit`); it gets the response object back as JSON text. There is no framing, handshake or token.
-- **Dev bridge** (an external process, development only): a Python server inside the game (`skyrim.bridge`) accepts TCP connections, checks the handshake below, and forwards each request text unchanged to `_skyrim`; the response text comes back unchanged in a frame. The client is `skyrim.remote`.
+- **In-process** (a Python script running inside the game): the `skython` package serialises a request object to JSON text and hands it to the built-in `_skython` module (`_skython.call` or `_skython.submit`); it gets the response object back as JSON text. There is no framing, handshake or token.
+- **Dev bridge** (an external process, development only): a Python server inside the game (`skython.bridge`) accepts TCP connections, checks the handshake below, and forwards each request text unchanged to `_skython`; the response text comes back unchanged in a frame. The client is `skython.remote`.
 
 So the C++ request parser, op-argument checks and response builders serve both modes, and the golden fixtures in `v1/fixtures/` pin both.
 
@@ -28,7 +28,7 @@ The bridge writes a session file (fields in the generated Discovery table) so a 
 `{"type":"request","id":<uint64>,"op":"<op>","args":{...}}`
 `{"type":"response","id":<same>,"ok":true,"result":<value or object>}`
 `{"type":"response","id":<same>,"ok":false,"error":{"code":"<code>","message":"...","detail":{...}}}`
-Responses may arrive in any order. On a bridge connection, a request whose id is still in flight on that connection is refused with `bad_request`; in-process, the `skyrim` package numbers its own requests and the plugin does not check ids. A request whose text cannot be parsed gets an error response with the id read from the text when one can be found, else id 0. Error messages are truncated to `max_error_message_bytes` and never echo a whole request, so a response cannot exceed the frame limit. Every field of the wrong JSON type (`{"type":5}`, `"op":5`, `"kind":5`, `"client":5`) is `bad_request`; the plugin never answers with anything but a typed error. The error codes and what each means are in the generated tables.
+Responses may arrive in any order. On a bridge connection, a request whose id is still in flight on that connection is refused with `bad_request`; in-process, the `skython` package numbers its own requests and the plugin does not check ids. A request whose text cannot be parsed gets an error response with the id read from the text when one can be found, else id 0. Error messages are truncated to `max_error_message_bytes` and never echo a whole request, so a response cannot exceed the frame limit. Every field of the wrong JSON type (`{"type":5}`, `"op":5`, `"kind":5`, `"client":5`) is `bad_request`; the plugin never answers with anything but a typed error. The error codes and what each means are in the generated tables.
 
 A `not_ready` error carries `detail.reason`, one of the reasons listed there, plus `detail.paused` and `detail.menus`. Ops marked as needing a game get `not_ready` at once, without waiting, while no game is loaded or a save is loading; `game.state` is always answered. When a save starts loading, every call still in flight that needs a game ends with `not_ready` (reason `loading`). A `timeout` error's detail also carries `detail.paused` and `detail.menus`, and may carry `detail.late_cancel: true`, meaning the caller stopped waiting before the plugin's own deadline; the call may still run in the game either way.
 

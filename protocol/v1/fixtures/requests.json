@@ -6,7 +6,7 @@
     {"type": "request", "id": 4, "op": "form.resolve", "args": {"form_key": "Skyrim.esm|0x012EB7"}},
     {"type": "request", "id": 5, "op": "papyrus.batch", "args": {"calls": [{"op": "papyrus.call_static", "args": {"script": "Utility", "function": "RandomInt", "args": [1, 6]}}], "stop_on_error": true}},
     {"type": "request", "id": 18446744073709551615, "op": "game.state", "args": {}},
-    {"type": "request", "id": 30, "op": "papyrus.get_property", "args": {"object": {"kind": "form", "form_id": 83888128}, "script": "SkyrimPythonTestScript", "property": "Counter"}},
+    {"type": "request", "id": 30, "op": "papyrus.get_property", "args": {"object": {"kind": "form", "form_id": 83888128}, "script": "SkythonTestScript", "property": "Counter"}},
     {"type": "request", "id": 31, "op": "papyrus.set_property", "args": {"object": {"kind": "alias", "quest": {"kind": "form", "form_id": 83888128}, "alias_id": 0, "alias_type": "ReferenceAlias"}, "script": "ReferenceAlias", "property": "Tag", "value": 7}},
     {"type": "request", "id": 32, "op": "form.resolve", "args": {"editor_id": "IronSword"}},
     {"type": "request", "id": 33, "op": "form.resolve", "args": {"form_id": 20}}

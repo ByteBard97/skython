@@ -292,7 +292,7 @@ def test_welcome_fixture_is_accepted():
 
 def test_connect_defaults_are_the_tables_and_the_v1_values():
     p = inspect.signature(connect_remote).parameters
-    assert (p["host"].default, p["client_name"].default) == (g.HOST, g.CLIENT_NAME) == ("127.0.0.1", "skyrim-python")
+    assert (p["host"].default, p["client_name"].default) == (g.HOST, g.CLIENT_NAME) == ("127.0.0.1", "skython")
     assert (p["connect_timeout"].default, p["call_timeout"].default, p["send_timeout"].default) == \
         (g.CONNECT_TIMEOUT_S, g.CALL_TIMEOUT_S, g.SEND_TIMEOUT_S) == (5.0, 30.0, 30.0)
 

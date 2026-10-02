@@ -603,7 +603,7 @@ def render_md(m: dict) -> str:
     L += ["### Argument types", "", "| Type | Meaning |", "|---|---|"]
     for t, (_, meaning) in ARG_TYPES.items():
         L.append(f"| `{t}` | {md_cell(meaning)} |")
-    L += ["", "## Plugin ini keys (`SkyrimPython.ini`)", "", "| Key | Type | Default | Range | Meaning |", "|---|---|---|---|---|"]
+    L += ["", "## Plugin ini keys (`Skython.ini`)", "", "| Key | Type | Default | Range | Meaning |", "|---|---|---|---|---|"]
     for k in m["config_keys"]:
         dflt = ("true" if k["default"] else "false") if k["type"] == "bool" else (f"`{k['default']}`" if k["default"] != "" else "(empty)")
         if k["type"] in ("u16", "u32"):
