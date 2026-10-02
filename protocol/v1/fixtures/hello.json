@@ -1,7 +1,7 @@
 {
   "valid": [
     {"type": "hello", "protocol": [1, 0], "token": "00112233445566778899aabbccddeeff", "client": "test"},
-    {"type": "hello", "protocol": [1, 3], "token": "ffffffffffffffffffffffffffffffff", "client": "skyrim-dm"}
+    {"type": "hello", "protocol": [1, 3], "token": "ffffffffffffffffffffffffffffffff", "client": "skython-test"}
   ],
   "invalid": [
     {"message": {"type": "hello", "protocol": [1, 0], "client": "x"}, "error": "bad_request"},
