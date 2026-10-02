@@ -107,7 +107,8 @@ class Game:
     def call(self, script: str, function: str, *args, timeout: float | None = None, require_unpaused: bool = False):
         """Call a global Papyrus function, e.g. game.call("Utility", "RandomInt", 1, 6).
 
-        A Python int is sent as a Papyrus Int: pass 3.0, not 3, where the parameter is a Float (see to_wire)."""
+        A Python int is sent as a Papyrus Int (checked to 32 bits); a Float parameter accepts it, so 3 works
+        where the parameter is a Float. Use float(n) only for an n beyond the 32-bit range (see to_wire)."""
         a = self._call_args(script, function, args, timeout, require_unpaused)
         return from_wire(self._request(_g.OP_PAPYRUS_CALL_STATIC, a, timeout))
 

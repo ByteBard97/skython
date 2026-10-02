@@ -129,11 +129,24 @@ def _skse_dir() -> pathlib.Path | None:
     return pathlib.Path(d) if d else None
 
 
+def _launch_stamp() -> pathlib.Path:
+    """tools/launch_game.sh touches launch.stamp; tools/box/box_launch.sh writes box-launch.stamp (box mode)."""
+    state = os.environ.get("SKYTHON_STATE") or str(
+        pathlib.Path(os.environ.get("XDG_STATE_HOME") or pathlib.Path.home() / ".local" / "state") / "skython")
+    return pathlib.Path(state) / ("box-launch.stamp" if BOX else "launch.stamp")
+
+
 def fresh(path: pathlib.Path) -> bool:
     """True when the file was written after the last launch stamp (so it belongs to this run). In box mode the mirror
-    out/box-skse holds only text the box wrote since its launch stamp (box_files.sh pull), and is newer than any stamp."""
-    stamp = pathlib.Path(os.environ.get("SKYTHON_STATE", "")) / "launch.stamp"
-    return path.exists() and (not stamp.exists() or path.stat().st_mtime >= stamp.stat().st_mtime)
+    out/box-skse holds only text the box wrote since its launch stamp (box_files.sh pull), and is newer than any stamp.
+    In a live run (SKYTHON_LIVE=1 or box mode) a missing stamp is an error: any old file would otherwise count."""
+    stamp = _launch_stamp()
+    if not stamp.exists():
+        if BOX or os.environ.get("SKYTHON_LIVE") == "1":
+            raise RuntimeError(f"no launch stamp at {stamp}: cannot tell this run's logs from older ones "
+                               "(launch with tools/box/box_launch.sh, or set SKYTHON_STATE)")
+        return path.exists()
+    return path.exists() and path.stat().st_mtime >= stamp.stat().st_mtime
 
 
 def log_text(name: str = "Skython.log") -> str:

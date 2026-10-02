@@ -1,3 +1,4 @@
+import ast
 import json
 import os
 import pathlib
@@ -16,6 +17,15 @@ def test_python_is_running_in_the_game():
     assert "python host: running" in log_text(), "the core log has no 'python host: running' line from this run"
     assert "SpyCore_Load returned true" in log_text("SkythonLoader.log")
     assert python_log_text(), "python.log was not written in this run"
+    # The interpreter config (Task 26): the embedded runtime's python.exe and the isolated search path, in order.
+    line = next((ln for ln in log_text().splitlines() if "python host: initialised; sys.executable = " in ln), "")
+    assert line, "the core log has no 'python host: initialised' line from this run"
+    exe = line.split("sys.executable = ", 1)[1].split("; sys.path = ", 1)[0]
+    assert exe.endswith("\\Skython\\python\\python.exe"), exe
+    path = ast.literal_eval(line.split("; sys.path = ", 1)[1])
+    order = [next((i for i, p in enumerate(path) if p.endswith(tail)), -1)
+             for tail in ("\\python314.zip", "\\site-packages", "\\lib", "\\scripts")]
+    assert -1 not in order and order == sorted(order), path
 
 
 def test_a_failing_script_is_logged_and_python_keeps_running(session):

@@ -5,10 +5,17 @@ import pytest
 from support import load_session, log_text, raw_connect, refused
 
 VARIANT = os.environ.get("SPY_VARIANT", "")
+KNOWN = ("no-python", "no-core", "no-package", "python-off", "bridge-off", "collision", "no-stdlib", "relaunch")
 
 
 def only(name):
     return pytest.mark.skipif(VARIANT != name, reason=f"run with SPY_VARIANT={name} (Task 26 Step 7)")
+
+
+def test_spy_variant_is_known():
+    # A typo would otherwise skip all eight variant tests and look like a clean run.
+    if VARIANT and VARIANT not in KNOWN:
+        pytest.fail(f"unknown SPY_VARIANT={VARIANT!r}; known: {', '.join(KNOWN)}")
 
 
 @only("no-python")
@@ -29,6 +36,7 @@ def test_missing_core_dll_disables_python():
 def test_missing_skython_package_is_a_logged_failure():
     text = log_text()
     assert "python host: failed: skython._host" in text and "No module named 'skython'" in text
+    assert "lifecycle: Main Menu opened" in text  # the game carried on to the main menu
     assert refused()
 
 
@@ -58,6 +66,7 @@ def test_missing_stdlib_zip_is_a_logged_failure():
     text = log_text()
     assert "python host: failed: Py_InitializeFromConfig" in text
     assert "python host: running" not in text
+    assert "lifecycle: Main Menu opened" in text  # the game carried on to the main menu
     assert refused()
 
 
