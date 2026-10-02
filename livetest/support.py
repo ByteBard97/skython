@@ -14,6 +14,21 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 BOX = os.environ.get("SKYTHON_BOX") == "1"
 
 
+def spy_env(*names: str) -> tuple[str, ...]:
+    """The SPY_* values a live test needs (livetest/s4test.env holds the ones for the box's s4test save). Under
+    SKYTHON_LIVE=1 a missing one FAILS the test: a live run must not pass by skipping. Opt-in tests (SPY_SAVE_TEST,
+    SPY_MANUAL, SPY_VARIANT, SPY_LOW_CAP) gate themselves with skipif and do not use this."""
+    import pytest
+
+    missing = [n for n in names if not os.environ.get(n)]
+    if missing:
+        why = f"{', '.join(missing)} not set: source livetest/s4test.env (values for the s4test save on the box)"
+        if os.environ.get("SKYTHON_LIVE") == "1":
+            pytest.fail(why)
+        pytest.skip(why)
+    return tuple(os.environ[n] for n in names)
+
+
 @dataclass
 class Session:
     port: int

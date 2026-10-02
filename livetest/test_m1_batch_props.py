@@ -5,7 +5,8 @@ SPY_S7C_KIND=Alias (optional SPY_S7C_GETTER: a parameterless function returning 
 The Int auto property read uses SPY_OWN_QUEST/SPY_OWN_SCRIPT (as in test_m1_calls.py) and
 SPY_OWN_INT_PROPERTY=currentAttackDelta (CWCampaignScript). The write-visibility test uses PetFramework_ParentQuest
 (Update.esm 0x01002F1C), fixed in the file, and restores what it writes.
-test_per_connection_cap_returns_busy needs plugin/config/variants/low-cap.ini deployed and skips otherwise.
+test_per_connection_cap_returns_busy is opt-in: deploy plugin/config/variants/low-cap.ini and set SPY_LOW_CAP=1.
+The other SPY_* values come from `source livetest/s4test.env`; under SKYTHON_LIVE=1 a missing one fails the test.
 Run with -s to see the batch timings (ms per step).
 """
 import os
@@ -15,7 +16,7 @@ import pytest
 
 from skython import errors
 from skython.values import Alias, Form
-from support import raw_connect, read_frame, send_request
+from support import raw_connect, read_frame, send_request, spy_env
 
 PLAYER = Form(form_id=0x14)
 KINDS = {"Int": int, "Float": float, "Bool": bool, "String": str, "Form": Form, "Alias": Alias, "Array": list}
@@ -110,12 +111,8 @@ def test_property_errors(game):
 
 def _s7c_property():
     """The quest and the auto property spike S7c enumerated (spikes/RESULTS.md, the S7c row)."""
-    try:
-        return (int(os.environ["SPY_S7C_QUEST"], 16), os.environ["SPY_S7C_SCRIPT"], os.environ["SPY_S7C_PROPERTY"],
-                os.environ["SPY_S7C_KIND"])
-    except KeyError as e:
-        pytest.skip(f"set SPY_S7C_QUEST, SPY_S7C_SCRIPT, SPY_S7C_PROPERTY and SPY_S7C_KIND from spikes/RESULTS.md "
-                    f"({e.args[0]} is missing)")
+    quest, script, prop, kind = spy_env("SPY_S7C_QUEST", "SPY_S7C_SCRIPT", "SPY_S7C_PROPERTY", "SPY_S7C_KIND")
+    return int(quest, 16), script, prop, kind
 
 
 def test_get_property_reads_an_auto_property(game):
@@ -156,11 +153,8 @@ def test_get_property_reads_an_int_auto_property(game):
     """An Int auto property cannot hold None, so this read is not vacuous the way an unfilled object property is.
     SPY_OWN_QUEST/SPY_OWN_SCRIPT as in test_m1_calls.py; SPY_OWN_INT_PROPERTY: an Int auto property declared on that
     script (CWCampaignScript.currentAttackDelta, `int Property currentAttackDelta auto Conditional Hidden`)."""
-    try:
-        quest_id, script, prop = (int(os.environ["SPY_OWN_QUEST"], 16), os.environ["SPY_OWN_SCRIPT"],
-                                  os.environ["SPY_OWN_INT_PROPERTY"])
-    except KeyError as e:
-        pytest.skip(f"set SPY_OWN_QUEST, SPY_OWN_SCRIPT and SPY_OWN_INT_PROPERTY ({e.args[0]} is missing)")
+    quest, script, prop = spy_env("SPY_OWN_QUEST", "SPY_OWN_SCRIPT", "SPY_OWN_INT_PROPERTY")
+    quest_id = int(quest, 16)
     quest = game.resolve(form_id=quest_id)
     first = game.get_property(quest, script, prop)
     print(f"\n{script}.{prop} -> {first!r}")
@@ -205,8 +199,11 @@ def test_full_property_is_unsupported(game):
         game.get_property(PLAYER, "Actor", "X")
 
 
+@pytest.mark.skipif(os.environ.get("SPY_LOW_CAP") != "1",
+                    reason="opt-in: deploy plugin/config/variants/low-cap.ini and run with SPY_LOW_CAP=1")
 def test_per_connection_cap_returns_busy(session):
-    """Needs plugin/config/variants/low-cap.ini (bridge cap 16). Counts the bridge's own busy replies."""
+    """Needs plugin/config/variants/low-cap.ini (bridge cap 16) and SPY_LOW_CAP=1. Counts the bridge's own busy
+    replies: with the low cap deployed there must be some."""
     s = raw_connect(session)
     n = 40  # more than the low cap, few enough that the VM is never flooded
     for i in range(1, n + 1):
@@ -217,6 +214,5 @@ def test_per_connection_cap_returns_busy(session):
     busy = [r for r in replies if not r["ok"] and r["error"]["code"] == "busy"]
     ok = [r for r in replies if r["ok"]]
     print(f"\nper-connection cap: {len(ok)} ok, {len(busy)} busy of {n}")
-    if not busy:
-        pytest.skip("no busy reply: deploy plugin/config/variants/low-cap.ini for this test (the dev ini's cap is 256)")
+    assert len(busy) > 0, "SPY_LOW_CAP=1 but no busy reply: is plugin/config/variants/low-cap.ini deployed?"
     assert len(ok) + len(busy) == n and len(ok) <= 16
