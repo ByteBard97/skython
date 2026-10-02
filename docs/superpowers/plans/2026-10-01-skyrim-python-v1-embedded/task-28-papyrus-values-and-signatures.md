@@ -8,7 +8,7 @@ Adapted from: branch `plan-out-of-process`, task 17b (`task-17b-papyrus-value-co
 >
 > **Runs on:** the Windows build box plus the game, which runs on the box ([Task 1c](task-01c-part-c-on-the-box.md)); live tests run on Linux through the dev bridge and the session tunnel.
 >
-> **STOP and ask the owner (do not improvise) if:** S7 is missing or FAIL; the form-argument route S7 recorded differs from the code below by more than a rename; a live test crashes the game; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s.
+> **STOP and ask the owner (do not improvise) if:** S7 is missing or FAIL (S7h's FAIL, the copied-`type_info()` route for object-array arguments, concerns M2 only and does not block this task: v1 refuses object-array arguments); the form-argument route S7 recorded differs from the code below by more than a rename; a live test crashes the game; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s.
 >
 > **Verified against CommonLibSSE-NG 39f9d07 (see `API-VERIFICATION.md`; this code compiled and linked on the build box).** `FindBoundObject(VMHandle, const char*, BSTSmartPointer<Object>&) const` (3 parameters); `Array::MAX_SIZE` is 128 but private (hence the local constant); `GetRawType()` exists on `TypeInfo`, not on `Variable`; `#undef GetObject` is needed after the includes (windows.h macro). Still re-check against S7's record: `GetObjectHandlePolicy`, `GetHandleForObject`, `HandleIsType`, `GetObjectForHandle`, `EmptyHandle`; `RE::BSScript::PackHandle`; `Variable(const TypeInfo&)` (a typed None) and `Variable& operator=(Variable&&)`, `SetArray`, `GetArray`, `GetObject`; `Object::GetHandle`; `VirtualMachine::CreateArray(TypeInfo, size, BSTSmartPointer<Array>&)`; `Array::size`, `operator[]`; `TESDataHandler::LookupForm(localId, pluginName)`; `TESForm::LookupByID`, `IsDeleted`, `GetFile(0)`, `GetLocalFormID`.
 
@@ -23,9 +23,11 @@ Adapted from: branch `plan-out-of-process`, task 17b (`task-17b-papyrus-value-co
 
 Rules this task implements:
 - **Missing is `not_found`; different is `stale_reference`** (spec 4.4): a form id that no longer exists, or a deleted form, is `not_found` for plugin and runtime forms alike. `stale_reference` is only for a runtime (`0xFF`) form that still exists but whose base form or type differs from the fingerprint.
-- **Arrays:** arrays of Bool/Int/Float/String are sent and returned. An **argument** holds at most 128 elements: a longer one is `type_mismatch` naming the limit, refused by core while it parses the request (`value_from_json`, before dispatch); the plugin's own check before `CreateArray` is only a second line of defence and gives the same code. **Results are not capped**: `FromVariable` does not go through core's codec, and SKSE or PapyrusUtil natives can return longer arrays (for example `GetContainerForms` on a player with more than 128 item types), which are passed through. Sending an array of objects is `unsupported` in v1 (building one needs the element's script `TypeInfo`, which no spike verifies). Reading an object array result is supported; the element kind comes from the items (`Form` for an empty one), never from `arr->type_info()`.
+- **Arrays:** arrays of Bool/Int/Float/String are sent and returned. An **argument** holds at most 128 elements: a longer one is `type_mismatch` naming the limit, refused by core while it parses the request (`value_from_json`, before dispatch); the plugin's own check before `CreateArray` is only a second line of defence and gives the same code. **Results are not capped**: `FromVariable` does not go through core's codec, and SKSE or PapyrusUtil natives can return longer arrays (for example `GetContainerForms` on a player with more than 128 item types), which are passed through. Sending an array of objects is `unsupported` in v1. For M2 (recorded, not built here): S7h showed an array made with `CreateArray(TypeInfo(array_raw & ~1), n)`, where `array_raw` is the declared parameter's raw type, is accepted as a `Form[]` argument (round-trip size 4), but only with unfilled (None) elements was it measured; an array built from a copied `type_info()` (0) and an SKSE-returned array passed back are refused. Reading an object array result is supported; the element kind comes from the items (`Form` for an empty one), never from `arr->type_info()`.
+- **Element types come from the declared type, never from `Array::type_info()`.** Arrays returned by SKSE natives (`Utility.CreateFormArray`, `ResizeFormArray`) report element type 0 (None) in `type_info()` (S7h). `ElementType` reads the declared parameter or return type only.
+- **Never call `TypeInfo::GetTypeInfo()` on an object-array type.** The pinned CommonLib (39f9d07) masks the raw value with `~kObjectArray` (~0xB), which also clears bit 3 of the class pointer; `ObjectTypeInfo` pointers are only 8-byte aligned, so it returns a pointer 8 bytes off. In S7 it read a garbage name once and crashed the game the next launch (AV in strlen); DevBench's `describe` crashed the same way. For an object array the class pointer is `reinterpret_cast<ObjectTypeInfo*>(raw & ~1)`; call `GetTypeInfo()` only when `IsObject()` is true (a single object, not an array); `TypeInfo::TypeAsString()` calls `GetTypeInfo()` for an object array too, so do not use it either.
 - **`None` arguments** become a typed None, `Variable(declared type)`: the declared object or array type with no value. Never `SetObject(nullptr, ...)`, which asserts a non-null object in CommonLib.
-- **Alias handles are tested before form handles** in `ObjectToJson`: an alias handle carries its quest's FormID in the low 32 bits, so a form-first decode would answer `Quest`. Alias results are recognised here and converted in Task 29 (until then `unsupported`).
+- **Object results decode form-first; alias detection runs only when the form check fails** (`ObjectToJson`). An alias handle carries its quest's FormID in the low 32 bits (alias 0's handle equals the quest's FormID exactly, S7g), but the form check is `LookupByID(low 32)` **and** `HandleIsType(form type, handle)`, and in every S7 run that check did not select a form for an alias handle (`naive_form_check_selects_a_form=false`). Alias-first decoding is therefore not shown necessary. The converse is unmeasured: whether `HandleIsType(BGSRefAlias/BGSLocAlias VMTYPEID, <a Quest's own handle>)` is false. `ObjectToJson` logs it once, the first time a Quest result is decoded (`values: quest handle ... is_ref_alias=... is_loc_alias=...`), and Task 29's `test_quest_result_is_a_quest_not_an_alias` records it. Form-first is correct whatever that line says; alias-first would be safe only if both are false. Keep form-first unless the owner rules otherwise. Alias results are recognised here and converted in Task 29 (until then `unsupported`).
 - A parameter typed as a script (not a native class) requires that script to be attached to the object (`FindBoundObject`); otherwise `type_mismatch` naming the parameter.
 
 - [ ] **Step 1: Write the live tests first**
@@ -48,7 +50,7 @@ def test_form_argument_round_trip(game):
 def test_form_of_the_wrong_class_is_rejected_before_dispatch(game):
     # BindObject's reject path: an ObjectReference parameter given a base Weapon.
     sword = game.call("Game", "GetFormFromFile", 0x012EB7, "Skyrim.esm")
-    with pytest.raises(errors.TypeMismatch, match="arRef"):
+    with pytest.raises(errors.TypeMismatch, match="argument 0 of Debug.SendAnimationEvent"):  # natives: param1..N (S7a)
         game.call("Debug", "SendAnimationEvent", sword, "x")
 
 
@@ -122,9 +124,12 @@ Replace `plugin/src/PapyrusValues.cpp` with (everything from Task 27 is kept; ad
 ```cpp
 #include "PapyrusValues.h"
 #include "Lifecycle.h"
+#include "Log.h"
 #include "Signatures.h"
 #include "spy/refs.h"
+#include <cstdint>
 #include <format>
+#include <mutex>
 
 // RE/Skyrim.h pulls in windows.h, whose GetObject macro (-> GetObjectA) breaks Variable::GetObject() (compile error C2039).
 // Every plugin .cpp that calls GetObject() needs this line after its includes; Task 29's Ops.cpp edits and Task 30 too.
@@ -160,7 +165,8 @@ std::string Describe(const FormRef& r)
     return r.form_key ? *r.form_key : std::format("0x{:08X}", r.form_id.value_or(0));
 }
 
-// Element type of an array of Bool/Int/Float/String. Spelled out, not computed from enum arithmetic.
+// Element type of an array of Bool/Int/Float/String. Spelled out, not computed from enum arithmetic. `arrayType` is
+// always the DECLARED parameter or return type, never Array::type_info() (0 on arrays from SKSE natives, S7h).
 TypeInfo ElementType(const TypeInfo& arrayType)
 {
     switch (arrayType.GetRawType()) {
@@ -183,7 +189,7 @@ bool FindBound(RE::VMHandle handle, const std::string& script, RE::BSTSmartPoint
 void BindObject(const void* ptr, RE::VMTypeID type, const std::string& nativeClass, const std::string& desc,
     const TypeInfo& declared, const std::string& param, Variable& out)
 {
-    const auto* cls = declared.GetTypeInfo();
+    const auto* cls = declared.GetTypeInfo();  // a single object type here (IsObject), never an object array
     const std::string want = cls ? cls->GetName() : "";
     if (want.empty() || sig::IsA(nativeClass, want)) {
         RE::BSScript::PackHandle(&out, ptr, type);
@@ -211,13 +217,23 @@ json ObjectToJson(const RE::BSScript::Object& obj)
 {
     auto* policy = VM()->GetObjectHandlePolicy();
     const auto handle = obj.GetHandle();
-    // Aliases first. An alias handle carries its quest's FormID in the low 32 bits, so the form decode below
-    // would find the Quest and the caller would be told it got a quest.
+    // Forms first. An alias handle carries its quest's FormID in the low 32 bits (alias 0: exactly the quest's
+    // FormID), but HandleIsType(form type) did not accept an alias handle in any S7 run
+    // (naive_form_check_selects_a_form=false), so this check does not mistake an alias for its quest.
+    if (auto* form = RE::TESForm::LookupByID(static_cast<RE::FormID>(handle & 0xFFFFFFFF));
+        form && policy->HandleIsType(static_cast<RE::VMTypeID>(form->GetFormType()), handle)) {
+        if (form->Is(RE::FormType::Quest)) {  // measurement for Task 29: would alias-first misread a Quest's handle?
+            static std::once_flag once;
+            std::call_once(once, [&] {
+                log::Info(std::format("values: quest handle {:016X} is_ref_alias={} is_loc_alias={}", handle,
+                    policy->HandleIsType(RE::BGSRefAlias::VMTYPEID, handle), policy->HandleIsType(RE::BGSLocAlias::VMTYPEID, handle)));
+            });
+        }
+        return form_ref_to_json(DescribeForm(form));
+    }
+    // Aliases only when the form check failed (S7f/S7g: HandleIsType(BGSRefAlias) and GetObjectForHandle resolve it).
     if (policy->HandleIsType(RE::BGSRefAlias::VMTYPEID, handle) || policy->HandleIsType(RE::BGSLocAlias::VMTYPEID, handle))
         return AliasObjectToJson(policy, handle);
-    if (auto* form = RE::TESForm::LookupByID(static_cast<RE::FormID>(handle & 0xFFFFFFFF));
-        form && policy->HandleIsType(static_cast<RE::VMTypeID>(form->GetFormType()), handle))
-        return form_ref_to_json(DescribeForm(form));
     const auto* cls = obj.GetTypeInfo();
     throw ProtocolError(ErrorCode::unsupported, std::string("the result is a ") + (cls ? cls->GetName() : "script") +
         " object, which protocol v1 cannot return (for example ActiveMagicEffect)");
@@ -272,6 +288,12 @@ FormRef DescribeForm(const RE::TESForm* form)
 
 std::string TypeName(const TypeInfo& t)
 {
+    // Never GetTypeInfo() on an object array: the pinned CommonLib returns a pointer 8 bytes off (crashed the game in
+    // S7). The class pointer of an object array is raw & ~1.
+    if (t.IsObjectArray()) {
+        const auto* cls = reinterpret_cast<const RE::BSScript::ObjectTypeInfo*>(static_cast<std::uintptr_t>(t.GetRawType()) & ~std::uintptr_t{1});
+        return std::string(cls ? cls->GetName() : "Object") + "[]";
+    }
     if (t.IsObject() && t.GetTypeInfo()) return t.GetTypeInfo()->GetName();
     switch (t.GetRawType()) {
     case Raw::kInt: return "Int";
@@ -372,7 +394,7 @@ json FromVariable(const Variable& v)
         json items = json::array();
         for (std::uint32_t i = 0; i < arr->size(); ++i) items.push_back(FromVariable((*arr)[i]));
         std::string elem;
-        switch (t.GetRawType()) {  // the element kind comes from the declared array type, never from arr->type_info()
+        switch (t.GetRawType()) {  // the element kind comes from the Variable's own array type, never arr->type_info() (0 from SKSE natives, S7h)
         case Raw::kBoolArray: elem = "Bool"; break;
         case Raw::kIntArray: elem = "Int"; break;
         case Raw::kFloatArray: elem = "Float"; break;

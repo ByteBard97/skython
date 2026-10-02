@@ -1,6 +1,6 @@
 # Task 27: Game backend, `call_static` and `game.state`
 
-Adapted from: branch `plan-out-of-process`, task 17a (`task-17a-dispatch-skeleton-call-static-and-game-state.md`). The IO thread, `Outbox`, `ConnId`, frames and the per-connection cap are gone from C++: core's `spy::Dispatcher` (Task 18) now owns caps, readiness, deadlines, load cancellation and exception handling. What is left here is the game side: a `spy::Backend` that turns each request into one `AddTask` on the main thread, plus the signature lookup and the primitive value conversion that `call_static` needs.
+Adapted from: branch `plan-out-of-process`, task 17a (`task-17a-dispatch-skeleton-call-static-and-game-state.md`). The IO thread, `Outbox`, `ConnId`, frames and the per-connection cap are gone from C++: core's `spy::Dispatcher` (Task 18) now owns caps, readiness, deadlines, load cancellation and exception handling. What is left here is the game side: a `spy::Backend` that turns each request into one `AddTask` on the main thread, plus the signature lookup and the primitive value conversion that `call_static` needs. ("Main thread" in Tasks 27-30 means "inside an SKSE task": see Rules below.)
 
 > Part of the [skyrim-python v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), sections 4.1, 4.3-4.5. Steps use checkbox (`- [ ]`) syntax.
 
@@ -10,7 +10,7 @@ Adapted from: branch `plan-out-of-process`, task 17a (`task-17a-dispatch-skeleto
 >
 > **STOP and ask the owner (do not improvise) if:** S2, S4 or S9 is FAIL; a name in the Verify list does not exist and no obvious equivalent is found; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s; the log shows a runtime other than AE 1.6.1170.
 >
-> **Verify (grep `plugin/extern/CommonLibSSE-NG`; `API-VERIFICATION.md` has already checked these at the pin):** `VirtualMachine::GetScriptObjectType(BSFixedString, BSTSmartPointer<ObjectTypeInfo>&)`; `ObjectTypeInfo::GetParent`, `GetNumMemberFuncs`, `GetMemberFuncIter`, `GetNumGlobalFuncs`, `GetGlobalFuncIter`; `IFunction::GetName`, `GetParamCount`, `GetParam(i, BSFixedString&, TypeInfo&)`; `Variable::GetType`, `IsBool/IsInt/IsFloat/IsString`, `SetSInt/SetFloat/SetBool/SetString`, `IsNoneObject`; `DispatchStaticCall(BSFixedString, BSFixedString, IFunctionArguments*, BSTSmartPointer<IStackCallbackFunctor>&)` (non-const lvalue callback); `IStackCallbackFunctor::CanSave() const` (virtual, not pure); `RE::UI::GameIsPaused()`; `RE::Calendar::GetDaysPassed()`.
+> **Verify (grep `plugin/extern/CommonLibSSE-NG`; `API-VERIFICATION.md` has already checked these at the pin):** `VirtualMachine::GetScriptObjectType(BSFixedString, BSTSmartPointer<ObjectTypeInfo>&)`; `GetScriptObjectTypeNoLoad(const BSFixedString&, BSTSmartPointer<ObjectTypeInfo>&) const` (IVirtualMachine.h:141, used by spike S7 diagnostic s7b2); `ObjectTypeInfo::GetParent`, `GetNumMemberFuncs`, `GetMemberFuncIter`, `GetNumGlobalFuncs`, `GetGlobalFuncIter`; `IFunction::GetName`, `GetParamCount`, `GetParam(i, BSFixedString&, TypeInfo&)`; `Variable::GetType`, `IsBool/IsInt/IsFloat/IsString`, `SetSInt/SetFloat/SetBool/SetString`, `IsNoneObject`; `DispatchStaticCall(BSFixedString, BSFixedString, IFunctionArguments*, BSTSmartPointer<IStackCallbackFunctor>&)` (non-const lvalue callback); `IStackCallbackFunctor::CanSave() const` (virtual, not pure); `RE::UI::GameIsPaused()`; `RE::Calendar::GetDaysPassed()`.
 
 **Files:**
 - Replace: `plugin/src/GameBackend.h`, `plugin/src/GameBackend.cpp` (Task 26 created interim versions with the same names; this task overwrites both files whole)
@@ -26,7 +26,7 @@ Adapted from: branch `plan-out-of-process`, task 17a (`task-17a-dispatch-skeleto
 - Consumes (core, Tasks 14-18): `spy::Value`, `FormRef`, `Fingerprint`, `form_ref_to_json`, `value_kind` (`spy/values.h`); `is_runtime_form_id`, `format_form_key` (`spy/refs.h`); `CallArgs`, `parse_call_args` (`spy/requests.h`); `ProtocolError`, `ErrorCode`, `json` (`spy/errors.h`); `OpResult`, `Done`, `Cancelled`, `Progress`, `Backend`, `Dispatcher`, `DispatcherOptions` (`spy/dispatcher.h`); `Config` (`spy/config.h`).
 - Consumes (plugin, Task 25): `spy::log::Info/Warn/Error/Debug`, `spy::settings::Get()`, and these lifecycle wrappers in `Lifecycle.h`: `spy::life::Epoch()`, `GameLoaded()`, `Loading()`, `Paused()`, `OpenMenus()`, `LoadsStarted()`, `NotReadyReason(bool require_unpaused) -> std::optional<std::string>`, `BaseState() -> json` (`LifecycleState::base_state()`). If Task 25 spelled any of these differently, use its names; do not add a second lifecycle.
 - Consumes (Task 26): `spy::InstallModuleHost(ModuleHost)` call site; `livetest/conftest.py` fixtures `session` and `game` (a `skyrim.Game` connected through the bridge); `livetest/support.py` `raw_connect(session) -> socket`, `rpc(sock, op, args=None, req_id=1, timeout=30.0) -> dict`, `encode`, `read_frame`.
-- Consumes from spikes: S2 (Task 4, measured; index Global Constraints, Papyrus dispatch rules): the VM never frees the `IFunctionArguments` passed to a dispatch, so the plugin owns them: the `Callback` holds the call's `DynArgs` and deletes it after reading the result, never earlier (phase D, 1000/1000); when `Dispatch*Call` returns false the args are kept, not freed, and logged once (ruling R37: unmeasured, the callback might still fire); the callback may run on the main thread or a VM thread.
+- Consumes from spikes: S2 (Task 4, measured; index Global Constraints, Papyrus dispatch rules): the VM never frees the `IFunctionArguments` passed to a dispatch, so the plugin owns them: the `Callback` holds the call's `DynArgs` and deletes it after reading the result, never earlier (phase D, 1000/1000); when `Dispatch*Call` returns false the args are kept, not freed, and logged once (ruling R37: unmeasured, the callback might still fire); the callback may run inside an SKSE task or on a VM thread. S7 (Task 9) and ruling R49: see the next rule list.
 - Produces:
   - `spy::game::Backend() -> spy::Backend&` (the `GameBackend` singleton) and `spy::game::GetDispatcher() -> spy::Dispatcher&` (built on first use from `settings::Get()`: `default_timeout_ms`, `max_inflight_total`, and `on_late` logging each dropped late result with `log::Warn`; reaper started; immortal).
   - `spy::ops::Run(const std::string& op, const json& args, Done, Cancelled, Progress)` (main thread only; never throws), `spy::ops::AddStateExtras(json&)` (main thread), `spy::ops::WithGameState(json detail) -> json`, `spy::ops::NotReady(const std::string& reason) -> OpResult`.
@@ -34,18 +34,23 @@ Adapted from: branch `plan-out-of-process`, task 17a (`task-17a-dispatch-skeleto
   - `game.state` result keys: `data_ready, game_loaded, loading, interactive, paused, menus, epoch, player, game_days_passed, diagnostics{late_results_dropped, in_flight}` (Task 31 adds `max_task_drain_ms` and `max_task_drain_count` to `diagnostics`; `player` and `game_days_passed` are `null` unless a game is loaded). `Backend::BaseState()`, which `_skyrim.state()` and every `timeout`/`not_ready` detail read, carries the same keys **without** `player` and `game_days_passed`: it never blocks, so it cannot read the engine, and it leaves the keys out rather than report a wrong `null`.
 
 Rules this task implements (spec 4.3-4.5):
+- **"Main thread" means "inside an SKSE task"** (ruling R49, measured in S7, Task 9). `AddTask`/`AddUITask` tasks were never seen to overlap (0 overlapping in about 2800 probed tasks; about 1600 of them were spread over frames, and the strongest run, 600 tasks of mixed AddTask/AddUITask submitted at interval 0, also had none), but they run on varying BSJobs worker threads (about six distinct ids; one drain runs every queued task back to back on one thread, the next drain may use another). The game window's thread (`RE::Main::threadID`, also the plugin-load thread) ran none of them. So: **never identify "the main thread" by thread id** (no `std::this_thread::get_id()` comparisons, no stored main-thread id). Code that needs engine state runs inside an `AddTask`, and the VM callback always hops through `AddTask` when `pv::NeedsMainThread(result)` is true. The serialization of tasks is **observed, not proven**: wherever this plan relies on it (one task at a time touching forms and the VM), it is relying on R49's measurement.
 - `GameBackend::Run` never blocks the caller (a Python thread inside `_skyrim.submit`): it queues exactly one `AddTask` and returns. The queued task checks `cancelled()` first (timed out, cancelled or a load started while queued) and does nothing if so.
 - `game.state` is answered **immediately** from `life::BaseState()` when no game is loaded or a save is loading. Only when a game is loaded does it queue one `AddTask` for `player` and `game_days_passed`, and that task rechecks `Loading()` before touching the engine.
-- Main thread: recheck readiness, find the function, check every argument against the declared parameter types (no default values: the count must match), dispatch.
-- VM callback: it owns the call's `DynArgs` and deletes it after reading the result (S2); on a false `Dispatch*Call` return the dispatch site keeps the args and logs once (R37). It overrides `CanSave()` to return false (ruling R38, as SkyrimPlatform does): our functor is never written into a save. The base class already returns false at the pin (`src/RE/I/IStackCallbackFunctor.cpp:11`; the header comment reads `{ return false; }`), so the override makes the default explicit rather than changing it. **Primitives and `None` are converted on the VM thread** (no engine state). An object result or an array of objects costs one more `AddTask`, because turning a Form into a reference calls `LookupByID`/`GetFile`. No Python runs on any of these threads (Global Constraints).
+- In the task: recheck readiness, find the function, check every argument against the declared parameter types (no default values: the count must match), dispatch.
+- VM callback: it owns the call's `DynArgs` and deletes it after reading the result (S2); on a false `Dispatch*Call` return the dispatch site keeps the args and logs once (R37). It overrides `CanSave()` to return false (ruling R38, as SkyrimPlatform does): our functor is never written into a save. The base class already returns false at the pin (`src/RE/I/IStackCallbackFunctor.cpp:11`; the header comment reads `{ return false; }`), so the override makes the default explicit rather than changing it. **Primitives and `None` are converted on whatever thread the callback runs on** (no engine state). An object result or an array of objects always costs one more `AddTask`, even if the callback happens to run inside a task (it cannot tell by thread id, R49), because turning a Form into a reference calls `LookupByID`/`GetFile`. No Python runs on any of these threads (Global Constraints).
 - Readiness at submit, deadlines, `busy`, load cancellation and late-result counting are the Dispatcher's (Task 18); this task does not duplicate them.
 - Member functions are looked up in the script's empty state only.
+- **Script lookup** (`sig::TypeOf`, S7b): `GetScriptObjectType` finds a script case-insensitively (`"actor"` finds Actor), so names are passed as given. After a failed lookup of an unknown name, the **next** `GetScriptObjectType` of that name returns true with an empty stub type (no parent, 0 functions, 0 properties); `GetScriptObjectTypeNoLoad` stays false for the stub. `TypeOf` therefore requires both calls to succeed. It does not reject a type merely for having no parent and no functions or properties: a legitimate empty base script looks the same. (NoLoad after a successful load of a real script was not measured in S7; if the cross-check rejects a real script such as `Utility` on the first live run, STOP and ask the owner, do not drop the check.)
+- **Class names compare case-insensitively everywhere** (`IEquals`): `ObjectTypeInfo::GetName()` returns `utility` (lowercase) for Utility, while Actor, ObjectReference, Form and Quest keep their case. `ScriptClassOf`/`TypeName` report whatever the VM gives.
+- **Arguments are positional only.** Engine natives report their parameter names as `param1..N` from `IFunction::GetParam` (S7a), not the `.psc` names (`aiMin`, `abFadeIn`), so names cannot be matched against natives. Protocol v1 has no named arguments (`args` is a JSON array; `game.call` takes `*args`, and an unknown keyword is a Python `TypeError` before anything is sent). If a later version adds named arguments, a named argument to a native must be refused `bad_request` ("native functions take positional arguments only"), never matched by guesswork. `BindArgs` error messages carry the reported name and the position (`param1 (argument 0 of Utility.RandomInt)`).
 
 **Known limits (Task 32 puts them in the README):**
 - Papyrus runtime errors are invisible: the VM callback gets only a result `Variable`. A script error inside the called function is logged by the game to `Papyrus.0.log`; the caller sees `None` or, if no callback fires, `Timeout`. `VmError` means only "the VM refused to dispatch".
 - The functor returns false from `CanSave()`: a save made while a call is in flight does not record our callback. After loading that save the call never completes in the loaded game; the caller sees `NotReady` (the load cancels it) or `Timeout`. Task 31's live test "save during a latent call" pins the behaviour (not the override: the base already returns false).
 - A `DynArgs` whose callback never fires (the VM dropped the call, or a refused dispatch whose callback never comes) is never freed: about 100 bytes each (Task 4's estimate). Freeing it in the `Callback` destructor instead is unmeasured (SkyrimPlatform comparison, Top 3, deferred).
 - A call made while the game is paused waits: Papyrus does not advance. Use `require_unpaused` or a generous timeout.
+- Errors name a native's parameters `param1..N` (the engine reports no `.psc` names for natives, S7a); the position in the message is the reliable part. Arguments are positional only.
 
 - [ ] **Step 1: Write the live tests first** (they fail until the plugin is rebuilt)
 
@@ -169,15 +174,30 @@ def test_latent_function_completes_with_none(game):
 
 
 def test_unknown_script_and_function(game):
-    with pytest.raises(errors.UnknownFunction):
-        game.call("NoSuchScriptAnywhere", "Foo")
+    # Twice: after the first failed lookup the VM keeps an empty stub type that the next lookup returns as found
+    # (spike S7b); TypeOf's NoLoad cross-check must still answer unknown_function.
+    for _ in range(2):
+        with pytest.raises(errors.UnknownFunction):
+            game.call("NoSuchScriptAnywhere", "Foo")
     with pytest.raises(errors.UnknownFunction):
         game.call("Utility", "NoSuchFunction")
 
 
 def test_wrong_argument_type_names_the_parameter(game):
-    with pytest.raises(errors.TypeMismatch, match="aiMin"):
+    # A native reports its parameters as param1..N (S7a), not aiMin: the position is what the message must carry.
+    with pytest.raises(errors.TypeMismatch, match=r"argument 0 of Utility\.RandomInt"):
         game.call("Utility", "RandomInt", "one", 6)
+
+
+def test_script_defined_global_function(game):
+    # Game.GetCameraState and Game.GetSkillLegendaryLevel are Papyrus bytecode in SKSE's Game.psc (no `native`
+    # keyword); Camera.GetCameraState is the SKSE native the first one wraps.
+    assert game.call("Game", "GetCameraState") == game.call("Camera", "GetCameraState")
+    assert isinstance(game.call("Game", "GetSkillLegendaryLevel", "OneHanded"), int)
+    # Unmeasured: whether a script-defined function reports its .psc parameter name (S7 sampled natives only).
+    with pytest.raises(errors.TypeMismatch, match="argument 0 of Game.GetSkillLegendaryLevel") as ei:
+        game.call("Game", "GetSkillLegendaryLevel", 5)
+    print("script-defined parameter name reported:", "actorValue" in str(ei.value))  # record in spikes/RESULTS.md
 
 
 def test_wrong_argument_count(game):
@@ -234,7 +254,7 @@ def test_late_result_after_timeout_is_dropped_and_counted(session, game):
     time.sleep(2.0)  # the wait finishes in the game; its result must be dropped, not delivered
     assert raw_state(session)["diagnostics"]["late_results_dropped"] == before + 1
 ```
-If `Math.Sqrt` or `StringUtil` is missing on this runtime, swap in any function with the same result type and record which in `spikes/RESULTS.md`.
+If `Math.Sqrt` or `StringUtil` is missing on this runtime, swap in any function with the same result type and record which in `spikes/RESULTS.md`. `test_script_defined_global_function` needs SKSE's `Game.psc` (checked in the SKSE 2.2.6 sources on the dev host, `~/Games/SimpleSkyrim`: in `Game.psc` `GetCameraState` and `GetSkillLegendaryLevel` have Papyrus bodies; `Camera.psc` declares `GetCameraState() global native`); if this runtime's `Game.pex` lacks them, substitute any `global` function without the `native` keyword that takes only primitives, and record which. Run it with `-s` and record in `spikes/RESULTS.md` whether the printed line says `True` (script-defined functions report `.psc` parameter names) or `False`. The live test with a Form argument to an SKSE native (`Actor.EquipItemEx`) is in Task 29: form arguments arrive in Task 28 and `call_method` in Task 29.
 
 - [ ] **Step 2: Signatures (the part `call_static` needs)**
 
@@ -248,13 +268,14 @@ If `Math.Sqrt` or `StringUtil` is missing on this runtime, swap in any function 
 #include <vector>
 
 namespace spy::sig {
-bool IEquals(std::string_view a, std::string_view b);  // Papyrus names are case-insensitive
+bool IEquals(std::string_view a, std::string_view b);  // Papyrus names are case-insensitive; GetName() gives "utility" (S7a)
 // True if `script` is `ancestor` or extends it. False if `script` is not a loaded script. (Task 28)
 bool IsA(const std::string& script, const std::string& ancestor);
 // Throws unknown_function (no such script or function) or bad_request (global vs member mix-up).
 // Callers run this BEFORE resolving any object, so "global called as member" is bad_request, not type_mismatch.
 RE::BSTSmartPointer<RE::BSScript::IFunction> FindFunction(const std::string& script, const std::string& function, bool member);
-// Converts arguments to the declared parameter types. Throws type_mismatch naming the parameter.
+// Converts positional arguments to the declared parameter types. Throws type_mismatch naming the parameter and its
+// position (natives report names param1..N, S7a; there are no named arguments in v1).
 std::vector<RE::BSScript::Variable> BindArgs(const RE::BSScript::IFunction& fn, const std::vector<Value>& args, const std::string& qualified);
 // The property `property` of `script` or its parents (its declared `type`; `getFunction`/`setFunction` set means a
 // full property). Throws not_found. (Task 28)
@@ -275,10 +296,17 @@ namespace spy::sig {
 namespace {
 RE::BSScript::Internal::VirtualMachine* VM() { return RE::BSScript::Internal::VirtualMachine::GetSingleton(); }
 
+// Lookup is case-insensitive in the VM (S7b: "actor" finds Actor). A failed GetScriptObjectType leaves an empty stub
+// type that the NEXT GetScriptObjectType of that name returns as found; GetScriptObjectTypeNoLoad stays false for the
+// stub (S7b2), so both must succeed. Do not reject on "no parent, 0 functions, 0 properties": a legitimate empty base
+// script matches that too.
 RE::BSTSmartPointer<RE::BSScript::ObjectTypeInfo> TypeOf(const std::string& script)
 {
+    const RE::BSFixedString name(script);
     RE::BSTSmartPointer<RE::BSScript::ObjectTypeInfo> info;
-    if (!VM()->GetScriptObjectType(RE::BSFixedString(script), info) || !info) return {};
+    if (!VM()->GetScriptObjectType(name, info) || !info) return {};
+    RE::BSTSmartPointer<RE::BSScript::ObjectTypeInfo> loaded;
+    if (!VM()->GetScriptObjectTypeNoLoad(name, loaded) || !loaded) return {};  // the stub a failed load left behind
     return info;
 }
 }
@@ -328,7 +356,7 @@ std::vector<RE::BSScript::Variable> BindArgs(const RE::BSScript::IFunction& fn, 
     for (std::uint32_t i = 0; i < n; ++i) {
         RE::BSFixedString name;
         RE::BSScript::TypeInfo type;
-        fn.GetParam(i, name, type);
+        fn.GetParam(i, name, type);  // a native's name is param1..N (S7a): the position is the reliable part
         pv::ToVariable(args[i], type, std::format("{} (argument {} of {})", name.c_str(), i, qualified), out[i]);
     }
     return out;
@@ -346,7 +374,8 @@ std::vector<RE::BSScript::Variable> BindArgs(const RE::BSScript::IFunction& fn, 
 #include <RE/Skyrim.h>
 #include <string>
 
-// Main thread only, except NeedsMainThread and TypeName: every other function touches forms or the VM.
+// Inside an SKSE task only ("main thread", R49), except NeedsMainThread and TypeName: every other function touches
+// forms or the VM.
 namespace spy::pv {
 RE::TESForm* ResolveForm(const FormRef& ref);            // Task 28. throws not_found (missing or deleted) / stale_reference
 RE::BGSBaseAlias* ResolveAlias(const AliasRef& ref);     // Task 29. throws not_found / type_mismatch
@@ -507,11 +536,11 @@ json FromVariable(const Variable& v)
 #include "spy/requests.h"
 
 namespace spy::ops {
-// Main thread only. Validation failures become Err results; nothing throws out of Run.
-// `done` may be called on the main thread or a VM thread; the Dispatcher accepts either (Task 18).
+// Inside an SKSE task only. Validation failures become Err results; nothing throws out of Run.
+// `done` may be called inside an SKSE task or on a VM thread; the Dispatcher accepts either (Task 18).
 void Run(const std::string& op, const json& args, Done done, Cancelled cancelled, Progress progress);
 
-// Fills `player` and `game_days_passed` (main thread; only when a game is loaded and not loading).
+// Fills `player` and `game_days_passed` (inside an SKSE task; only when a game is loaded and not loading).
 void AddStateExtras(json& state);
 
 // Adds `paused` and `menus` to an error detail (spec 4.1).
@@ -530,17 +559,15 @@ OpResult NotReady(const std::string& reason);
 #include "spy/refs.h"
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
-#include <atomic>
 #include <memory>
 #include <mutex>
-#include <thread>
 #include <utility>
 
 namespace spy::ops {
 namespace {
 using RE::BSScript::Variable;
 
-std::atomic<std::thread::id> g_mainThread{};  // written on the main thread by Run, read on VM threads
+// No stored "main thread" id (R49): SKSE tasks run on varying BSJobs worker threads, so an id comparison is meaningless.
 
 RE::BSScript::Internal::VirtualMachine* VM() { return RE::BSScript::Internal::VirtualMachine::GetSingleton(); }
 
@@ -597,9 +624,9 @@ public:
         // and converted or queued; `result` is our own copy. The destructor does not free them (see Known limits).
         std::unique_ptr<DynArgs> owned{std::exchange(args_, nullptr)};
         // Primitives and None touch no engine state: convert here, on whatever thread the VM called us on.
-        // Objects (forms, aliases, arrays of them) need LookupByID/GetFile: main thread only.
-        if (!pv::NeedsMainThread(result) || std::this_thread::get_id() == g_mainThread.load())
-            return Convert(done_, result);
+        // Objects (forms, aliases, arrays of them) need LookupByID/GetFile: always hop through AddTask. Never test the
+        // thread id to skip the hop: tasks run on varying job threads (R49), so no id means "inside a task".
+        if (!pv::NeedsMainThread(result)) return Convert(done_, result);
         auto done = done_;
         SKSE::GetTaskInterface()->AddTask([done, result] { Convert(done, result); });
     }
@@ -613,7 +640,7 @@ private:
     DynArgs* args_;  // owned; freed in operator()
 };
 
-// The main thread's own view; life::Paused() is what the Dispatcher saw at submit.
+// The view from inside the task; life::Paused() is what the Dispatcher saw at submit.
 bool PausedNow()
 {
     auto* ui = RE::UI::GetSingleton();
@@ -658,9 +685,8 @@ OpResult NotReady(const std::string& reason)
 
 void Run(const std::string& op, const json& args, Done done, Cancelled cancelled, Progress progress)
 {
-    g_mainThread = std::this_thread::get_id();
     try {
-        if (auto why = life::NotReadyReason(false)) return done(NotReady(*why));  // recheck on the main thread
+        if (auto why = life::NotReadyReason(false)) return done(NotReady(*why));  // recheck inside the task
         if (op == "papyrus.call_static") return CallStatic(parse_call_args(args, false), done);
         // Task 29 adds form.resolve and papyrus.call_method; Task 30 adds properties and batch.
         done(OpResult::Err(ErrorCode::unsupported, "op " + op + " is not available in this build"));
@@ -688,7 +714,7 @@ void Run(const std::string& op, const json& args, Done done, Cancelled cancelled
 #include "spy/dispatcher.h"
 
 namespace spy::game {
-// The spy::Backend that serves the game: one AddTask per request, ops::Run on the main thread.
+// The spy::Backend that serves the game: one AddTask per request, ops::Run inside that task.
 spy::Backend& Backend();
 // Built on first use from settings::Get() (default_timeout_ms, max_inflight_total), reaper started. Immortal:
 // VM callbacks can complete requests after static destruction has begun, so it is never destroyed.
@@ -731,7 +757,7 @@ public:
         });
     }
 
-    // No player / game_days_passed here: BaseState never blocks, so it cannot ask the main thread (index Contracts).
+    // No player / game_days_passed here: BaseState never blocks, so it cannot queue a task and wait (index Contracts).
     json BaseState() override { return WithDiagnostics(life::BaseState()); }
 
     std::optional<std::string> NotReadyReason(bool require_unpaused) override { return life::NotReadyReason(require_unpaused); }
@@ -752,7 +778,7 @@ private:
         json s = WithDiagnostics(life::BaseState());
         s["player"] = nullptr;
         s["game_days_passed"] = nullptr;
-        // Answer at once at the main menu or while loading; ask the main thread only when it can answer.
+        // Answer at once at the main menu or while loading; queue a task only when it can answer.
         if (!life::GameLoaded() || life::Loading()) return done(OpResult::Ok(std::move(s)));
         SKSE::GetTaskInterface()->AddTask([done, cancelled, s = std::move(s)]() mutable {
             if (cancelled()) return;

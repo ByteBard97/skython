@@ -23,7 +23,7 @@ Adapted from: branch `plan-out-of-process`, task 18 (`task-18-properties-batch-a
 
 Known costs and limits (Task 32 puts them in the README):
 - **Each batch step costs 2-3 frames** (one `AddTask` for the step, the VM, and for an object result one more task to convert it), so a batch runs at roughly 15-30 steps per second at 30-60 fps. Batches give ordering, not speed; Task 31 records the real figure.
-- **Property ops serve auto properties only.** A full property (one with Papyrus get/set code) is refused `unsupported`; call a Papyrus function for it. Reads and writes go through the engine's `GetPropertyValue`/`SetPropertyValue` on the main thread and are **not synchronised with Papyrus threads** that may run the same script; `OnPropertyChanged` does **not** fire. For anything that must be atomic or must notify, call a pre-authored Papyrus setter with `call_method` (spec 4.9).
+- **Property ops serve auto properties only.** A full property (one with Papyrus get/set code) is refused `unsupported`; call a Papyrus function for it. Reads and writes go through the engine's `GetPropertyValue`/`SetPropertyValue` inside an SKSE task and are **not synchronised with Papyrus threads** that may run the same script; `OnPropertyChanged` does **not** fire. For anything that must be atomic or must notify, call a pre-authored Papyrus setter with `call_method` (spec 4.9).
 - **A batch without a timeout** gets the sum of its steps' timeouts (5 s per step), capped at `MAX_TIMEOUT_MS`; give `run(timeout=...)` for a tighter bound.
 
 - [ ] **Step 1: Write the live tests**
@@ -177,7 +177,7 @@ def test_per_connection_cap_returns_busy(session):
         pytest.skip("no busy reply: deploy plugin/config/variants/low-cap.ini for this test (the dev ini's cap is 256)")
     assert len(ok) + len(busy) == n and len(ok) <= 16
 ```
-v1 property ops serve auto properties. A read runs live here, on the auto property S7c enumerated (`SPY_S7C_KIND` is one of `Int`, `Float`, `Bool`, `String`, `Form`, `Alias`, `Array`, from the type S7c printed). Writes, and the refusal of a full property, are tested in M1.5 against the test ESP's quest script (no vanilla script offers a property that is both always bound and safe to write).
+v1 property ops serve auto properties. A read runs live here, on the auto property S7c enumerated (`SPY_S7C_KIND` is one of `Int`, `Float`, `Bool`, `String`, `Form`, `Alias`, `Array`, from the type S7c printed). S7c's property is `Alias_TGHandlerSilverMoldAlias` on quest `0x001093E4`, script `QF_TGTQ01Handler_001093E4`, typed `ReferenceAlias` (`obj=true cls=ReferenceAlias`), so `SPY_S7C_KIND=Alias`: `get_property` returns an alias, decoded by Task 29's alias JSON (`ObjectToJson` falls through the form check to `AliasObjectToJson`). If Task 29's alias tests did not pass, this test cannot either. The QF_ script declares no getter (S7c), so leave `SPY_S7C_GETTER` unset. Writes, and the refusal of a full property, are tested in M1.5 against the test ESP's quest script (no vanilla script offers a property that is both always bound and safe to write).
 
 - [ ] **Step 2: Implement properties and batch in `Ops.cpp`**
 
@@ -226,8 +226,10 @@ struct BatchState
     Cancelled cancelled;
     Progress progress;
 };
-// A step's `done` can run on a VM thread (primitive results are converted there), but the next step is only
-// queued from the previous step's `done`, so exactly one thread touches BatchState at a time.
+// A step's `done` can run on a VM thread (primitive results are converted there) or inside an SKSE task. BatchState is
+// safe by ordering, not by thread: the next step is only queued from the previous step's `done`, so at most one step
+// is in flight and each access happens-before the next (the AddTask queue hand-off). No single "main thread" touches
+// it: SKSE tasks run on varying job threads (R49).
 
 void BatchStep(const std::shared_ptr<BatchState>& st);
 
@@ -290,7 +292,7 @@ tools/box/box_session.sh up && source out/box-live.env
 tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
 tools/box/box_console.sh "load <the S7 save>"     # then Task 1b block B6
 tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: interactive = true" 300
-export SPY_S7C_QUEST=0x... SPY_S7C_SCRIPT=... SPY_S7C_PROPERTY=... SPY_S7C_KIND=...   # from the S7c row of spikes/RESULTS.md
+export SPY_S7C_QUEST=0x001093E4 SPY_S7C_SCRIPT=QF_TGTQ01Handler_001093E4 SPY_S7C_PROPERTY=Alias_TGHandlerSilverMoldAlias SPY_S7C_KIND=Alias   # the S7c row of spikes/RESULTS.md
 export SPY_S4_QUEST=0x... SPY_S4_ALIAS=... SPY_S4_REF=0x...                          # as in Task 29
 SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_batch_props.py livetest/test_m1_calls.py -q -rs
 # test_per_connection_cap_returns_busy reports a skip here. Quit the game, then:
