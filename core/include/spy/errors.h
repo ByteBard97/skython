@@ -17,6 +17,10 @@ std::optional<ErrorCode> error_code_from_string(std::string_view s);
 // At most `max` bytes of `s` (cut back to a UTF-8 boundary), then "..." if anything was cut.
 std::string clip_text(std::string_view s, std::size_t max = 120);
 
+// 'A'-'Z' to 'a'-'z', every other byte unchanged. Locale-independent (std::tolower is not: a Turkish locale maps 'I'
+// elsewhere), for script, plugin and key names, which are compared as ASCII.
+constexpr char ascii_lower(char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
+
 struct ProtocolError : std::runtime_error
 {
     ErrorCode code;

@@ -1,5 +1,8 @@
 #include "doctest/doctest.h"
+#include "spy/errors.h"
 #include "spy/papyrus_names.h"
+#include "spy/refs.h"
+#include <clocale>
 #include <cctype>
 #include <string>
 
@@ -45,4 +48,23 @@ TEST_CASE("unknown script names pass through unchanged")
 TEST_CASE("an empty name stays empty")
 {
     CHECK(spy::canonical_script_name("") == "");
+}
+
+TEST_CASE("name folding is ASCII-only and does not depend on the C locale")
+{
+    CHECK(spy::ascii_lower('I') == 'i');
+    CHECK(spy::ascii_lower('Z') == 'z');
+    CHECK(spy::ascii_lower('i') == 'i');
+    CHECK(spy::ascii_lower('_') == '_');
+    CHECK(spy::ascii_lower('\xC9') == '\xC9');  // a Latin-1 locale's tolower would make this 0xE9
+    // Under whichever non-C locale this machine has (a Turkish one maps 'I' away from 'i'), lookups still fold ASCII.
+    const std::string before = std::setlocale(LC_ALL, nullptr);
+    for (const char* name : {"tr_TR.ISO-8859-9", "tr_TR.UTF-8", "tr_TR.utf8", "de_DE.ISO-8859-1", "en_US.UTF-8", "C.UTF-8"})
+        if (std::setlocale(LC_ALL, name) != nullptr) break;
+    CHECK(spy::canonical_script_name("IMAGESPACEMODIFIER") == "ImageSpaceModifier");
+    CHECK(spy::canonical_script_name("ObjectReferencE") == "ObjectReference");
+    const auto key = spy::parse_form_key("SKYRIM.ESM|0XABCDEF");
+    CHECK((key && key->local_id == 0xABCDEFu));
+    CHECK(spy::parse_form_key("LIGHT.ESL|0XFFF"));
+    std::setlocale(LC_ALL, before.c_str());  // only CHECKs above: nothing aborts the case before this
 }

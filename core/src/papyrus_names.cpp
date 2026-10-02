@@ -1,7 +1,7 @@
 #include "spy/papyrus_names.h"
+#include "spy/errors.h"  // ascii_lower
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <string>
 #include <unordered_map>
 
@@ -34,7 +34,7 @@ constexpr std::array kSkse = {
 std::string lower(std::string_view s)
 {
     std::string out(s);
-    std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::transform(out.begin(), out.end(), out.begin(), ascii_lower);  // never std::tolower: locale-dependent
     return out;
 }
 

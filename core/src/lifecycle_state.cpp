@@ -57,7 +57,7 @@ bool LifecycleState::loading() const { std::lock_guard l(mx_); return loading_lo
 bool LifecycleState::interactive() const { std::lock_guard l(mx_); return interactive_locked(); }
 bool LifecycleState::paused() const { std::lock_guard l(mx_); return paused_; }
 std::uint32_t LifecycleState::epoch() const { std::lock_guard l(mx_); return epoch_; }
-std::uint32_t LifecycleState::loads_started() const { std::lock_guard l(mx_); return loads_started_; }
+std::uint32_t LifecycleState::loads_started() const { return loads_started_.load(); }
 
 std::optional<std::string> LifecycleState::not_ready_reason(bool require_unpaused) const
 {

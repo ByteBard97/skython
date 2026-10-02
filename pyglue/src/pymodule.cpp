@@ -14,8 +14,8 @@ namespace spy {
 namespace {
 ModuleHost& Host()
 {
-    static ModuleHost host;
-    return host;
+    static ModuleHost* host = new ModuleHost;  // leaked on purpose: Python threads may still use it during exit
+    return *host;
 }
 
 Dispatcher& Disp()

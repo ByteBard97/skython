@@ -1,9 +1,11 @@
 #pragma once
 #include "spy/errors.h"  // json
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace spy {
@@ -14,8 +16,9 @@ namespace spy {
 //   loading     = a save load is pending (kPreLoadGame seen, kPostLoadGame not yet) || the Loading Menu is open
 //   paused      = whatever the plugin last reported with set_paused (a paused game is still interactive)
 //
-// Thread-safe: one mutex guards every field. Events arrive on the main and UI threads; queries come from the
-// dispatcher (any Python thread) and its reaper thread. Not copyable or movable (it holds a mutex).
+// Thread-safe: one mutex guards every field (loads_started_ is also atomic so its read takes no lock). Events
+// arrive on the main and UI threads; queries come from the dispatcher (any Python thread) and its reaper thread.
+// Not copyable or movable (it holds a mutex).
 class LifecycleState
 {
 public:
@@ -42,6 +45,7 @@ public:
     // Main Menu open while a game was loaded; never new games. Both resets throw away the running Papyrus stacks, so
     // the dispatcher (Task 18) compares it between ticks and fails the calls that were in flight. (The name predates
     // the main-menu case; it is kept because Tasks 18, 19, 25 and 27 use it.)
+    // Lock-free (an atomic read, contract R26): the dispatcher's Tick calls it while holding its own lock.
     std::uint32_t loads_started() const;
     // nullopt when a call may run; otherwise "starting", "loading" or "no_game", checked in that order (so a save
     // that is loading reports "loading" even though no game is loaded yet), then "paused" only when
@@ -59,7 +63,8 @@ private:
     const std::string loading_menu_, main_menu_;
     mutable std::mutex mx_;
     bool data_ready_ = false, game_loaded_ = false, load_pending_ = false, loading_menu_open_ = false, paused_ = false;
-    std::uint32_t epoch_ = 0, loads_started_ = 0;
+    std::uint32_t epoch_ = 0;
+    std::atomic<std::uint32_t> loads_started_{0};  // written under mx_; read without it
     std::vector<std::string> menus_;  // open order; a menu reported open again moves to the end
 };
 }

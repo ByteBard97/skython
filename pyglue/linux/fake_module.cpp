@@ -46,8 +46,8 @@ std::string ConfigJson()
 
 void Log(const std::string& level, const std::string& message)
 {
-    static std::mutex mx;
-    std::lock_guard lk(mx);
+    static std::mutex* mx = new std::mutex;  // leaked on purpose: a log call during exit must not find it destroyed
+    std::lock_guard lk(*mx);
     const fs::path dir = BaseDir() / "logs";
     std::error_code ec;
     fs::create_directories(dir, ec);

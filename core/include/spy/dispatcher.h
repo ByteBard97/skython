@@ -55,7 +55,7 @@ struct DispatcherOptions
 {
     std::uint32_t default_timeout_ms = 5000;
     std::uint32_t max_inflight_total = 1024;
-    std::uint32_t abandon_after_ms = kMaxTimeoutMs;             // a response nobody collected is dropped after this
+    std::uint64_t abandon_after_ms = kMaxTimeoutMs;             // a response nobody collected is dropped after this
     std::function<void(const std::string&)> on_late = nullptr;  // told about each dropped late result, outside the lock
 };
 

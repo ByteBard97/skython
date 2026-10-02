@@ -123,6 +123,8 @@ Ticket Dispatcher::Submit(std::string_view request_text)
         return shared_->AddDone(error_text(peek_request_id(request_text).value_or(0), e.code, e.what()));
     } catch (const std::exception& e) {
         return shared_->AddDone(error_text(peek_request_id(request_text).value_or(0), ErrorCode::internal, e.what()));
+    } catch (...) {
+        return shared_->AddDone(error_text(0, ErrorCode::internal, "request parse failed (unknown exception)"));
     }
 
     const OpSpec* spec = find_op(req.op);  // parse_request_text accepted it, so it exists

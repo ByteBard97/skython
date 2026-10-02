@@ -9,7 +9,7 @@ bool ends_with_ci(std::string_view s, std::string_view suffix)
 {
     if (s.size() < suffix.size()) return false;
     return std::equal(suffix.begin(), suffix.end(), s.end() - suffix.size(),
-        [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b)); });
+        [](char a, char b) { return ascii_lower(a) == ascii_lower(b); });  // ASCII only: locale-independent
 }
 
 bool is_blank(char c) { return c == ' ' || c == '\t'; }
@@ -35,7 +35,7 @@ std::optional<FormKey> parse_form_key(std::string_view s)
     std::uint64_t v = 0;
     for (char c : id) {
         if (!std::isxdigit(static_cast<unsigned char>(c))) return std::nullopt;
-        v = v * 16 + static_cast<std::uint64_t>(std::isdigit(static_cast<unsigned char>(c)) ? c - '0' : std::tolower(static_cast<unsigned char>(c)) - 'a' + 10);
+        v = v * 16 + static_cast<std::uint64_t>(std::isdigit(static_cast<unsigned char>(c)) ? c - '0' : ascii_lower(c) - 'a' + 10);
     }
     if (v > (light ? form_ids::kMaxLightLocalId : form_ids::kMaxLocalId)) return std::nullopt;
     return FormKey{std::string(plugin), static_cast<std::uint32_t>(v)};
