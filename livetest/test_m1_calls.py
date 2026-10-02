@@ -84,6 +84,12 @@ def test_script_defined_global_function(game):
     # Camera.GetCameraState, which SKSE 2.2.6 never registers: papyrusCamera::RegisterFuncs has no caller, the native
     # returns None and the wrapper casts it to 0. Substituted in Task 27, recorded in spikes/RESULTS.md.)
     assert game.call("ArmorAddon", "GetMaskForSlot", 32) == game.call("Armor", "GetMaskForSlot", 32) == 4
+    # The SKSE sources alone say ArmorAddon.GetMaskForSlot is bytecode; the VM says so too: a script-defined function
+    # reports its .psc parameter name (`int Function GetMaskForSlot(int slot) global`), a native reports param1.
+    with pytest.raises(errors.TypeMismatch, match=r"parameter slot \(argument 0 of ArmorAddon\.GetMaskForSlot\)"):
+        game.call("ArmorAddon", "GetMaskForSlot", "thirty-two")
+    with pytest.raises(errors.TypeMismatch, match=r"parameter param1 \(argument 0 of Armor\.GetMaskForSlot\)"):
+        game.call("Armor", "GetMaskForSlot", "thirty-two")
     assert isinstance(game.call("Game", "GetSkillLegendaryLevel", "OneHanded"), int)
     # Unmeasured: whether a script-defined function reports its .psc parameter name (S7 sampled natives only).
     with pytest.raises(errors.TypeMismatch, match="argument 0 of Game.GetSkillLegendaryLevel") as ei:
