@@ -6,7 +6,8 @@
 # 4. Stop-Process only by the two game process names;
 # 5. the box paths in box_env.sh are the ones the investigation verified;
 # 6. Part C (Tasks 25-32): the two-DLL deploy targets, recorded moves, launch env, the bridge session tunnel
-#    (loopback only, token only in out/), the box file mirror, save-name checks, and the teardown list's saves.
+#    (loopback only, token only in out/), the box file mirror, save-name checks, the teardown list's saves, and the
+#    snapshot's rule for a log rewritten with the same bytes after the stamp.
 # Every check runs offline: BOX_OFFLINE=1 makes box_env.sh's wrappers refuse (exit 97), and ssh/scp on PATH are
 # traps that record any call and fail. A check that exercises a real script uses its print-only mode on top of that.
 set -uo pipefail
@@ -202,6 +203,21 @@ t="$(SKYTHON_STATE="$sst" BOX_SHOT_PRINT=1 "$B/box_shot.sh" "$sst/x/y.png" 2>&1)
 t="$(SKYTHON_STATE="$sst" "$B/box_shot.sh" 2>&1)"; rc=$?
 [ "$rc" != 0 ] && case "$t" in *"BOX_OFFLINE: refusing"*) true ;; *) false ;; esac && [ -z "$(ls -A "$sst")" ] \
   && ok "box_shot.sh refuses under BOX_OFFLINE (rc=$rc), writes nothing" || bad "box_shot.sh offline: rc=$rc '$t'"
+
+# 6i. a log rewritten after the stamp with the same bytes (SkythonLoader.log every launch) counts as new: stamp.ps1
+#     records each file's LastWriteTimeUtc, snapshot_lib.ps1 drops the offset only for same length + hash + later mtime
+sl="$B/win/snapshot_lib.ps1"
+grep -qF 'mtime = [IO.File]::GetLastWriteTimeUtc($_.FullName).Ticks' "$B/win/stamp.ps1" 2>/dev/null \
+  && ok "stamp.ps1 records each file's LastWriteTimeUtc (mtime ticks)" || bad "stamp.ps1 does not record mtime"
+grep -qF 'if ($h -eq $entry.Value.sha256) {' "$sl" 2>/dev/null && grep -qE '^\s*\$offset = \$L$' "$sl" \
+  && ok "snapshot_lib.ps1 append case: matching prefix -> only bytes after L" || bad "snapshot_lib.ps1 append case"
+grep -qF "\$m = \$entry.Value.PSObject.Properties['mtime']" "$sl" 2>/dev/null \
+  && grep -qF 'if ($bytes.Length -eq $L -and $m -and [IO.File]::GetLastWriteTimeUtc($path).Ticks -gt [int64]$m.Value) { $offset = 0 }' "$sl" \
+  && ok "snapshot_lib.ps1: same length + hash + later mtime -> the whole file is new" || bad "snapshot_lib.ps1 has no rewritten-identical rule"
+grep -vE '^\s*#' "$sl" | grep -qE 'LastWriteTime(Utc)? *-(lt|le)|launch\.stamp' && bad "snapshot_lib.ps1 uses a file time to drop text" \
+  || ok "snapshot_lib.ps1 never drops text by file time or the stamp time"
+grep -qF 'reads as UNCHANGED: snapshot_lib cannot tell' "$B/win/files.ps1" "$B/win/wait_log.ps1" "$ROOT/docs/superpowers/plans/2026-10-01-skyrim-python-v1-embedded/task-01b-box-game-harness.md" 2>/dev/null \
+  && bad "the old 'reads as UNCHANGED' caveat is still documented" || ok "no stale 'reads as UNCHANGED' caveat"
 
 # 7. nothing reached ssh or scp during the whole run
 if [ -e "$TRAPLOG" ]; then bad "ssh/scp was called during the offline test:"; cat "$TRAPLOG"; else ok "no ssh/scp call reached PATH"; fi

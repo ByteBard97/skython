@@ -906,8 +906,10 @@ $t = Get-ScheduledTask -TaskName $name
 `tools/box/win/stamp.ps1`:
 ```powershell
 # stamp.ps1: before a launch. Refuses (exit 2) when the game or its loader runs. Otherwise writes
-# launch.stamp (box clock, ISO 8601) and launch-snapshot.json: length and SHA-256 of every file under the SKSE
-# log folder, so wait_log.ps1 and quit_check.ps1 can tell which log lines and crash logs are from this launch.
+# launch.stamp (box clock, ISO 8601) and launch-snapshot.json: length, SHA-256 and LastWriteTimeUtc (mtime, in
+# ticks) of every file under the SKSE log folder, so wait_log.ps1, files.ps1 and quit_check.ps1 can tell which log
+# lines and crash logs are from this launch (snapshot_lib.ps1; mtime only separates a file rewritten with the
+# same bytes from an untouched one).
 $ErrorActionPreference = 'Stop'
 $box = 'C:\dev\skyrim-python-box'
 $logDir = Join-Path $env:USERPROFILE 'Documents\My Games\Skyrim Special Edition\SKSE'
@@ -917,7 +919,8 @@ $snap = @{}
 if (Test-Path $logDir) {
   Get-ChildItem $logDir -Recurse -File | Where-Object { $_.Length -lt 50MB } | ForEach-Object {
     $rel = $_.FullName.Substring($logDir.Length + 1)
-    $snap[$rel] = @{ length = $_.Length; sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash }
+    $snap[$rel] = @{ length = $_.Length; sha256 = (Get-FileHash $_.FullName -Algorithm SHA256).Hash
+                   mtime = [IO.File]::GetLastWriteTimeUtc($_.FullName).Ticks }
   }
 }
 $stamp = (Get-Date).ToString('o')
@@ -926,13 +929,17 @@ Set-Content -Encoding ASCII -NoNewline -Path (Join-Path $box 'launch.stamp') -Va
 "STAMP $stamp files=$($snap.Count)"
 ```
 
-`tools/box/win/snapshot_lib.ps1`. "Only lines written after the launch stamp" without trusting file times (NTFS updates the time of a file the game holds open lazily): a log not in the snapshot is new; a log whose first L bytes still hash to the snapshot was appended to (only bytes after L count; `python.log` is like this); anything else was rewritten (the spdlog logs and `skse64.log` truncate on each launch), so all of it counts:
+`tools/box/win/snapshot_lib.ps1`. "Only lines written after the launch stamp" without trusting file times to drop text (NTFS updates the time of a file the game holds open lazily): a log not in the snapshot is new; a log longer than L whose first L bytes still hash to the snapshot was appended to (only bytes after L count; `python.log` is like this); a log of exactly L bytes with that hash is untouched unless its LastWriteTimeUtc moved past the snapshot's `mtime`, in which case it was rewritten with the same bytes this launch (`SkythonLoader.log` writes the same lines every launch) and all of it counts; anything else was rewritten (the spdlog logs and `skse64.log` truncate on each launch), so all of it counts:
 ```powershell
 # snapshot_lib.ps1 (dot-sourced): "what is new since launch.stamp" for files under the SKSE log folder.
-# A file not in launch-snapshot.json is new (all of it is from this launch). A file whose first L bytes still
-# hash to the snapshot (L = its length then) was appended to: only bytes after L are new. Otherwise it was
-# rewritten (spdlog truncate, skse64.log): all of it is new. No file times are used (NTFS updates them lazily
-# for files held open by the game).
+# A file not in launch-snapshot.json is new (all of it is from this launch). A file longer than L (its length
+# then) whose first L bytes still hash to the snapshot was appended to: only bytes after L are new. A file of
+# exactly L bytes with that hash is untouched, unless its LastWriteTimeUtc is later than the one in the snapshot:
+# then it was rewritten this launch with the same bytes (SkythonLoader.log: the same lines every launch, no
+# times), and all of it is new. Otherwise it was rewritten (spdlog truncate, skse64.log): all of it is new.
+# The time is only a tie-breaker for that one case, never a reason to drop text (NTFS can update the time of a
+# file the game holds open lazily; a stale time there just reads as untouched). A snapshot without mtime (stamped
+# by an older stamp.ps1) keeps the old reading: same length and hash is untouched.
 $Box = 'C:\dev\skyrim-python-box'
 $LogDir = Join-Path $env:USERPROFILE 'Documents\My Games\Skyrim Special Edition\SKSE'
 function Get-Snapshot {
@@ -956,7 +963,11 @@ function Get-NewText([string]$rel, $snap) {
     if ($bytes.Length -ge $L) {
       $sha = [Security.Cryptography.SHA256]::Create()
       $h = ($sha.ComputeHash($bytes, 0, [int]$L) | ForEach-Object { $_.ToString('X2') }) -join ''
-      if ($h -eq $entry.Value.sha256) { $offset = $L }
+      if ($h -eq $entry.Value.sha256) {
+        $offset = $L
+        $m = $entry.Value.PSObject.Properties['mtime']
+        if ($bytes.Length -eq $L -and $m -and [IO.File]::GetLastWriteTimeUtc($path).Ticks -gt [int64]$m.Value) { $offset = 0 }
+      }
     }
   }
   return [Text.Encoding]::UTF8.GetString($bytes, [int]$offset, [int]($bytes.Length - $offset))
@@ -1154,7 +1165,8 @@ Get-ChildItem (Join-Path $my 'Saves') -Force -ErrorAction SilentlyContinue | Whe
 #        written since the last launch stamp, see snapshot_lib.ps1; base64 of its UTF-8), UNCHANGED (nothing written
 #        since the stamp), ABSENT, or REFUSED (a path with '..', a drive or a leading slash, or session.json).
 #        Exit 3 with NO_STAMP when no launch was stamped. A file rewritten since the stamp with exactly the bytes it
-#        had then (same length, same hash) reads as UNCHANGED: snapshot_lib cannot tell it from an untouched file.
+#        had then (same length, same hash) reads as NEW, all of it, when its LastWriteTimeUtc moved past the
+#        snapshot's (snapshot_lib.ps1); only an untouched file reads as UNCHANGED.
 #   session: the same for Skython\session.json alone (box_session.sh; it holds the bridge token, so only that
 #        script reads it, and only into out/box-session.json).
 #   put: writes exactly one file, Skython\livetest_control.json (livetest/smoke.py's command channel; Task 31),

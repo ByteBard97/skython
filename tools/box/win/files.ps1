@@ -3,7 +3,8 @@
 #        written since the last launch stamp, see snapshot_lib.ps1; base64 of its UTF-8), UNCHANGED (nothing written
 #        since the stamp), ABSENT, or REFUSED (a path with '..', a drive or a leading slash, or session.json).
 #        Exit 3 with NO_STAMP when no launch was stamped. A file rewritten since the stamp with exactly the bytes it
-#        had then (same length, same hash) reads as UNCHANGED: snapshot_lib cannot tell it from an untouched file.
+#        had then (same length, same hash) reads as NEW, all of it, when its LastWriteTimeUtc moved past the
+#        snapshot's (snapshot_lib.ps1); only an untouched file reads as UNCHANGED.
 #   session: the same for Skython\session.json alone (box_session.sh; it holds the bridge token, so only that
 #        script reads it, and only into out/box-session.json).
 #   put: writes exactly one file, Skython\livetest_control.json (livetest/smoke.py's command channel; Task 31),
