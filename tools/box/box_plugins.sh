@@ -12,23 +12,27 @@ source "$(dirname "$0")/box_env.sh"
 STATE_FILE="$SKYTHON_STATE/box-plugins.state"
 WORK="$SKYTHON_STATE/box-plugins"   # this run's copies (overwritten each run)
 
-compose() {  # compose <bak file>: backup + [EOL] + "*SkythonTest.esp" EOL on stdout (EOL: the backup's own, CRLF if it
-             # has a CR, else LF; R64); refuses a backup that lists it
-  python3 - "$1" <<'PY'
+compose() {  # compose <bak file> [inactive]: backup + [EOL] + "*SkythonTest.esp" EOL on stdout (EOL: the backup's own,
+             # CRLF if it has a CR, else LF; R64); with "inactive" the line has no "*" (R71: the game appends that line
+             # itself when the ESP is in Data but not enabled); refuses a backup that lists it
+  python3 - "$1" "${2:-}" <<'PY'
 import sys
 b = open(sys.argv[1], "rb").read()
+star = b"" if sys.argv[2] == "inactive" else b"*"
 if b"skythontest.esp" in [l.strip().lstrip(b"*").lower() for l in b.splitlines()]:
     sys.exit("box_plugins: SkythonTest.esp is already listed in the backup; ask the owner")
 eol = b"\r\n" if b"\r" in b else b"\n"
 sep = eol if b and not b.endswith(b"\n") else b""
-sys.stdout.buffer.write(b + sep + b"*SkythonTest.esp" + eol)
+sys.stdout.buffer.write(b + sep + star + b"SkythonTest.esp" + eol)
 PY
 }
-classify() {  # classify <cur> <bak>: BACKUP (identical), ADDED (backup + our line, byte for byte) or OTHER
+classify() {  # classify <cur> <bak>: BACKUP (identical), ADDED (backup + our line, byte for byte), INACTIVE (backup +
+              # "SkythonTest.esp" without "*", written by the game, R71) or OTHER
   local t="$WORK/composed"
   mkdir -p "$WORK"
   if cmp -s "$1" "$2"; then echo BACKUP
   elif compose "$2" > "$t" 2>/dev/null && cmp -s "$1" "$t"; then echo ADDED
+  elif compose "$2" inactive > "$t" 2>/dev/null && cmp -s "$1" "$t"; then echo INACTIVE
   else echo OTHER; fi
 }
 sha() { sha256sum "$1" | cut -d' ' -f1; }
@@ -80,7 +84,13 @@ case "${1:-}" in
     read_box; need_idle_and_backup
     case "$(classify "$WORK/cur" "$WORK/bak")" in
       ADDED)  mark added; echo "ALREADY: *SkythonTest.esp is already the one added line" ;;
-      BACKUP) compose "$WORK/bak" > "$WORK/new"; new="$(sha "$WORK/new")"
+      INACTIVE|BACKUP)
+              if [ "$(classify "$WORK/cur" "$WORK/bak")" = INACTIVE ]; then  # R71: put the backup back first
+                r="$(bps 60 plugins.ps1 -Mode restore -ExpectCur "$CUR_SHA" | tr -d '\r')" || true
+                [ "$r" = "RESTORED $BAK_SHA" ] || box_die "add (restoring the inactive line first): '$r' (expected RESTORED $BAK_SHA)"
+                echo "$r (the game's inactive SkythonTest.esp line)"; CUR_SHA="$BAK_SHA"
+              fi
+              compose "$WORK/bak" > "$WORK/new"; new="$(sha "$WORK/new")"
               r="$(bps 60 plugins.ps1 -Mode add -ExpectCur "$CUR_SHA" -ExpectNew "$new" | tr -d '\r')" || true
               [ "$r" = "ADDED $new" ] || box_die "add: '$r' (expected ADDED $new)"
               mark added; echo "$r" ;;
@@ -93,7 +103,7 @@ case "${1:-}" in
     read_box; need_idle_and_backup
     case "$(classify "$WORK/cur" "$WORK/bak")" in
       BACKUP) mark restored; echo "ALREADY_RESTORED: plugins.txt equals the backup" ;;
-      ADDED)  r="$(bps 60 plugins.ps1 -Mode restore -ExpectCur "$CUR_SHA" | tr -d '\r')" || true
+      ADDED|INACTIVE)  r="$(bps 60 plugins.ps1 -Mode restore -ExpectCur "$CUR_SHA" | tr -d '\r')" || true
               [ "$r" = "RESTORED $BAK_SHA" ] || box_die "restore: '$r' (expected RESTORED $BAK_SHA)"
               mark restored; echo "$r" ;;
       *) stop_other ;;

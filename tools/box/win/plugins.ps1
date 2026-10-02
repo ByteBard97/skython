@@ -19,12 +19,12 @@ function Listed([byte[]]$b) {
   foreach ($l in ([Text.Encoding]::UTF8.GetString($b) -split "`r?`n")) { if ($l.Trim().TrimStart('*').ToLower() -eq 'skythontest.esp') { return $true } }
   return $false
 }
-function Compose([byte[]]$bak) {
+function Compose([byte[]]$bak, [string]$star = '*') {
   $eol = [byte[]](10)
   if ($bak -contains 13) { $eol = [byte[]](13, 10) }
   $sep = [byte[]]@()
   if ($bak.Length -gt 0 -and $bak[$bak.Length - 1] -ne 10) { $sep = $eol }
-  return ,([byte[]]($bak + $sep + [Text.Encoding]::ASCII.GetBytes('*SkythonTest.esp') + $eol))
+  return ,([byte[]]($bak + $sep + [Text.Encoding]::ASCII.GetBytes($star + 'SkythonTest.esp') + $eol))
 }
 switch ($Mode) {
   'read' {
@@ -66,7 +66,8 @@ switch ($Mode) {
     $c = Bytes $PluginsTxt; $b = Bytes $Backup
     if ($null -eq $c -or $null -eq $b) { Refuse 'plugins.txt or its backup is missing' }
     if ((Sha $c) -ne $ExpectCur) { Refuse "plugins.txt has sha $(Sha $c), Linux expected $ExpectCur" }
-    if ((Sha $c) -ne (Sha (Compose $b))) { Refuse 'plugins.txt is not exactly the backup plus *SkythonTest.esp' }
+    # R71: also the game's own inactive line (no "*"), written when the ESP is in Data but not enabled.
+    if ((Sha $c) -ne (Sha (Compose $b)) -and (Sha $c) -ne (Sha (Compose $b ''))) { Refuse 'plugins.txt is not exactly the backup plus *SkythonTest.esp or SkythonTest.esp' }
     Copy-Item -LiteralPath $Backup -Destination $PluginsTxt -Force
     $w = Bytes $PluginsTxt
     if ((Sha $w) -ne (Sha $b)) { Refuse "after the copy plugins.txt has sha $(Sha $w)" }

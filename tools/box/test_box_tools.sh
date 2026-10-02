@@ -352,6 +352,10 @@ for i in 1 2 3 4 5; do
   "$P_" compose "$pd/bak$i" > "$pd/got$i" 2>&1 && cmp -s "$pd/got$i" "$pd/want$i" && ok "compose case $i: backup + [EOL] + *SkythonTest.esp EOL (the backup's line ending)" || bad "compose case $i: $(od -c "$pd/got$i" | head -3)"
 done
 t="$("$P_" classify "$pd/want4" "$pd/bak4" 2>&1)"; [ "$t" = ADDED ] && ok "classify: LF backup + LF line -> ADDED" || bad "classify LF: '$t'"
+# R71: the game appends an inactive "SkythonTest.esp" line (no "*") when the ESP is in Data but not enabled
+printf 'a.esp\nB.esp\nSkythonTest.esp\n' > "$pd/inactive4"
+t="$("$P_" classify "$pd/inactive4" "$pd/bak4" 2>&1)"; [ "$t" = INACTIVE ] && ok "classify: backup + the game's inactive line -> INACTIVE" || bad "classify inactive: '$t'"
+grep -qF "(Sha \$c) -ne (Sha (Compose \$b ''))" "$B/win/plugins.ps1" && ok "plugins.ps1 restore accepts the inactive line" || bad "plugins.ps1 restore inactive"
 grep -qF 'if ($bak -contains 13) { $eol = [byte[]](13, 10) }' "$B/win/plugins.ps1" && ok "plugins.ps1 Compose takes the backup's line ending" || bad "plugins.ps1 Compose line ending"
 printf 'a.esp\r\n*skythontest.esp\r\n' > "$pd/listed"; printf 'SkythonTest.esp\r\n' > "$pd/listed2"
 for f in listed listed2; do if "$P_" compose "$pd/$f" >/dev/null 2>&1; then bad "compose accepted a backup that already lists it ($f)"; else ok "compose refuses a backup that already lists SkythonTest.esp ($f)"; fi; done
@@ -370,8 +374,8 @@ w="$(grep -vE '^\s*#' "$pp" | grep -E 'WriteAllBytes|Copy-Item|Set-Content|Out-F
 [ "$(grep -cF "if (GameRunning) { Refuse 'the game is running' }" "$pp")" = 2 ] && ok "plugins.ps1 add and restore refuse while the game runs" || bad "plugins.ps1 game-running guard"
 grep -qF 'function GameRunning { return [bool](Get-Process -Name SkyrimSE,skse64_loader,SkyrimSELauncher,ModOrganizer -ErrorAction SilentlyContinue) }' "$pp" \
   && ok "plugins.ps1 GameRunning covers the game, the loader, the launcher and MO2" || bad "plugins.ps1 GameRunning process list"
-grep -qF 'if ((Sha $c) -ne (Sha (Compose $b))) { Refuse' "$pp" && grep -qF 'if ((Sha $c) -ne (Sha $b)) { Refuse' "$pp" && grep -qF 'if (Listed $b) { Refuse' "$pp" \
-  && ok "plugins.ps1 re-checks on the box: add only from the backup, restore only from backup + line" || bad "plugins.ps1 box-side checks"
+grep -qF 'if ((Sha $c) -ne (Sha (Compose $b)) -and (Sha $c) -ne (Sha (Compose $b '"''"'))) { Refuse' "$pp" && grep -qF 'if ((Sha $c) -ne (Sha $b)) { Refuse' "$pp" && grep -qF 'if (Listed $b) { Refuse' "$pp" \
+  && ok "plugins.ps1 re-checks on the box: add only from the backup, restore only from backup + our line or the game's inactive line" || bad "plugins.ps1 box-side checks"
 
 # box_quit.sh / box_stop.sh / box_plugins.sh against a stubbed box (BOX_SSH_STUB, offline only)
 pst="$pd/pstub.sh"; PSTUBLOG="$pd/pcalls.log"; export PSTUBLOG
