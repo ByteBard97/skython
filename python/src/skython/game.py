@@ -2,12 +2,14 @@
 skython.inprocess.InProcessTransport inside the game (over the built-in _skython module), or
 skython.remote.RemoteTransport from another process (over the dev bridge, Task 22)."""
 import math
+import threading
 import time
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from . import _protocol_generated as _g
 from . import errors
 from .values import Alias, Form, from_wire, to_wire
+from .events import EventDispatcher, EventStream, Subscription
 
 _GRACE = _g.GRACE_S  # seconds the Game waits beyond a server-side timeout
 _STEP_TIMEOUT = _g.CONFIG_KEYS["default_timeout_ms"]["default"] / 1000  # the plugin's default, to size a batch's wait
@@ -24,6 +26,8 @@ class Transport(Protocol):
     def request(self, op: str, args: dict, wait_s: float) -> dict: ...
 
     def close(self) -> None: ...
+
+    def events(self) -> EventStream: ...  # one stream per transport, made on first use (Task 36)
 
 
 def _positive_seconds(value, name: str) -> float:
@@ -73,6 +77,9 @@ class Game:
         #: The epoch when this Game was made, fixed for its life. It does NOT follow save loads: read
         #: state()["epoch"] for the current one.
         self.epoch: int = self.welcome.get("epoch", 0)
+        self._events_lock = threading.Lock()
+        self._dispatcher: EventDispatcher | None = None
+        self._closing = False
 
     @property
     def closed(self) -> bool:
@@ -161,7 +168,119 @@ class Game:
                                       {**st, "reason": "wait_ready timed out"})
             time.sleep(0.25)
 
+    # -- events (spec 4.6) ----------------------------------------------------------------------------
+    def _event_dispatcher(self) -> EventDispatcher:
+        with self._events_lock:
+            if self._closing or self.closed:
+                raise errors.ConnectionLost("the Game is closed")
+            if self._dispatcher is None:
+                caps = self.welcome.get("capabilities")
+                if isinstance(caps, list) and _g.OP_EVENTS_SUBSCRIBE not in caps:  # a protocol 1.0 server
+                    raise errors.Unsupported(_g.CODE_UNSUPPORTED, f"the server does not offer {_g.OP_EVENTS_SUBSCRIBE} "
+                                             f"(protocol {self.welcome.get('protocol')})")
+                events = getattr(self.transport, "events", None)
+                if events is None:
+                    raise errors.Unsupported(_g.CODE_UNSUPPORTED, f"{type(self.transport).__name__} has no event stream")
+                self._dispatcher = EventDispatcher(events(), self)  # the stream first: it owns the consumer
+            return self._dispatcher
+
+    def on(self, event: str, filter: dict | None, fn: Callable[[Any], None], *,
+           max_queue: int = _g.DEFAULT_EVENT_QUEUE) -> Subscription:
+        """Call fn(Event) on the Game's event thread for every `event` that matches `filter`.
+
+        `filter` maps a field of the event's filter_fields to the values to accept (a list, or one value): every
+        listed field must match one of its values. Forms must carry form_id (resolve them first); strings match
+        ignoring ASCII case. At most `max_queue` events wait per subscription; beyond that the oldest are dropped
+        and the next delivered Event's `dropped` says how many.
+
+        on() holds the Game's dispatcher lock across the subscribe round trip (about 90 ms through the bridge), so
+        this Game's callbacks wait that long; that is what guarantees the first event is never lost. Raises
+        Unsupported when the server or module has no events, ConnectionLost once the Game is closed."""
+        if not callable(fn):
+            raise TypeError(f"fn must be callable, not {type(fn).__name__}")
+        args: dict[str, Any] = {"event": event, "max_queue": max_queue}
+        if filter is not None:
+            if not isinstance(filter, dict):
+                raise TypeError(f"filter must be a dict or None, not {type(filter).__name__}")
+            args["filter"] = {field: [to_wire(v) for v in (vals if isinstance(vals, (list, tuple)) else [vals])]
+                              for field, vals in filter.items()}
+        d = self._event_dispatcher()
+        return d.subscribe(lambda: _expect_dict(self._request(_g.OP_EVENTS_SUBSCRIBE, args), "events.subscribe result"),
+                           event, filter, fn, max_queue)
+
+    def on_death(self, actor: Form | None, fn) -> Subscription:
+        return self.on("death", None if actor is None else {"victim": [actor]}, fn)
+
+    def on_dying(self, actor: Form | None, fn) -> Subscription:
+        return self.on("dying", None if actor is None else {"victim": [actor]}, fn)
+
+    def on_mod_event(self, name: str, fn) -> Subscription:
+        return self.on("mod_event", {"name": [name]}, fn)
+
+    def on_channel(self, channel: str, fn) -> Subscription:
+        """Skython.Send(channel, payload) from Papyrus arrives here as an Event with data channel, payload, truncated."""
+        return self.on("channel", {"channel": [channel]}, fn)
+
+    def on_quest_stage(self, quest: Form, fn, *, stage: int | None = None) -> Subscription:
+        flt: dict[str, list] = {"quest": [quest]}
+        if stage is not None:
+            flt["stage"] = [stage]
+        return self.on("quest_stage", flt, fn)
+
+    def on_game_loaded(self, fn) -> Subscription:
+        return self.on("game_loaded", None, fn)
+
+    def wait_for(self, predicate: Callable[[], Any], timeout: float, *, interval: float = 0.25) -> Any:
+        """Call predicate() every `interval` seconds until it returns something truthy, and return that (spec 4.7).
+        Raises WaitTimeout when `timeout` seconds pass first."""
+        _positive_seconds(timeout, "timeout")
+        _positive_seconds(interval, "interval")
+        deadline = time.monotonic() + timeout
+        while True:
+            value = predicate()
+            if value:
+                return value
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise errors.WaitTimeout(f"the condition was not met within {timeout:g} s")
+            time.sleep(min(interval, remaining))
+
+    # -- save and load ----------------------------------------------------------------------------------
+    def save(self, name: str, *, timeout: float = 60.0) -> str:
+        """Save the game as `name` (letters, digits, _; at most 64). Never overwrites: an existing save is BadRequest
+        with detail reason "save_exists". Returns once the engine has started the save: the file can appear a
+        moment later, and a load of it meanwhile is NotReady with detail reason "saving" (retry briefly)."""
+        result = _expect_dict(self._request(_g.OP_GAME_SAVE, {"name": name, "timeout_ms": _timeout_ms(timeout)}, timeout),
+                              "game.save result")
+        return result.get("name", name)
+
+    def load(self, name: str, *, timeout: float = 120.0, wait: bool = True) -> dict:
+        """Load the save `name`. Without `wait`, returns {"save", "started"} once the load has started. With `wait`,
+        returns the first interactive state() whose epoch is above the one before the call; NotReady with detail
+        reason "load timed out" (plus the last state) if that takes longer than `timeout`. Every call in flight when
+        the load starts ends NotReady (spec 4.5); subscriptions stay."""
+        deadline = time.monotonic() + _positive_seconds(timeout, "timeout")
+        before = self.state().get("epoch", 0) if wait else 0  # without wait, game.load is the only request sent
+        started = _expect_dict(self._request(_g.OP_GAME_LOAD, {"save": name, "timeout_ms": _timeout_ms(timeout)}, timeout),
+                               "game.load result")
+        if not wait:
+            return started
+        while True:
+            st = self.state()
+            if st.get("interactive") and st.get("epoch", 0) > before:
+                return st
+            if time.monotonic() >= deadline:
+                raise errors.NotReady(_g.CODE_NOT_READY, f"save {name!r} was not loaded and interactive after {timeout:g} s",
+                                      {**st, "reason": "load timed out"})
+            time.sleep(0.25)
+
     def close(self) -> None:
+        """Close every subscription, stop the event thread (joined at most 2 s), close the stream and the transport."""
+        with self._events_lock:
+            self._closing = True
+            d, self._dispatcher = self._dispatcher, None
+        if d is not None:
+            d.close()
         self.transport.close()
 
     def __enter__(self):

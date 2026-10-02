@@ -508,3 +508,23 @@ def test_a_stale_load_finishing_during_reloads_teardown_never_runs_setup(host, f
         for attr in ("t24_teardown_started", "t24_teardown_release"):
             if hasattr(builtins, attr):
                 delattr(builtins, attr)
+
+
+def test_reload_drops_the_old_scripts_subscriptions(host, fake, tmp_path):
+    # The old Game is closed by reload(); with Task 36 that also closes its consumer and subscriptions.
+    script(tmp_path, "t24_events", """
+        seen = []
+
+        def setup(game):
+            game.on_channel("t24", seen.append)
+    """)
+    host.main()
+    assert host.status()["scripts"] == {"t24_events": "ok"}
+    assert (fake.consumers(), fake.subscriptions()) == (1, 1)
+    old = sys.modules["t24_events"]
+    assert host.reload("t24_events") == "ok"
+    assert (fake.consumers(), fake.subscriptions()) == (1, 1)  # the new setup's; the old Game's are gone
+    new = sys.modules["t24_events"]
+    fake._fake_push_event("channel", json.dumps({"channel": "t24", "payload": "x", "truncated": False}))
+    wait_until(lambda: new.seen, what="the reloaded script's event")
+    assert old.seen == []

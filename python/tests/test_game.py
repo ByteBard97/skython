@@ -13,6 +13,7 @@ from fake_skython import FakeRemoteError
 from support import load_fixture, wait_until
 from skython import _protocol_generated as g
 from skython import errors
+from skython.events import Subscription
 from skython.game import Game
 from skython.inprocess import connect_in_process
 from skython.values import INT_MAX, INT_MIN, Form, from_wire
@@ -357,6 +358,18 @@ def _batch(game, a):
     return b.run(stop_on_error=a["stop_on_error"], timeout=_secs(a))
 
 
+def _subscribe(game, a):
+    flt = {f: [from_wire(v) for v in vals] for f, vals in a["filter"].items()} if a.get("filter") is not None else None
+    return game.on(a["event"], flt, lambda e: None, **({"max_queue": a["max_queue"]} if "max_queue" in a else {}))
+
+
+def _unsubscribe(game, a):
+    # events.unsubscribe has no Game method of its own: it is Subscription.close(). The sub in the fixture is not one
+    # this Game made, so the hub answers not_found, which close() ignores; the replay checks only what was sent.
+    d = game._event_dispatcher()
+    d.close_subscription(Subscription(d, a["sub"], "death", None, lambda e: None))
+
+
 CALLERS = {
     "game.state": lambda game, a: game.state(),
     "form.resolve": lambda game, a: game.resolve(**a),
@@ -365,19 +378,18 @@ CALLERS = {
     "papyrus.get_property": lambda game, a: game.get_property(from_wire(a["object"]), a["script"], a["property"]),
     "papyrus.set_property": lambda game, a: game.set_property(from_wire(a["object"]), a["script"], a["property"], from_wire(a["value"])),
     "papyrus.batch": _batch,
+    "events.subscribe": _subscribe,
+    "events.unsubscribe": _unsubscribe,
+    "game.save": lambda game, a: game.save(a["name"], timeout=a["timeout_ms"] / 1000),
+    "game.load": lambda game, a: game.load(a["save"], timeout=a["timeout_ms"] / 1000, wait=False),
 }
-
-
-# Protocol 1.1 ops whose Game methods (Game.on, Game.save, Game.load) arrive in Task 36, which adds Game callers for
-# them to CALLERS and deletes this set (and the two uses below).
-PENDING_OPS = {"events.subscribe", "events.unsubscribe", "game.save", "game.load"}
 
 
 def replay_handler(op, args, ctx):
     return {"results": []} if op == "papyrus.batch" else {}
 
 
-@pytest.mark.parametrize("fx", [r for r in REQUESTS["valid"] if r["op"] not in PENDING_OPS], ids=lambda r: f"{r['id']}-{r['op']}")
+@pytest.mark.parametrize("fx", REQUESTS["valid"], ids=lambda r: f"{r['id']}-{r['op']}")
 def test_valid_request_fixtures_replay(game, fake, fx):
     fake.handler = replay_handler
     CALLERS[fx["op"]](game, fx["args"])
@@ -390,7 +402,7 @@ def test_valid_request_fixtures_replay(game, fake, fx):
 
 
 def test_the_game_speaks_exactly_the_ops_in_the_table():
-    assert set(CALLERS) == set(g.OPS) - PENDING_OPS
+    assert set(CALLERS) == set(g.OPS)
     assert set(STEPS) == set(g.BATCHABLE_OPS)
     assert {fx["op"] for fx in REQUESTS["valid"]} == set(g.OPS)
 

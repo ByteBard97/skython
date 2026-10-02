@@ -11,6 +11,7 @@ from . import _framing
 from . import _protocol_generated as _g
 from . import errors
 from .game import Game
+from .events import InProcessEventStream
 
 
 def _object(text, what: str) -> dict:
@@ -42,6 +43,22 @@ class InProcessTransport:
         self.closed = False
         self._ids = itertools.count(1)
         self._ids_lock = threading.Lock()
+        self._stream: InProcessEventStream | None = None
+        self._stream_lock = threading.Lock()
+
+    def events(self) -> InProcessEventStream:
+        """This transport's event stream (one _skython consumer), opened on first use."""
+        with self._stream_lock:
+            if self.closed:
+                raise errors.ConnectionLost("the in-process transport is closed")
+            if self._stream is None:
+                if not hasattr(self._m, "open_consumer"):
+                    raise errors.Unsupported(_g.CODE_UNSUPPORTED, "this _skython module has no event API")
+                try:
+                    self._stream = InProcessEventStream(self._m)
+                except RuntimeError as e:  # ModuleHost.events is null: the game build before Task 39 (Review A#1)
+                    raise errors.Unsupported(_g.CODE_UNSUPPORTED, f"no event hub: {e}") from None
+            return self._stream
 
     def request(self, op: str, args: dict, wait_s: float) -> dict:
         if self.closed:
@@ -49,13 +66,21 @@ class InProcessTransport:
         with self._ids_lock:
             req_id = next(self._ids)
         text = _framing.dumps({"type": "request", "id": req_id, "op": op, "args": args})  # EncodeError: nothing sent
-        resp = _object(self._m.call(text, wait_s), f"the response to {op}")
+        stream = self._stream
+        consumer = stream.consumer if stream is not None else 0
+        # The consumer travels beside the request text (index Contracts), only when there is one: 0 is the default.
+        raw = self._m.call(text, wait_s, consumer) if consumer else self._m.call(text, wait_s)
+        resp = _object(raw, f"the response to {op}")
         if type(resp.get("id")) is not int or resp["id"] != req_id:
             raise errors.ProtocolViolation(f"the response to {op} has id {resp.get('id')!r}, not {req_id}")
         return resp
 
     def close(self) -> None:
         self.closed = True
+        with self._stream_lock:
+            stream = self._stream
+        if stream is not None:
+            stream.close()
 
 
 def connect_in_process(*, module=None, call_timeout: float = _g.CALL_TIMEOUT_S,

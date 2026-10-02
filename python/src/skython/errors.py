@@ -35,6 +35,10 @@ class EncodeError(SkythonError, ValueError):
     Raised before anything is sent, so the connection is unaffected."""
 
 
+class WaitTimeout(SkythonError):
+    """Game.wait_for gave up: the predicate returned nothing truthy within its timeout."""
+
+
 class HandshakeError(SkythonError):
     def __init__(self, code: str, message: str):
         super().__init__(f"{code}: {message}")
@@ -124,4 +128,4 @@ def handshake_error_from_wire(msg: dict) -> HandshakeError:
 
 
 __all__ = ["SkythonError", "ConnectionLost", "NotRunning", "CallTimeout", "ProtocolViolation", "EncodeError",
-           "HandshakeError", "Unauthorized", "ProtocolMismatch", "RemoteError", *[c.__name__ for c in _REMOTE.values()]]
+           "WaitTimeout", "HandshakeError", "Unauthorized", "ProtocolMismatch", "RemoteError", *[c.__name__ for c in _REMOTE.values()]]

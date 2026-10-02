@@ -1,6 +1,7 @@
 """Call Papyrus in a running Skyrim from Python."""
 from .discovery import Session, find_session  # noqa: F401
 from .errors import *  # noqa: F401,F403
+from .events import Event, Subscription  # noqa: F401
 from .game import Batch, Game, Transport  # noqa: F401
 from .inprocess import InProcessTransport, connect_in_process  # noqa: F401
 from .remote import RemoteTransport, connect_remote  # noqa: F401
