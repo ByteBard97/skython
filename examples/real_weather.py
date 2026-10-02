@@ -11,8 +11,6 @@ import threading
 import time
 import urllib.request
 
-from skython.errors import NotReady
-
 LATITUDE, LONGITUDE = 59.91, 10.75          # Oslo
 EVERY_S = 600
 
@@ -39,12 +37,7 @@ def current_code():
 
 
 def run(game):
-    while True:                                  # a long stay at the main menu is not an error
-        try:
-            game.wait_ready()
-            break
-        except NotReady:
-            continue
+    game.wait_ready(timeout=86400)           # wait out the main menu
     while True:
         try:
             code = current_code()

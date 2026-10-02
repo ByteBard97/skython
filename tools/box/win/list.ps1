@@ -1,4 +1,4 @@
-# list.ps1 -PathsB64 <base64 of newline-separated paths>: LISTS (removes nothing) what the harness put on the box:
+# list.ps1 -PathsB64 <base64 of newline-separated paths>: LISTS (removes nothing) what the box tools put on the box:
 # the given deployed paths, our folder, our scheduled tasks, spike/plugin logs and the spike throwaway saves.
 param([string]$PathsB64 = '')
 $my = Join-Path $env:USERPROFILE 'Documents\My Games\Skyrim Special Edition'

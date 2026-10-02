@@ -19,7 +19,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-from skython.errors import ConnectionLost, NotReady
+from skython.errors import ConnectionLost
 
 PORT = 8765
 PLAYER = "Skyrim.esm|0x14"
@@ -68,14 +68,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def poll(game):
-    while not stop.is_set():                    # a long stay at the main menu is not an error
-        try:
-            game.wait_ready()
-            break
-        except NotReady:
-            continue
-        except ConnectionLost:                  # the script was reloaded or the game closed
-            return
+    try:
+        game.wait_ready(timeout=86400)
+    except ConnectionLost:                  # the script was reloaded or the game closed
+        return
     player, hour = game.form(PLAYER), game.form(GAME_HOUR)
     while not stop.is_set():
         b = game.batch()                        # seven reads, in order (one game task each: ordered, not atomic)

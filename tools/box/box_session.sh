@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The dev bridge from Linux while the game runs on the box (Tasks 25-32).
+# The dev bridge from Linux while the game runs on the box.
 # Usage: tools/box/box_session.sh up | env | down | status | probe [PORT] | rewrite IN|- OUT LOCAL_PORT|same
 #   up:      after each box launch, once the core log shows "python host: running". Reads the box's
 #            SKSE\Skython\session.json written since the last launch stamp (a file left by an earlier launch is

@@ -487,7 +487,7 @@ def _main() -> None:
     try:
         _install_hooks()
     except Exception:  # noqa: BLE001
-        log.exception("could not route print and uncaught exceptions into the log; going on without")
+        log.exception("could not route print and uncaught exceptions into the log; continuing without it")
     if SWITCH_INTERVAL_S is not None:
         sys.setswitchinterval(SWITCH_INTERVAL_S)
     log.info("skython._host: Python %s, plugin %s, game %s (%s), switch interval %g s", sys.version.split()[0],

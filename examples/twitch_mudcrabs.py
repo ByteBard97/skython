@@ -10,7 +10,7 @@ import socket
 import threading
 import time
 
-from skython.errors import NotReady, StaleReference
+from skython.errors import StaleReference
 
 CHANNEL = "your_twitch_channel"   # lower case, without the #
 COMMAND = "!mudcrab"
@@ -60,12 +60,7 @@ def chat_forever(channel):
 
 
 def run(game):
-    while True:                                  # wait until a save is loaded; a long main-menu stay is fine
-        try:
-            game.wait_ready()
-            break
-        except NotReady:
-            continue
+    game.wait_ready(timeout=86400)
     player = game.form(PLAYER)
     mudcrab = game.form(MUDCRAB)
     last_spawn, alive = {}, []

@@ -120,7 +120,7 @@ echo "== personal and private-name scan"
 # Built from parts so this file does not match its own patterns.
 scan_re="geo""ff|/ho""me/|192[.]168[.]|C:\\\\Us""ers\\\\|Chron""icle|Counten""ance|Runtime""Harness"
 scan_re+="|skyrim-""dm|Cla""ude|Anthro""pic|$X|sub""agent"
-# The hit that is expected and left for the owner: the placeholder Windows path in the box settings example.
+# The one expected hit: the placeholder Windows path in the box settings example.
 known_re="^tools/box/box\.local\.env\.example:[0-9]+:BOX_MYGAMES='C:.Users.user."
 text_hits="$(git ls-files -z | grep -zv '^plugin/extern/' | xargs -0 grep -n -I -i -E "$scan_re" 2>/dev/null || true)"
 bin_hits=""

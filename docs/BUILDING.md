@@ -4,7 +4,7 @@ This builds the two plugin DLLs, fetches the embedded Python runtime, and stages
 
 ## Requirements
 
-Tested with the versions in brackets. Older patch releases of the same major version probably work; they were not tried.
+Tested with the versions in brackets. Older patch releases of the same major version probably work, but I haven't tried them.
 
 - Windows 10 or 11, x64.
 - Visual Studio 2022 or Visual Studio Build Tools 2022 with the "Desktop development with C++" workload (MSVC v143 and a Windows 10/11 SDK). [Build Tools 17.14.34, MSVC toolset 14.44.35207 (cl 19.44.35228), Windows SDK 10.0.26100.0]
@@ -13,7 +13,7 @@ Tested with the versions in brackets. Older patch releases of the same major ver
 - vcpkg as a git clone, with `VCPKG_ROOT` pointing at it. `plugin/vcpkg.json` pins a vcpkg baseline commit, so the clone needs its full history (no `--depth`). [vcpkg tool 2026-09-26]
 - Internet access for the first build: vcpkg downloads and builds spdlog, fmt, DirectXTK and friends, and the build script downloads CPython 3.14.8 from python.org and nuget.org.
 
-Ninja is not needed; the build uses the Visual Studio generator. The first build took about 10 minutes on the test machine, most of it vcpkg building its packages.
+Ninja is not needed; the build uses the Visual Studio generator. The first build took about 10 minutes on my machine, most of it vcpkg building its packages.
 
 ## Get vcpkg
 

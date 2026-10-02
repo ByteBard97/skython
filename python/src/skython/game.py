@@ -198,19 +198,19 @@ class Game:
            max_queue: int = _g.DEFAULT_EVENT_QUEUE) -> Subscription:
         """Call fn(Event) on the Game's event thread for every `event` that matches `filter`.
 
-        `filter` maps a field of the event's filter_fields to the values to accept (a list, tuple, set or frozenset,
-        or one value): every
-        listed field must match one of its values. Forms must carry form_id (resolve them first); strings match
-        ignoring ASCII case. At most `max_queue` events wait per subscription; beyond that the oldest are dropped
-        and the next delivered Event's `dropped` says how many.
+        `filter` maps a field of the event's filter_fields to the values to accept: a list, tuple, set or
+        frozenset, or one value. Every listed field must match one of its values. Forms must carry form_id
+        (resolve them first); strings match ignoring ASCII case. At most `max_queue` events wait per
+        subscription; beyond that the oldest are dropped and the next delivered Event's `dropped` says how many.
 
-        on() holds the Game's dispatcher lock across the subscribe round trip (about 90 ms through the bridge), so
-        this Game's callbacks wait that long; that is what guarantees the first event is never lost.
+        on() holds the Game's dispatcher lock across the subscribe round trip (about 90 ms through the bridge),
+        so this Game's callbacks wait that long. That is what guarantees the first event is never lost.
 
-        Subscription.close() blocks while that subscription's callback runs (unless called from inside a callback),
-        so a callback that waits on a lock held by the closing thread deadlocks: do not close from a thread holding a
-        lock your callback needs. Raises
-        Unsupported when the server or module has no events, ConnectionLost once the Game is closed."""
+        Subscription.close() blocks while that subscription's callback runs (unless called from inside a
+        callback), so a callback that waits on a lock held by the closing thread deadlocks. Do not close from a
+        thread holding a lock your callback needs.
+
+        Raises Unsupported when the server or module has no events, ConnectionLost once the Game is closed."""
         if not callable(fn):
             raise TypeError(f"fn must be callable, not {type(fn).__name__}")
         args: dict[str, Any] = {"event": event, "max_queue": max_queue}

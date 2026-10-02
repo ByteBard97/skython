@@ -8,7 +8,7 @@ Needs: Skython 0.1 (events). Standard library only.
 """
 import threading
 
-from skython.errors import CallTimeout, ConnectionLost, NotFound, NotReady
+from skython.errors import CallTimeout, ConnectionLost, NotFound
 
 QUESTS = ["MQ101", "MQ102", "MQ103"]   # editor ids: Unbound, Before the Storm, Bleak Falls Barrow
 
@@ -39,14 +39,10 @@ _notifier = None
 
 def run(game):
     global _notifier
-    while True:                           # quests can be looked up only once a save is loaded
-        try:
-            game.wait_ready()
-            break
-        except NotReady:
-            continue
-        except (ConnectionLost, CallTimeout):  # the game (or the bridge) went away or stopped answering: nothing to watch
-            return
+    try:
+        game.wait_ready(timeout=86400)         # quests can be looked up only once a save is loaded
+    except (ConnectionLost, CallTimeout):  # the game (or the bridge) went away or stopped answering: nothing to watch
+        return
     _notifier = Notifier(game)
     for editor_id in QUESTS:
         try:
