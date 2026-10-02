@@ -18,6 +18,10 @@ if(SPY_CORE_TESTS)
   file(GLOB SPY_CORE_TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp)
   add_executable(spy_core_tests ${SPY_CORE_TEST_SOURCES})
   target_link_libraries(spy_core_tests PRIVATE spy_core)
+  # One test file puts raw string literals inside doctest macros; MSVC's legacy preprocessor cannot parse that.
+  if(MSVC)
+    target_compile_options(spy_core_tests PRIVATE /Zc:preprocessor)
+  endif()
   target_compile_definitions(spy_core_tests PRIVATE
     SPY_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../protocol/v1/fixtures")
   add_test(NAME spy_core_tests COMMAND spy_core_tests)

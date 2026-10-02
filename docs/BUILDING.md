@@ -74,12 +74,10 @@ out\stage\Data\
 The plugin itself is tested in a running game, which needs more setup than this page covers. The core library's unit tests build and run on Windows with no game:
 
 ```
-cmake -S core -B core\build-win -G "Visual Studio 17 2022" -A x64 -DCMAKE_CXX_FLAGS_INIT=/Zc:preprocessor
+cmake -S core -B core\build-win -G "Visual Studio 17 2022" -A x64
 cmake --build core\build-win --config Release --parallel
 ctest --test-dir core\build-win -C Release --output-on-failure
 ```
-
-`/Zc:preprocessor` is needed because one test file puts raw string literals inside doctest macros, which MSVC's old preprocessor cannot parse. The flag only applies to a fresh build folder.
 
 ## Install
 
