@@ -3,7 +3,8 @@ spike S7c enumerated:
 SPY_S7C_QUEST=0x001093E4 SPY_S7C_SCRIPT=QF_TGTQ01Handler_001093E4 SPY_S7C_PROPERTY=Alias_TGHandlerSilverMoldAlias
 SPY_S7C_KIND=Alias (optional SPY_S7C_GETTER: a parameterless function returning the same property; unset for this one).
 The Int auto property read uses SPY_OWN_QUEST/SPY_OWN_SCRIPT (as in test_m1_calls.py) and
-SPY_OWN_INT_PROPERTY=currentAttackDelta (CWCampaignScript).
+SPY_OWN_INT_PROPERTY=currentAttackDelta (CWCampaignScript). The write-visibility test uses PetFramework_ParentQuest
+(Update.esm 0x01002F1C), fixed in the file, and restores what it writes.
 test_per_connection_cap_returns_busy needs plugin/config/variants/low-cap.ini deployed and skips otherwise.
 Run with -s to see the batch timings (ms per step).
 """
@@ -118,13 +119,15 @@ def _s7c_property():
 
 
 def test_get_property_reads_an_auto_property(game):
-    """Read-only happy path; writes wait for M1.5's test ESP (no vanilla property is safe to write)."""
+    """Read-only happy path on S7c's auto property. On s4test it holds alias 0 of its own quest (Task 30 launch 2), so
+    the read must decode as that Alias: None is not accepted (it let a broken read pass in Task 30 launch 1)."""
     quest_id, script, prop, kind = _s7c_property()
     quest = game.resolve(form_id=quest_id)
     first = game.get_property(quest, script, prop)
     print(f"\n{script}.{prop} -> {first!r}")
-    unfilled = first is None and kind in ("Form", "Alias")  # an object property may hold None
-    assert unfilled or type(first) is KINDS[kind], (kind, first)
+    assert type(first) is KINDS[kind], (kind, first)
+    if kind == "Alias":
+        assert isinstance(first, Alias) and first.quest.form_id == quest_id and first.alias_id == 0, first
     assert game.get_property(quest, script, prop) == first  # two reads agree (nothing writes it meanwhile)
     # Only when the script declares a parameterless function that returns this property (vanilla auto properties
     # rarely have one): the Papyrus side must see the same value.
@@ -147,6 +150,35 @@ def test_get_property_reads_an_int_auto_property(game):
     print(f"\n{script}.{prop} -> {first!r}")
     assert type(first) is int, first
     assert game.get_property(quest, script, prop) == first
+
+
+# PetFramework_ParentQuest (Update.esm, runtime form id 0x01002F1C), always bound (Task 29's probe). Its script declares
+# `Int Property CurrentPetCount = 0 Auto Hidden` and the bytecode getter `Int Function GetCurrentPetCount()` with body
+# `Return CurrentPetCount`, so Papyrus reads the same auto variable our write lands in.
+PET_QUEST = 0x01002F1C
+PET_SCRIPT = "PetFramework_ParentQuestScript"
+PET_PROPERTY = "CurrentPetCount"
+PET_GETTER = "GetCurrentPetCount"
+
+
+def test_set_property_is_seen_by_papyrus(game):
+    """Writes the auto property, then reads it back through the script's own bytecode getter. Always restores the
+    original value (s4test is never saved anyway). This is the check the slot index is right: Papyrus finds the
+    variable through its own name-to-index map."""
+    quest = game.resolve(form_id=PET_QUEST)
+    original = game.get_property(quest, PET_SCRIPT, PET_PROPERTY)
+    assert type(original) is int, original
+    assert game.call_method(quest, PET_SCRIPT, PET_GETTER) == original  # both routes agree before the write
+    try:
+        game.set_property(quest, PET_SCRIPT, PET_PROPERTY, original + 3)
+        seen = game.call_method(quest, PET_SCRIPT, PET_GETTER)
+        print(f"\n{PET_SCRIPT}.{PET_PROPERTY}: original {original}, set {original + 3}, Papyrus getter -> {seen}")
+        assert seen == original + 3
+        assert game.get_property(quest, PET_SCRIPT, PET_PROPERTY) == original + 3
+    finally:
+        game.set_property(quest, PET_SCRIPT, PET_PROPERTY, original)
+    assert game.get_property(quest, PET_SCRIPT, PET_PROPERTY) == original
+    assert game.call_method(quest, PET_SCRIPT, PET_GETTER) == original
 
 
 def test_full_property_is_unsupported(game):

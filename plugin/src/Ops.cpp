@@ -151,13 +151,16 @@ void CallMethod(const CallArgs& c, const Done& done)
     }
 }
 
-// v1 serves auto properties only. Their value is the property's auto variable in the bound script object, read and
-// written here directly (Object::variables). The plan's route, the VM's own GetPropertyValue, returned true and left
-// the value None for every auto property it read on the box (Task 30, launch 1: CWCampaignScript.currentAttackDelta,
-// an Int, read None), so it is not used; nor SetPropertyValue, its vtable neighbour. Object::GetProperty is not used
-// either: at the pin it indexes variables[] with the declaring class's own index and ignores the parents' variables.
-// A full property (Papyrus get/set code) is refused: its code would not run here. Nothing is synchronised with Papyrus
-// threads, and OnPropertyChanged does not fire (see the limits in Task 30).
+// v1 serves auto properties only. Their value is the property's auto variable in the bound script object, found by
+// its absolute index into Object::variables (parents' variables first; sig::FindPropertySlot). The plan's route, the
+// VM's own GetPropertyValue, returned true and left the value None for every auto property it read on AE 1.6.1170
+// (Task 30, launch 1: CWCampaignScript.currentAttackDelta, an Int, read None; ruling R57), so it is not used; nor
+// SetPropertyValue, its vtable neighbour. Object::GetProperty is not used either: at the pin it indexes variables[]
+// with the declaring class's own index and ignores the parents' variables.
+// Reads go through the engine's own VirtualMachine::GetVariableValue (vfunc GetVariableValue1) by that index, which
+// copies the Variable the engine's way (and may take the object's lock: unverified); a false or None answer where the
+// slot holds a value falls back to the direct read (logged once). Writes are direct: there is no trusted engine setter
+// at the pin. A full property (Papyrus get/set code) is refused: its code would not run here.
 struct AutoProperty
 {
     RE::BSScript::TypeInfo type;
@@ -185,17 +188,22 @@ RE::BSScript::Variable& BackingVariable(const AutoProperty& a, const pv::Target&
     return obj->variables[a.index];
 }
 
-// Once per launch: the direct read's slot next to the slot CommonLib's Object::GetVariable finds by the auto
-// variable's name (it applies the parent offset its own way), so the log shows whether the two layouts agree.
-// (Task 30 launch 2 also logged the VM's GetPropertyValue here: true with a None value; no longer called.)
-void LogPropertySlot(const AutoProperty& a, const pv::Target& target, const PropertyArgs& p, const Variable& slot)
+std::uintptr_t RawType(const Variable& v) { return static_cast<std::uintptr_t>(v.GetType().GetRawType()); }
+
+// Once per launch: the direct slot next to the slot CommonLib's Object::GetVariable finds by the auto variable's name
+// (it applies the parent offset its own way), and the engine's GetVariableValue answer next to the direct slot (type
+// and value, Variable::operator==), so the log proves both the layout and the read route agree.
+void LogPropertySlot(const AutoProperty& a, const pv::Target& target, const PropertyArgs& p, const Variable& slot,
+                     bool engineOk, const Variable& engine)
 {
     static std::once_flag once;
     std::call_once(once, [&] {
         const auto* byName = a.variableName.empty() ? nullptr : target.object->GetVariable(RE::BSFixedString(a.variableName));
-        log::Info(std::format("ops: property slot for {}.{} on {}: index={} variable={} raw_type={:X} name_route={} initialized={}",
-            p.script, p.property, target.desc, a.index, a.variableName, static_cast<std::uintptr_t>(slot.GetType().GetRawType()),
-            !byName ? "not found" : (byName == &slot ? "same slot" : "DIFFERENT slot"), target.object->IsInitialized()));
+        log::Info(std::format("ops: property slot for {}.{} on {}: index={} variable={} raw_type={:X} name_route={} "
+            "initialized={} GetVariableValue={} engine_raw_type={:X} engine_equals_direct={}",
+            p.script, p.property, target.desc, a.index, a.variableName, RawType(slot),
+            !byName ? "not found" : (byName == &slot ? "same slot" : "DIFFERENT slot"), target.object->IsInitialized(),
+            engineOk, RawType(engine), engineOk && engine == slot));
     });
 }
 
@@ -203,11 +211,26 @@ json GetProperty(const PropertyArgs& p)
 {
     const auto a = FindAutoProperty(p);
     auto target = pv::ResolveTarget(p.object, p.script);
-    const auto& slot = BackingVariable(a, target, p);
-    LogPropertySlot(a, target, p, slot);
-    return pv::FromVariable(slot);  // inside this SKSE task (Run), so an object value is converted here
+    const auto& slot = BackingVariable(a, target, p);  // the range check, and the reference the engine read is checked against
+    Variable engine;
+    const bool engineOk = VM()->GetVariableValue(target.object, a.index, engine);
+    LogPropertySlot(a, target, p, slot, engineOk, engine);
+    const bool engineNone = engine.GetType().GetRawType() == RE::BSScript::TypeInfo::RawType::kNone;
+    const bool slotNone = slot.GetType().GetRawType() == RE::BSScript::TypeInfo::RawType::kNone;
+    if (!engineOk || (engineNone && !slotNone)) {  // don't fail the call: the direct slot holds the value
+        static std::once_flag once;
+        std::call_once(once, [&] {
+            log::Warn(std::format("ops: GetVariableValue fallback for {}.{} on {}: returned={} engine_raw_type={:X} "
+                "direct_raw_type={:X}; read the slot directly", p.script, p.property, target.desc, engineOk,
+                RawType(engine), RawType(slot)));
+        });
+        return pv::FromVariable(slot);
+    }
+    return pv::FromVariable(engine);  // inside this SKSE task (Run), so an object value is converted here
 }
 
+// Direct write through Variable's own assignment (it releases the old value and takes a reference to the new one).
+// Not synchronised with Papyrus threads running the same script, and no OnPropertyChanged-style event fires.
 void SetProperty(const PropertyArgs& p)
 {
     const auto a = FindAutoProperty(p);
@@ -231,8 +254,8 @@ struct BatchState
 // safe by ordering, not by thread: the next step is only queued from the previous step's `done`, so at most one step
 // is in flight and each access happens-before the next (the AddTask queue hand-off). No single "main thread" touches
 // it: SKSE tasks run on varying job threads (R49).
-// unmeasured: whether a task queued during a drain runs in the same drain; Task 31's meter (with the batch-step wrap)
-// shows it.
+// Measured (Task 30): 46.4-46.8 ms per RandomInt step, one drain per step (S9), so a step queued during a drain runs
+// in the next drain, not the same one.
 
 void BatchStep(const std::shared_ptr<BatchState>& st);
 
