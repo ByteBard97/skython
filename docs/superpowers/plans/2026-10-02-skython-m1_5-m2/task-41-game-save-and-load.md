@@ -124,6 +124,7 @@ struct Pending
     Done done;
     Cancelled cancelled;
     bool dispatched = false;  // set under Mx() right before Game.SaveGame is dispatched
+    Clock::time_point dispatchedAt{};  // when it was set: a cancel after dispatch reserves the name from here
 };
 std::mutex& Mx() { static auto* m = new std::mutex; return *m; }  // immortal, like the dispatcher
 std::vector<Pending>& Saves() { static auto* v = new std::vector<Pending>; return *v; }
@@ -133,7 +134,8 @@ std::uint64_t g_nextId = 0;  // under Mx()
 //   can precede the file); a game.load of the name answers not_ready "saving".
 // - not announced: a pending save cancelled (timeout, disconnect, world reset) after its Game.SaveGame was dispatched;
 //   the engine may still write it, so the name stays reserved and every game.load is busy until kSaveGame arrives.
-// Dropped lazily once the file exists or after kAnnouncedMaxAge.
+// Dropped lazily once the file exists or kAnnouncedMaxAge after `since` (kSaveGame, or the dispatch for a cancelled
+// save: the engine's write is timed from the request, not from the cancel).
 struct Reserved
 {
     Clock::time_point since;
@@ -142,6 +144,13 @@ struct Reserved
 std::map<std::string, Reserved>& Announced() { static auto* m = new std::map<std::string, Reserved>; return *m; }
 constexpr auto kAnnouncedMaxAge = std::chrono::seconds(120);
 std::atomic_bool g_loadQueued{ false };  // a game.load's UI task is queued or running
+
+// A loadable save is its .ess; the .skse cosave alone (an orphan) cannot be loaded.
+bool EssOnDisk(const std::string& name)
+{
+    std::error_code ec;  // never throws: an unreadable folder counts as "not there"
+    return fs::exists(SaveDir() / (name + ".ess"), ec);
+}
 
 // A save is there when its .ess is, or its .skse cosave alone (an orphan): game.save never writes over either.
 bool OnDisk(const std::string& name)
@@ -152,12 +161,14 @@ bool OnDisk(const std::string& name)
     return fs::exists(dir / (name + ".skse"), ec);
 }
 
-// Under Mx(): forget reserved names whose file is now on disk or that are older than kAnnouncedMaxAge. This does file
-// system I/O (two exists() per entry) under the lock; acceptable while the set holds a handful of names.
+// Under Mx(): forget reserved names whose .ess is now on disk or that are older than kAnnouncedMaxAge. The .ess, not
+// the .skse: a cosave written first must not end the reservation while game.load would still find no .ess (game.save
+// refuses the name either way, through OnDisk). This does file system I/O (one exists() per entry) under the lock;
+// acceptable while the set holds a handful of names.
 void PruneAnnouncedLocked()
 {
     const auto now = Clock::now();
-    std::erase_if(Announced(), [&](const auto& kv) { return now - kv.second.since > kAnnouncedMaxAge || OnDisk(kv.first); });
+    std::erase_if(Announced(), [&](const auto& kv) { return now - kv.second.since > kAnnouncedMaxAge || EssOnDisk(kv.first); });
 }
 
 // Under Mx(): drop pending saves nobody waits for any more. One cancelled before its dispatch is simply dropped (its
@@ -168,7 +179,7 @@ void DropCancelledLocked()
     for (auto it = Saves().begin(); it != Saves().end();) {
         if (!it->cancelled()) { ++it; continue; }
         if (it->dispatched) {
-            Announced().try_emplace(it->key, Reserved{ Clock::now(), false });
+            Announced().try_emplace(it->key, Reserved{ it->dispatchedAt, false });
             log::Info("saveload: save " + it->name + " cancelled after dispatch; name stays reserved");
         }
         it = Saves().erase(it);
@@ -191,6 +202,7 @@ bool MarkDispatched(std::uint64_t id)
     const auto it = std::ranges::find_if(Saves(), [&](const Pending& p) { return p.id == id; });
     if (it == Saves().end()) return false;
     it->dispatched = true;
+    it->dispatchedAt = Clock::now();
     return true;
 }
 
@@ -289,7 +301,9 @@ void Load(const std::string& name, Done done, Cancelled cancelled)
         std::lock_guard lk(Mx());
         DropCancelledLocked();
         PruneAnnouncedLocked();
-        const bool onDisk = OnDisk(name);  // after the prune, like Save: the prune drops a name once its file is there
+        // After the prune, like Save: the prune drops a name once its file is there. Only the .ess counts here: an
+        // orphan .skse is not a save the game can load (not_found), while game.save still refuses its name.
+        const bool onDisk = EssOnDisk(name);
         // A pending save, or a dispatched save that was cancelled before its kSaveGame, may still be written: busy.
         if (!Saves().empty() || std::ranges::any_of(Announced(), [](const auto& kv) { return !kv.second.announced; }))
             refusal = OpResult::Err(ErrorCode::busy, "a game.save is in progress; load after it completes");
@@ -651,6 +665,8 @@ def test_a_save_cancelled_after_dispatch_keeps_its_name_reserved(game):
         # Cancelled before the dispatch: wait longer next time; cancelled too late (or not at all): shorter.
         timeout = timeout * 2 if second == "saved" else max(0.001, timeout / 3)
     print(f"t41c: {branches}")
+    if not any(second == "refused" and reserved for _, _, _, second, reserved in branches):
+        pytest.skip(f"the post-dispatch cancel branch was not hit in {len(branches)} attempts: {branches}")
 
 
 def test_load_from_the_main_menu(session, game, saved):

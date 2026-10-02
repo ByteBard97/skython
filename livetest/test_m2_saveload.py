@@ -150,6 +150,8 @@ def test_a_save_cancelled_after_dispatch_keeps_its_name_reserved(game):
         # Cancelled before the dispatch: wait longer next time; cancelled too late (or not at all): shorter.
         timeout = timeout * 2 if second == "saved" else max(0.001, timeout / 3)
     print(f"t41c: {branches}")
+    if not any(second == "refused" and reserved for _, _, _, second, reserved in branches):
+        pytest.skip(f"the post-dispatch cancel branch was not hit in {len(branches)} attempts: {branches}")
 
 
 def test_load_from_the_main_menu(session, game, saved):
