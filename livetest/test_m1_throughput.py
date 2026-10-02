@@ -10,7 +10,7 @@ import pytest
 
 from skython import errors
 from smoke import command, wait_smoke
-from support import diagnostics, raw_connect, read_frame, send_request, steady_late_count
+from support import OTHER_CLIENTS_SLACK, diagnostics, raw_connect, read_frame, send_request, steady_late_count
 
 RESULTS = pathlib.Path(__file__).parent / "results" / "throughput.json"
 BURST_RESULTS = pathlib.Path(__file__).parent / "results" / "burst.json"
@@ -150,7 +150,7 @@ def test_burst_worst_frame(session, game):
     after = diagnostics(session)
     # Every burst entry has left the Dispatcher once the late counter is steady: in_flight is back at its baseline.
     steady_late_count(session)
-    assert diagnostics(session)["in_flight"] == before["in_flight"], "burst entries are still in flight"
+    assert diagnostics(session)["in_flight"] <= before["in_flight"] + OTHER_CLIENTS_SLACK, "burst entries are still in flight"
     out = {
         "date": datetime.datetime.now().isoformat(timespec="seconds"),
         "requested": BURST_TOTAL, "per_connection": BURST_PER_CONNECTION, "connections": n_conn,

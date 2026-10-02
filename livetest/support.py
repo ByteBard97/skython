@@ -204,6 +204,11 @@ def diagnostics(session) -> dict:
         s.close()
 
 
+# Other clients (e.g. an example script left in the scripts folder, which polls every second) keep a few calls of
+# their own in flight; in_flight checks allow this much either way. Far below the test calls' counts (32, 1024).
+OTHER_CLIENTS_SLACK = 8
+
+
 def steady_late_count(session, settle: float = 1.0, tries: int = 10) -> int:
     """late_results_dropped once two readings `settle` seconds apart agree: nothing late is still on its way."""
     prev = diagnostics(session)["late_results_dropped"]

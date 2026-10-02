@@ -8,6 +8,7 @@ from skython.values import MAX_ARRAY_ITEMS, PArray, from_wire, to_wire
 VALUES = load_fixture("values.json")
 KEYS = load_fixture("form_keys.json")
 RESPONSES = load_fixture("responses.json")
+REQUESTS = load_fixture("requests.json")
 
 
 def same(a, b):
@@ -91,3 +92,32 @@ def test_error_responses_map_to_typed_exceptions():
     assert exc.detail == err["detail"]
     hs = errors.handshake_error_from_wire(next(r for r in RESPONSES["valid"] if r["type"] == "handshake_error"))
     assert isinstance(hs, errors.Unauthorized)
+
+
+def _golden(req_id):
+    return next(r for r in RESPONSES["valid"] if r.get("id") == req_id)
+
+
+def test_batch_timeout_carries_partial_results():
+    exc = errors.remote_error_from_wire(_golden(41)["error"])
+    assert isinstance(exc, errors.Timeout)
+    assert exc.detail["completed"] == 1 and len(exc.detail["results"]) == 1
+
+
+def test_late_cancel_timeout_is_marked():
+    exc = errors.remote_error_from_wire(_golden(42)["error"])
+    assert isinstance(exc, errors.Timeout) and exc.detail["late_cancel"] is True
+
+
+@pytest.mark.parametrize("req_id", [43, 44])
+def test_world_reset_not_ready_is_marked_dispatched(req_id):
+    exc = errors.remote_error_from_wire(_golden(req_id)["error"])
+    assert isinstance(exc, errors.NotReady) and exc.detail["dispatched"] is True
+
+
+@pytest.mark.parametrize("fx", REQUESTS["valid_without_args"], ids=lambda r: r["op"])
+def test_request_without_args_is_accepted(fake, fx):
+    import json
+    resp = json.loads(fake.call(json.dumps(fx), 5.0))
+    assert resp["id"] == fx["id"]
+    assert resp["ok"] is True or resp["error"]["code"] != "bad_request", resp

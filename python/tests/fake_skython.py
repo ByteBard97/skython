@@ -287,7 +287,9 @@ class FakeSkython:
             return "a request id must be an integer in 0..2^64-1"
         if obj.get("op") not in _g.OPS:
             return f"unknown op {obj.get('op')!r}"
-        if not isinstance(obj.get("args"), dict):
+        if "args" not in obj:  # core accepts a request without args as an empty object (requests.json valid_without_args)
+            obj["args"] = {}
+        if not isinstance(obj["args"], dict):
             return "args must be an object"
         return FakeSkython._op_problem(obj["op"], obj["args"])
 

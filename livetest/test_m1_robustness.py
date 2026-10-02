@@ -9,7 +9,7 @@ import pytest
 from skython import errors
 from skython.values import Fingerprint, Form
 from smoke import wait_smoke
-from support import diagnostics, raw_connect, read_frame, rpc, send_request, steady_late_count
+from support import OTHER_CLIENTS_SLACK, diagnostics, raw_connect, read_frame, rpc, send_request, steady_late_count
 
 PLAYER = Form(form_id=0x14)
 IRON_SWORD = "Skyrim.esm|0x012EB7"
@@ -71,11 +71,12 @@ def test_disconnect_with_calls_in_flight_drops_the_results(session, game):
         send_request(s, "papyrus.call_static",
                      {"script": "Utility", "function": "Wait", "args": [2.0], "timeout_ms": 30000}, req_id=i)
     time.sleep(0.3)  # let the bridge submit them, so they really are in flight when we close
-    assert diagnostics(session)["in_flight"] >= before["in_flight"] + n
+    assert diagnostics(session)["in_flight"] >= before["in_flight"] + n - OTHER_CLIENTS_SLACK
     s.close()  # the bridge cancels the connection's tickets (Task 23)
     time.sleep(0.5)  # well before the 2 s waits finish in the game
-    # Dispatcher::Cancel releases each entry at once: the closed connection holds nothing any more.
-    assert diagnostics(session)["in_flight"] == before["in_flight"]
+    # Dispatcher::Cancel releases each entry at once: the closed connection holds nothing any more (other clients'
+    # own calls may come and go: OTHER_CLIENTS_SLACK).
+    assert diagnostics(session)["in_flight"] <= before["in_flight"] + OTHER_CLIENTS_SLACK
     time.sleep(4)  # the 32 waits finish in the game
     # Every late result was dropped and counted, none delivered. At least n: a late result from outside this test
     # (another client's timed-out call) may land in the same window; fewer than n means one was delivered or lost.
