@@ -20,7 +20,9 @@ case "${1:-}" in
   --list) bps 60 console.ps1 -List | tr -d '\r' ;;
   --tool) tool="${2:?tool name}"; body="${3:-{\}}"
           if [ "$tool" = console ]; then
-            save_guard "$(python3 -c 'import json, sys; c = json.loads(sys.argv[1]).get("command"); print(c if isinstance(c, str) else "")' "$body")"
+            cmd="$(python3 -c 'import json, sys; c = json.loads(sys.argv[1]).get("command"); print(c if isinstance(c, str) else "")' "$body")" \
+              || box_die "--tool console: the body is not a JSON object: $body"
+            save_guard "$cmd"
           fi
           bps 60 console.ps1 -Tool "$tool" -JsonB64 "$(b64 "$body")" | tr -d '\r' ;;
   "") box_die "usage: box_console.sh \"<console command>\" | --tool NAME [json] | --list" ;;
