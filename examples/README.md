@@ -1,6 +1,6 @@
 # Skython examples
 
-Each example is one Python file. Drop it into `Data/SKSE/Plugins/Skython/scripts/`, edit the settings at the top, and start the game. Every script defines `setup(game)`: Skython calls it at startup and hands it a ready `game` object, so most scripts import nothing but the standard library.
+Each example is one Python file. Drop it into `Data/SKSE/Plugins/Skython/scripts/`, edit the settings at the top, and start the game. Every script defines `setup(game)`: Skython calls it at startup and hands it a connected `game` object, so most scripts import nothing but the standard library.
 
 | Example | What it does | Lines |
 |---|---|---|
@@ -42,8 +42,8 @@ Pass every Papyrus parameter, including the ones Papyrus lets you leave out: the
 
 Game calls can fail for ordinary reasons (the game is paused, a menu is open, a save is loading), so loops catch exceptions and try again; `print` goes to `python.log`.
 
-Scripts run on their own threads, so a slow network call never stalls the game; game calls are carried out safely on the game's own thread. Long-running work goes on a thread that `setup` starts and that first calls `game.wait_ready()` (no save is loaded while `setup` runs).
+Scripts run on their own threads, so a slow network call never stalls the game; each game call is queued as an SKSE task that the game runs once per frame, so a call takes about one frame (~46 ms on the test machine). Long-running work goes on a thread that `setup` starts and that first calls `game.wait_ready()` (no save is loaded while `setup` runs).
 
 ## Status
 
-Run on Skython M1; event examples come with M2.
+Written for Skython M1 (`live_dashboard.py` has been run in the game; the argument count of every Papyrus call in the others was checked against the running game). Event examples come with M2.
