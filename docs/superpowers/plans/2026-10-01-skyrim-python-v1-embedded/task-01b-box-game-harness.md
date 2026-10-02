@@ -11,8 +11,8 @@
 **What is on the box (investigated 2026-10-01, `.superpowers/sdd/README/windows-box-investigation.md`):** `C:\ChronicleDev\Stock Game\SkyrimSE.exe` 1.6.1170.0 with SKSE 2.2.6; SteamStub DRM, so Steam (`C:\Steam`) must be logged on before `skse64_loader.exe` starts (a launch that raced the logon gave no game: the loader started 5 s before Steam's `Logged On` line). DevBench 1.15.1 (`devbench.dll`, an SKSE plugin) serves REST on the box's `127.0.0.1:8920` while the game runs: `GET /api/tools`, `POST /api/tool/<name>`. CrashLogger writes `crash-*.log` in the SKSE log folder. 236 saves exist; none is named `spikebase*`. Other SKSE plugins in that Stock Game: ChronicleBridge, CountenanceNeuralFaceSpike, CrashLogger, devbench, mfgfix, PapyrusUtil, po3_PapyrusExtender, RuntimeHarness.
 
 **Files:**
-- Create: `tools/box/box_env.sh`, `tools/box/box_setup.sh`, `tools/box/box_deploy.sh`, `tools/box/box_launch.sh`, `tools/box/box_stop.sh`, `tools/box/box_wait_log.sh`, `tools/box/box_tunnel.sh`, `tools/box/box_console.sh`, `tools/box/box_quit.sh`, `tools/box/box_teardown_list.sh`, `tools/box/test_box_tools.sh`
-- Create (copied to `C:\dev\skyrim-python-box` by `box_setup.sh`): `tools/box/win/launch.ps1`, `setup_task.ps1`, `stamp.ps1`, `snapshot_lib.ps1`, `wait_log.ps1`, `console.ps1`, `stop.ps1`, `quit_check.ps1`, `place.ps1`, `list.ps1`
+- Create: `tools/box/box_env.sh`, `tools/box/box_setup.sh`, `tools/box/box_deploy.sh`, `tools/box/box_launch.sh`, `tools/box/box_stop.sh`, `tools/box/box_wait_log.sh`, `tools/box/box_tunnel.sh`, `tools/box/box_console.sh`, `tools/box/box_quit.sh`, `tools/box/box_teardown_list.sh`, `tools/box/test_box_tools.sh`; for Part C (ruling R42): `tools/box/box_session.sh`, `tools/box/box_files.sh`, `tools/box/box_saves.sh`
+- Create (copied to `C:\dev\skyrim-python-box` by `box_setup.sh`): `tools/box/win/launch.ps1`, `setup_task.ps1`, `stamp.ps1`, `snapshot_lib.ps1`, `wait_log.ps1`, `console.ps1`, `stop.ps1`, `quit_check.ps1`, `place.ps1`, `list.ps1`; for Part C: `files.ps1`
 - On the box only: the scheduled task `SkyrimPythonGame`; the save `spikebase`.
 
 **Interfaces:**
@@ -27,7 +27,16 @@
   - `tools/box/box_console.sh "<console command>" | --tool NAME [json] | --list`: DevBench. `save <name>` and `load <name>` typed as console commands are rerouted by DevBench to its `game` tool (`{"redirected":"game"}`); running them raw would deadlock the engine.
   - `tools/box/box_quit.sh`: console `qqq`, then `quit_check.ps1`: prints `EXITED`/`STILL_RUNNING`, `NO_NEW_CRASH_LOG`/`NEW_CRASH_LOGS ...`, and `CLEAN_EXIT` (exit 0) or `NOT_CLEAN` (exit 1).
   - `tools/box/box_stop.sh`: `Stop-Process -Name SkyrimSE,skse64_loader -Force` and a 20 s check; if either is still alive, CIM `Win32_Process.Terminate` for exactly `Name='SkyrimSE.exe'` and `Name='skse64_loader.exe'` and another 20 s check. Prints `NOTHING_RUNNING`, `GONE via Stop-Process` or `GONE via CIM Terminate` (exit 0), or `STILL_RUNNING ...` (exit 1: STOP and ask the owner).
-  - `tools/box/box_teardown_list.sh`: lists, removes nothing.
+  - `tools/box/box_teardown_list.sh`: lists, removes nothing (saves `spikebase*`, `spytest*`, `s4test*`, `skypy_r38_savecall*`).
+  - `BOX_OFFLINE=1` (ruling R43): every wrapper in `box_env.sh` (`bssh_t`, `bssh`, `bscp`, `bps`, `btunnel_start`, `btunnel_ctl`) prints `BOX_OFFLINE: refusing <cmd>` and exits 97 before any ssh/scp. `test_box_tools.sh` exports it, puts failing `ssh`/`scp` traps first on `PATH`, proves the refusal first and that no call reached the traps last; every check that runs a real script uses its print-only mode on top of that.
+  - Part C additions (ruling R42; Tasks 25-32 use them through [Task 1c](task-01c-part-c-on-the-box.md)):
+    - `box_deploy.sh out/SkyrimPython.dll [ini]`: loader to `Plugins\SkyrimPython.dll`, `out/SkyrimPythonCore.dll` (must exist, not older) to `Plugins\SkyrimPython\SkyrimPythonCore.dll`, the ini to `Plugins\SkyrimPython.ini`; `BOX_DEPLOY_PRINT_TARGET=1` prints the three targets before any ssh.
+    - `box_deploy.sh --move REL NEWREL` (both relative to `Plugins`): `Move-Item` without `-Force` (`place.ps1 -Mode move`), only of a recorded target or something inside one, only to an absent destination inside `Plugins`; appends `<date> <src> -> <dest>` to `out/box-moves.txt` and records the destination. Never a delete.
+    - `box_launch.sh [--env SKYRIM_PYTHON_TEST_<NAME>=VALUE]...`: `launch.env` is rewritten on every launch (empty without `--env`); `launch.ps1` sets only `SKYRIM_PYTHON_TEST_*` lines in its environment before starting the loader (the game inherits them), logs them, and empties the file.
+    - `box_session.sh up | env | down | status | probe [PORT] | rewrite`: see its header. `up` writes `out/box-session.json` (mode 600, port = the tunnel's local end) and `out/box-live.env`, and keeps one tunnel `127.0.0.1:LOCAL -> box 127.0.0.1:PORT` (socket `box-session.sock`); `probe` asks the box whether a port listens.
+    - `box_files.sh pull NAME... | put-control FILE`: mirror of the text written since the launch stamp into `out/box-skse/NAME` (empty when none); the one Linux-written file on the box is `SKSE\SkyrimPython\livetest_control.json`.
+    - `box_saves.sh count NAME`: number of `NAME*.ess` in the box's Saves.
+    - `out/` is gitignored, so the session file, `box-live.env`, the mirror, `box-deployed.txt` and `box-moves.txt` are never committed.
 
 - [ ] **Step 1: Write the offline test and see it fail**
 
@@ -40,17 +49,37 @@
 # 2. no ssh/scp call outside box_env.sh's wrappers (so every call has a timeout and BatchMode);
 # 3. no destructive verb in any script that acts on the box (Remove-Item, Unregister-ScheduledTask, rm, del, ...);
 # 4. Stop-Process only by the two game process names;
-# 5. the box paths in box_env.sh are the ones the investigation verified.
+# 5. the box paths in box_env.sh are the ones the investigation verified;
+# 6. Part C (Tasks 25-32): the two-DLL deploy targets, recorded moves, launch env, the bridge session tunnel
+#    (loopback only, token only in out/), the box file mirror, save-name checks, and the teardown list's saves.
+# Every check runs offline: BOX_OFFLINE=1 makes box_env.sh's wrappers refuse (exit 97), and ssh/scp on PATH are
+# traps that record any call and fail. A check that exercises a real script uses its print-only mode on top of that.
 set -uo pipefail
+export BOX_OFFLINE=1
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 B="$ROOT/tools/box"
 fail=0
 ok()  { echo "ok   $*"; }
 bad() { echo "FAIL $*"; fail=1; }
+TRAP="$(mktemp -d)"; TRAPLOG="$TRAP/calls.log"
+for c in ssh scp; do printf '#!/bin/sh\necho "%s $*" >> "%s"\nexit 99\n' "$c" "$TRAPLOG" > "$TRAP/$c"; chmod +x "$TRAP/$c"; done
+export PATH="$TRAP:$PATH"
+
+# 0. the offline guard: a wrapper refuses before any ssh/scp, and the traps are what PATH finds
+g="$(bash -c 'source "$1/box_env.sh"; bssh "Get-Process"; echo "NOT REFUSED"' _ "$B" 2>&1)"; grc=$?
+if [ "$grc" = 97 ] && [ "$g" = 'BOX_OFFLINE: refusing ssh 60 Get-Process' ] && [ ! -e "$TRAPLOG" ]; then ok "BOX_OFFLINE=1: bssh refuses (exit 97) and nothing reached ssh"
+else bad "offline guard: rc=$grc '$g'"; echo "TEST ABORTED: the offline guard does not hold; no further check runs"; exit 1; fi
+for w in 'bscp a b' 'bps 5 x.ps1' 'btunnel_start -L 1:2' 'btunnel_ctl check'; do
+  g="$(bash -c 'source "$1/box_env.sh"; '"$w"'; echo "NOT REFUSED"' _ "$B" 2>&1)"; grc=$?
+  [ "$grc" = 97 ] && case "$g" in "BOX_OFFLINE: refusing "*) true ;; *) false ;; esac && ok "BOX_OFFLINE=1: ${w%% *} refuses" \
+    || { bad "offline guard for ${w%% *}: rc=$grc '$g'"; echo "TEST ABORTED"; exit 1; }
+done
+[ "$(command -v ssh)" = "$TRAP/ssh" ] && [ "$(command -v scp)" = "$TRAP/scp" ] && ok "ssh and scp on PATH are the traps" \
+  || { bad "ssh/scp traps not first on PATH"; exit 1; }
 
 SH=(box_env.sh box_deploy.sh box_launch.sh box_stop.sh box_wait_log.sh box_tunnel.sh box_console.sh
-    box_quit.sh box_setup.sh box_teardown_list.sh)
-PS=(launch.ps1 setup_task.ps1 stamp.ps1 wait_log.ps1 console.ps1 stop.ps1 quit_check.ps1 place.ps1 list.ps1)
+    box_quit.sh box_setup.sh box_teardown_list.sh box_session.sh box_files.sh box_saves.sh)
+PS=(launch.ps1 setup_task.ps1 stamp.ps1 wait_log.ps1 console.ps1 stop.ps1 quit_check.ps1 place.ps1 list.ps1 files.ps1)
 
 for f in "${SH[@]}"; do
   if [ ! -f "$B/$f" ]; then bad "missing tools/box/$f"; continue; fi
@@ -110,6 +139,78 @@ if [ -f "$B/box_env.sh" ]; then
   [ "$(b64 'a"b c')" = "YSJiIGM=" ] && ok "b64 helper" || bad "b64 helper"
 fi
 
+# 6a. two-DLL layout: loader -> Plugins, core -> Plugins\SkyrimPython, ini -> Plugins\SkyrimPython.ini (no ssh)
+P='C:\ChronicleDev\Stock Game\Data\SKSE\Plugins'
+d2="$(mktemp -d)"; : > "$d2/SkyrimPython.dll"; : > "$d2/dev.ini"; sleep 1; : > "$d2/SkyrimPythonCore.dll"
+t="$(BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" "$d2/SkyrimPython.dll" "$d2/dev.ini" 2>&1)"
+want="$(printf '%s\n' "$P\SkyrimPython.dll" "$P\SkyrimPython\SkyrimPythonCore.dll" "$P\SkyrimPython.ini")"
+[ "$t" = "$want" ] && ok "two-DLL targets: loader, core in SkyrimPython\\, ini" || { bad "two-DLL targets:"; echo "$t"; }
+touch -d '2000-01-01' "$d2/SkyrimPythonCore.dll"
+if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" "$d2/SkyrimPython.dll" >/dev/null 2>&1; then bad "accepted a core older than the loader"; else ok "refuses a core DLL older than the loader"; fi
+d3="$(mktemp -d)"; : > "$d3/SkyrimPython.dll"
+if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" "$d3/SkyrimPython.dll" >/dev/null 2>&1; then bad "accepted a loader without its core"; else ok "refuses the loader without SkyrimPythonCore.dll"; fi
+
+# 6b. --move: recorded moves inside Plugins, only of what box_deploy put there (no ssh in print mode)
+rec="$(mktemp)"; printf '%s\n' "$P\SkyrimPython\python" "$P\SkyrimPythonSpike.dll" > "$rec"
+mv_t() { BOX_DEPLOYED="$rec" BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --move "$@" 2>&1; }
+t="$(mv_t SkyrimPython/python SkyrimPython/python.off)"
+[ "$t" = "MOVE $P\SkyrimPython\python -> $P\SkyrimPython\python.off" ] && ok "--move resolves under Plugins" || bad "--move target: '$t'"
+t="$(mv_t 'SkyrimPython\python\python314.zip' 'SkyrimPython\python\python314.zip.off')"
+[ "$t" = "MOVE $P\SkyrimPython\python\python314.zip -> $P\SkyrimPython\python\python314.zip.off" ] && ok "--move of a file inside a recorded folder" || bad "--move inside a recorded folder: '$t'"
+for args in "devbench.dll devbench.dll.off" "SkyrimPython/../../x SkyrimPython/y" "SkyrimPython/python C:/elsewhere" "SkyrimPython/python SkyrimPython/python" "SkyrimPython/python"; do
+  # shellcheck disable=SC2086
+  if mv_t $args >/dev/null; then bad "--move accepted: $args"; else ok "--move refuses: $args"; fi
+done
+grep -qE '^\s*Move-Item -LiteralPath \$src -Destination \$dest$' "$B/win/place.ps1" 2>/dev/null && ok "place.ps1 move: Move-Item without -Force" || bad "place.ps1 has no plain Move-Item for -Mode move"
+if grep -hE 'Move-Item' "$B"/win/*.ps1 | grep -vE '^\s*#' | grep -q -- '-Force'; then bad "Move-Item -Force somewhere"; else ok "no Move-Item -Force"; fi
+grep -qF '"ERR destination exists' "$B/win/place.ps1" 2>/dev/null && ok "place.ps1 move refuses an existing destination" || bad "place.ps1 move does not refuse an existing destination"
+grep -qF 'box-moves.txt' "$B/box_deploy.sh" 2>/dev/null && ok "moves are recorded in out/box-moves.txt" || bad "moves are not recorded"
+
+# 6c. box_launch.sh --env: only SKYRIM_PYTHON_TEST_* names, written for every launch (no ssh in print mode)
+t="$(BOX_LAUNCH_PRINT_ENV=1 "$B/box_launch.sh" --env SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1 --env 'SKYRIM_PYTHON_TEST_PRELOAD=C:\a b\python314.dll' 2>&1)"
+[ "$t" = "$(printf '%s\n' SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1 'SKYRIM_PYTHON_TEST_PRELOAD=C:\a b\python314.dll')" ] && ok "--env writes the allow-listed names" || bad "--env content: '$t'"
+t="$(BOX_LAUNCH_PRINT_ENV=1 "$B/box_launch.sh" 2>&1)"; [ -z "$t" ] && ok "no --env: launch.env is empty (nothing leaks into the next launch)" || bad "launch.env without --env: '$t'"
+if BOX_LAUNCH_PRINT_ENV=1 "$B/box_launch.sh" --env PATH=/x >/dev/null 2>&1; then bad "--env accepted PATH"; else ok "--env refuses a name outside SKYRIM_PYTHON_TEST_*"; fi
+grep -qF "'^(SKYRIM_PYTHON_TEST_[A-Z0-9_]+)=(.*)\$'" "$B/win/launch.ps1" 2>/dev/null && ok "launch.ps1 applies only SKYRIM_PYTHON_TEST_* lines" || bad "launch.ps1 does not filter launch.env"
+
+# 6d. box_session.sh: loopback-only forward; the token only in out/box-session.json (mode 600), never printed
+fw="$(grep -oE -- '-L "?[^ "]+' "$B/box_session.sh" 2>/dev/null | tr -d '"')"
+if [ -n "$fw" ] && ! echo "$fw" | grep -qvE -- '^-L 127\.0\.0\.1:\$[A-Za-z_]+:127\.0\.0\.1:\$[A-Za-z_]+$'; then ok "session tunnel binds 127.0.0.1 on both ends"
+else bad "session tunnel forward is not loopback-only: '$fw'"; fi
+grep -qE -- '(^|[^A-Za-z])-R |GatewayPorts|0\.0\.0\.0' "$B/box_session.sh" 2>/dev/null && bad "box_session.sh has -R, GatewayPorts or 0.0.0.0" || ok "no reverse forward, no GatewayPorts, no 0.0.0.0"
+tok="0123456789abcdef0123456789abcdef"; sd="$(mktemp -d)"
+printf '{"port": 45977, "token": "%s", "pid": 7, "plugin_version": "0.1.0", "protocol": [1, 0]}' "$tok" > "$sd/in.json"
+t="$("$B/box_session.sh" rewrite "$sd/in.json" "$sd/out.json" 45990 2>&1)"; rc=$?
+out_ok="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["port"]==45990 and d["token"]==sys.argv[2] and d["pid"]==7 and "host" not in d)' "$sd/out.json" "$tok" 2>&1)"
+[ "$rc" = 0 ] && [ "$out_ok" = True ] && ok "rewrite: port -> the tunnel's local end, token kept" || bad "rewrite: rc=$rc '$out_ok' '$t'"
+case "$t" in *"$tok"*) bad "rewrite printed the token" ;; *) ok "rewrite does not print the token" ;; esac
+[ "$(stat -c %a "$sd/out.json" 2>/dev/null)" = 600 ] && ok "session file is mode 600" || bad "session file mode $(stat -c %a "$sd/out.json" 2>/dev/null)"
+printf '{"host": "0.0.0.0", "port": 45977, "token": "%s"}' "$tok" | "$B/box_session.sh" rewrite - "$sd/h.json" 45977 >/dev/null 2>&1
+[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("host"))' "$sd/h.json" 2>&1)" = 127.0.0.1 ] && ok "rewrite: a host field becomes 127.0.0.1" || bad "rewrite: host not rewritten"
+printf '{"port": "x", "token": "%s"}' "$tok" | "$B/box_session.sh" rewrite - "$sd/bad.json" 45977 >/dev/null 2>&1 && bad "rewrite accepted a bad port" || ok "rewrite refuses a bad port"
+printf '{"active": false, "reason": "bridge_enabled is false"}' | "$B/box_session.sh" rewrite - "$sd/off.json" 45977 >/dev/null 2>&1
+[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["active"])' "$sd/off.json" 2>&1)" = False ] && ok "rewrite keeps an inactive session file as it is" || bad "rewrite of an inactive session file"
+ign=1; for f in out/box-session.json out/box-live.env out/box-skse/SkyrimPython.log; do git -C "$ROOT" check-ignore -q "$f" || ign=0; done
+grep -qE '^out/$' "$ROOT/.gitignore" && [ "$ign" = 1 ] && ok "out/ (session file, env file, log mirror) is gitignored" || bad "out/box-session.json is not gitignored"
+
+# 6e. box_files.sh: pull never takes session.json; put writes only livetest_control.json (no ssh in print mode)
+for n in SkyrimPython/session.json ../x 'C:/x' /abs; do
+  if BOX_FILES_PRINT=1 "$B/box_files.sh" pull "$n" >/dev/null 2>&1; then bad "pull accepted '$n'"; else ok "pull refuses '$n'"; fi
+done
+t="$(BOX_FILES_PRINT=1 "$B/box_files.sh" pull SkyrimPython.log SkyrimPython/python.log 2>&1)"
+[ "$t" = "$(printf '%s\n' "$ROOT/out/box-skse/SkyrimPython.log" "$ROOT/out/box-skse/SkyrimPython/python.log")" ] && ok "pull mirrors into out/box-skse" || bad "pull targets: '$t'"
+grep -qF "\$PutAllowed = 'SkyrimPython\livetest_control.json'" "$B/win/files.ps1" 2>/dev/null && ok "files.ps1 put allow-list: livetest_control.json only" || bad "files.ps1 put allow-list"
+grep -qF 'Get-NewText' "$B/win/files.ps1" 2>/dev/null && ok "files.ps1 pull uses the launch-stamp snapshot" || bad "files.ps1 does not use Get-NewText"
+
+# 6f. box_saves.sh: a save name is checked before any ssh
+if "$B/box_saves.sh" count 'bad name*' >/dev/null 2>&1; then bad "box_saves.sh accepted 'bad name*'"; else ok "box_saves.sh refuses a name that is not [A-Za-z0-9_]"; fi
+
+# 6g. the teardown list shows Task 31's save
+grep -qF 'spikebase|spytest|s4test|skypy_r38_savecall' "$B/win/list.ps1" 2>/dev/null && ok "list.ps1 lists skypy_r38_savecall" || bad "list.ps1 does not list skypy_r38_savecall"
+
+# 7. nothing reached ssh or scp during the whole run
+if [ -e "$TRAPLOG" ]; then bad "ssh/scp was called during the offline test:"; cat "$TRAPLOG"; else ok "no ssh/scp call reached PATH"; fi
+
 [ "$fail" = 0 ] && echo "BOX TOOLS OFFLINE PASS" || echo "BOX TOOLS OFFLINE FAIL"
 exit "$fail"
 ```
@@ -125,6 +226,8 @@ Expected: `FAIL missing tools/box/...` for the ten shell scripts and nine `.ps1`
 # The box's OpenSSH default shell is Windows PowerShell 5.1, so every remote command is PowerShell.
 # Every ssh/scp call goes through bssh/bssh_t/bscp/bps (timeout + ConnectTimeout + BatchMode), or through
 # btunnel_* for the port-forwarding tunnel. Nothing here deletes anything.
+# BOX_OFFLINE=1 (set by tools/box/test_box_tools.sh): every wrapper refuses, prints "BOX_OFFLINE: refusing <cmd>"
+# and exits non-zero, so an offline check can never reach the box, even through a missing dry-run mode.
 BOX="${BOX:-geoff@192.168.0.211}"
 BOX_SSH_OPTS=(-o ConnectTimeout=10 -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 BOX_GAME_DIR='C:\ChronicleDev\Stock Game'
@@ -139,28 +242,32 @@ BOX_DIR_FWD='C:/dev/skyrim-python-box'          # scp wants forward slashes
 BOX_TASK=SkyrimPythonGame
 BOX_DEVBENCH_URL='http://127.0.0.1:8920'
 BOX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BOX_DEPLOYED="$BOX_ROOT/out/box-deployed.txt"
+BOX_DEPLOYED="${BOX_DEPLOYED:-$BOX_ROOT/out/box-deployed.txt}"   # overridable for the offline tests only
 SKYRIM_PYTHON_STATE="${SKYRIM_PYTHON_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/skyrim-python}"
 BOX_TUNNEL_SOCK="$SKYRIM_PYTHON_STATE/box-tunnel.sock"
+BOX_SESSION_SOCK="$SKYRIM_PYTHON_STATE/box-session.sock"   # the dev-bridge tunnel (box_session.sh)
 export BOX BOX_GAME_DIR BOX_DATA BOX_PLUGINS BOX_OWN BOX_MYGAMES BOX_SKSE_LOG_DIR BOX_SAVES_DIR BOX_DIR BOX_TASK SKYRIM_PYTHON_STATE
 
+# box_offline <what>: refuse (exit 97) when BOX_OFFLINE=1. Every wrapper below calls it first.
+box_offline() { if [ "${BOX_OFFLINE:-0}" = 1 ]; then echo "BOX_OFFLINE: refusing $*" >&2; exit 97; fi; }
 # bssh_t <seconds> <powershell command>: one bounded remote command.
-bssh_t() { local t="$1"; shift; timeout "$t" ssh "${BOX_SSH_OPTS[@]}" "$BOX" "$@"; }
+bssh_t() { box_offline "ssh $*"; local t="$1"; shift; timeout "$t" ssh "${BOX_SSH_OPTS[@]}" "$BOX" "$@"; }
 # bssh <powershell command>: bounded at 60 s.
 bssh() { bssh_t 60 "$@"; }
 # bscp <scp args...>: bounded at 600 s.
-bscp() { timeout 600 scp "${BOX_SSH_OPTS[@]}" -q "$@"; }
+bscp() { box_offline "scp $*"; timeout 600 scp "${BOX_SSH_OPTS[@]}" -q "$@"; }
 # bps <seconds> <script.ps1> [args...]: run one of our scripts in C:\dev\skyrim-python-box (args must not contain
 # quotes or spaces: pass text through b64).
-bps() { local t="$1" s="$2"; shift 2; bssh_t "$t" "powershell -NoProfile -ExecutionPolicy Bypass -File $BOX_DIR\\$s $*"; }
+bps() { box_offline "bps $*"; local t="$1" s="$2"; shift 2; bssh_t "$t" "powershell -NoProfile -ExecutionPolicy Bypass -File $BOX_DIR\\$s $*"; }
 # b64 <text>: base64 of the UTF-8 text, one line (decoded on the box by our scripts).
 b64() { printf '%s' "$1" | base64 -w0; }
 box_die() { echo "box: $*" >&2; exit 1; }
 
-# The tunnel: one background ssh with a control socket. The connect itself is bounded (timeout); with -f the
-# daemonised child outlives the timeout's watched process by design.
-btunnel_start() { timeout 30 ssh "${BOX_SSH_OPTS[@]}" -o ExitOnForwardFailure=yes -f -N -M -S "$BOX_TUNNEL_SOCK" "$@" "$BOX"; }
-btunnel_ctl() { timeout 15 ssh -S "$BOX_TUNNEL_SOCK" -O "$1" "$BOX"; }
+# The tunnels: one background ssh each, with a control socket (TUNNEL_SOCK, default BOX_TUNNEL_SOCK; box_session.sh
+# passes BOX_SESSION_SOCK). The connect itself is bounded (timeout); with -f the daemonised child outlives the
+# timeout's watched process by design.
+btunnel_start() { box_offline "tunnel $*"; timeout 30 ssh "${BOX_SSH_OPTS[@]}" -o ExitOnForwardFailure=yes -f -N -M -S "${TUNNEL_SOCK:-$BOX_TUNNEL_SOCK}" "$@" "$BOX"; }
+btunnel_ctl() { box_offline "tunnel control $*"; timeout 15 ssh -S "${TUNNEL_SOCK:-$BOX_TUNNEL_SOCK}" -O "$1" "$BOX"; }
 ```
 
 `tools/box/box_setup.sh`:
@@ -198,7 +305,13 @@ bps 60 setup_task.ps1 | tr -d '\r'
 #   tools/box/box_deploy.sh --file LOCAL REL                 -> Plugins\SkyrimPython\REL (one file: s10_check.py, markers)
 #   tools/box/box_deploy.sh --pex path/to/SkyrimPython.pex   -> exactly Data\Scripts\SkyrimPython.pex (Task 7; the only
 #                                                               target outside Plugins; placed only if absent or ours)
-#   BOX_DEPLOY_PRINT_TARGET=1 with --pex prints the resolved target and exits before any ssh (offline test).
+#   tools/box/box_deploy.sh --move REL NEWREL                -> moves Plugins\REL to Plugins\NEWREL (Task 26's startup
+#                                                               variants; Task 25 moves the spike DLL aside). REL must be
+#                                                               a recorded target or inside one; NEWREL must be absent.
+#                                                               Move-Item, never a delete. Each move is appended to
+#                                                               out/box-moves.txt and NEWREL is recorded.
+#   BOX_DEPLOY_PRINT_TARGET=1 with --pex, a DLL or --move prints the resolved target(s) and exits before any ssh
+#   (offline test).
 # Every target is recorded in out/box-deployed.txt. A target that exists on the box and is not recorded there
 # was not deployed by this tool: the deploy refuses (it never overwrites what it did not put there).
 # A *Spike* DLL needs CONFIRM_THROWAWAY_SAVE=1. Refuses while the game runs (DLLs are locked).
@@ -253,12 +366,47 @@ put_entries() {  # put_entries <local dir> <windows dest dir>: each top-level en
 spike_ok() { case "$(basename "$1")" in *Spike*) [ "${CONFIRM_THROWAWAY_SAVE:-0}" = 1 ] || box_die "$1 is spike code (unauthenticated port); use a throwaway save and re-run with CONFIRM_THROWAWAY_SAVE=1" ;; esac; }
 
 [ $# -ge 1 ] || box_die "usage: see the header of $0"
+owned() {  # owned <windows path>: recorded, or inside a recorded folder
+  local r
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    [ "$1" = "$r" ] && return 0
+    case "$1" in "$r\\"*) return 0 ;; esac
+  done < "$BOX_DEPLOYED"
+  return 1
+}
+plugins_rel() {  # plugins_rel <REL>: the Windows path under Plugins, or die
+  local r="${1//\//\\}"
+  case "$r" in ""|*..*|*:*|\\*) box_die "bad path '$1': give it relative to Plugins, without '..' or a drive" ;; esac
+  echo "$BOX_PLUGINS\\$r"
+}
 if [ "$1" = --pex ]; then
   PEX="${2:?usage: box_deploy.sh --pex path/to/SkyrimPython.pex}"
   [ -f "$PEX" ] || box_die "no such file: $PEX"
   [ "$(basename "$PEX")" = SkyrimPython.pex ] || box_die "--pex places only SkyrimPython.pex (got $(basename "$PEX"))"
   PEX_DEST="$BOX_DATA\\Scripts\\SkyrimPython.pex"
   if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then echo "$PEX_DEST"; exit 0; fi
+elif [ "$1" = --move ]; then
+  [ $# -eq 3 ] || box_die "usage: box_deploy.sh --move REL NEWREL (both relative to Plugins)"
+  MV_SRC="$(plugins_rel "$2")"; MV_DEST="$(plugins_rel "$3")"
+  [ "$MV_SRC" != "$MV_DEST" ] || box_die "--move: source and destination are the same"
+  owned "$MV_SRC" || box_die "--move: $MV_SRC was not deployed by this tool (not in out/box-deployed.txt); not moving it"
+  if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then echo "MOVE $MV_SRC -> $MV_DEST"; exit 0; fi
+elif [ "${1#-}" = "$1" ]; then
+  DLL="$1"; [ -f "$DLL" ] || box_die "no such file: $DLL"; spike_ok "$DLL"
+  base="$(basename "$DLL")"
+  if [ "$base" = SkyrimPython.dll ]; then
+    CORE="$(dirname "$DLL")/SkyrimPythonCore.dll"
+    [ -f "$CORE" ] || box_die "$CORE missing: run tools/remote_build.sh plugin SkyrimPythonCore.dll"
+    [ "$DLL" -nt "$CORE" ] && box_die "$CORE is older than $DLL: rebuild it"
+  fi
+  [ $# -ge 2 ] && { [ -f "$2" ] || box_die "no such file: $2"; }
+  if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then
+    echo "$BOX_PLUGINS\\$base"
+    [ "$base" = SkyrimPython.dll ] && echo "$BOX_OWN\\SkyrimPythonCore.dll"
+    [ $# -ge 2 ] && echo "$BOX_PLUGINS\\${base%.dll}.ini"
+    exit 0
+  fi
 fi
 st="$(bssh 'if (Get-Process -Name SkyrimSE,skse64_loader -ErrorAction SilentlyContinue) { "RUNNING" } else { "IDLE" }' | tr -d '\r')" \
   || box_die "cannot ssh to $BOX (STOP and ask the owner)"
@@ -294,15 +442,15 @@ case "$1" in
   --pex)
     put_file "$PEX" "$PEX_DEST"
     ;;
+  --move)
+    r="$(bps 60 place.ps1 -Mode move -SrcB64 "$(b64 "$MV_SRC")" -DestB64 "$(b64 "$MV_DEST")" | tr -d '\r')"
+    [ "$r" = MOVED ] || box_die "moving $MV_SRC: '$r'"
+    echo "$(date -Is) $MV_SRC -> $MV_DEST" >> "$BOX_ROOT/out/box-moves.txt"
+    rec "$MV_DEST"; echo "moved $MV_SRC -> $MV_DEST (recorded in out/box-moves.txt)"
+    ;;
   -*) box_die "unknown option $1" ;;
   *)
-    DLL="$1"; [ -f "$DLL" ] || box_die "no such file: $DLL"; spike_ok "$DLL"
-    base="$(basename "$DLL")"
-    if [ "$base" = SkyrimPython.dll ]; then
-      CORE="$(dirname "$DLL")/SkyrimPythonCore.dll"
-      [ -f "$CORE" ] || box_die "$CORE missing: run tools/remote_build.sh plugin SkyrimPythonCore.dll"
-      [ "$DLL" -nt "$CORE" ] && box_die "$CORE is older than $DLL: rebuild it"
-    fi
+    # DLL, base and CORE were checked before the ssh (above)
     put_file "$DLL" "$BOX_PLUGINS\\$base"
     [ "$base" = SkyrimPython.dll ] && put_file "$CORE" "$BOX_OWN\\SkyrimPythonCore.dll"
     [ $# -ge 2 ] && put_file "$2" "$BOX_PLUGINS\\${base%.dll}.ini"
@@ -318,13 +466,34 @@ exit 0
 # loader already runs. Writes the launch stamp on the box (box clock; stamp.ps1 also snapshots the SKSE log
 # folder so box_wait_log.sh and box_quit.sh see only this launch), copies it to
 # $SKYRIM_PYTHON_STATE/box-launch.stamp, then waits (bounded, LAUNCH_WAIT=240 s) for launch.ps1's result.
+# Usage: tools/box/box_launch.sh [--env SKYRIM_PYTHON_TEST_<NAME>=VALUE]...
+#   --env: launch.ps1 sets these in its own environment before it starts skse64_loader.exe, so the game inherits
+#   them (Task 25's SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME, Task 26's SKYRIM_PYTHON_TEST_PRELOAD). Only
+#   SKYRIM_PYTHON_TEST_* names. C:\dev\skyrim-python-box\launch.env is rewritten on every launch (empty without
+#   --env), so a variable never leaks into a later launch; launch.ps1 also empties it after reading it.
+#   BOX_LAUNCH_PRINT_ENV=1 prints launch.env's content and exits before any ssh (offline test).
 set -euo pipefail
 source "$(dirname "$0")/box_env.sh"
+envtext=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --env)
+      kv="${2:?--env NAME=VALUE}"
+      [[ "$kv" =~ ^SKYRIM_PYTHON_TEST_[A-Z0-9_]+=.*$ ]] || box_die "--env takes only SKYRIM_PYTHON_TEST_<NAME>=VALUE (got '${kv%%=*}')"
+      case "$kv" in *$'\n'*|*$'\r'*) box_die "--env value must be one line" ;; esac
+      envtext+="$kv"$'\n'; shift 2 ;;
+    *) box_die "unknown option $1 (usage: box_launch.sh [--env SKYRIM_PYTHON_TEST_<NAME>=VALUE]...)" ;;
+  esac
+done
+if [ "${BOX_LAUNCH_PRINT_ENV:-0}" = 1 ]; then printf '%s' "$envtext"; exit 0; fi
 mkdir -p "$SKYRIM_PYTHON_STATE"
 out="$(bps 60 stamp.ps1 | tr -d '\r')" || box_die "refused: $out"
 stamp="$(echo "$out" | sed -n 's/^STAMP \([^ ]*\).*/\1/p')"; [ -n "$stamp" ] || box_die "no stamp: $out"
 echo "$stamp" > "$SKYRIM_PYTHON_STATE/box-launch.stamp"
 echo "box launch stamp $stamp"
+bssh "[IO.File]::WriteAllText('$BOX_DIR\\launch.env', [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$(b64 "$envtext")')))" \
+  || box_die "could not write launch.env"
+[ -n "$envtext" ] && printf 'launch env: %s' "$envtext"
 bssh "Start-ScheduledTask -TaskName $BOX_TASK" || box_die "could not start the scheduled task $BOX_TASK (run tools/box/box_setup.sh once)"
 end=$(( $(date +%s) + ${LAUNCH_WAIT:-240} ))
 while :; do
@@ -444,6 +613,180 @@ paths=""; [ -f "$BOX_DEPLOYED" ] && paths="$(cat "$BOX_DEPLOYED")"
 if [ -n "$paths" ]; then bps 120 list.ps1 -PathsB64 "$(b64 "$paths")"; else bps 120 list.ps1; fi | tr -d "\r"
 ```
 
+`tools/box/box_session.sh` (Part C, ruling R42): the dev bridge from Linux. It reads the box's `session.json` only if it was written since the launch stamp, writes the token only into `out/box-session.json` (mode 600, gitignored), and forwards loopback to loopback:
+```bash
+#!/usr/bin/env bash
+# The dev bridge from Linux while the game runs on the box (Tasks 25-32).
+# Usage: tools/box/box_session.sh up | env | down | status | probe [PORT] | rewrite IN|- OUT LOCAL_PORT|same
+#   up:      after each box launch, once the core log shows "python host: running". Reads the box's
+#            SKSE\SkyrimPython\session.json written since the last launch stamp (a file left by an earlier launch is
+#            refused), writes out/box-session.json (mode 600; the bridge token lives only there, never printed) with
+#            "port" set to the tunnel's local end (BOX_SESSION_LOCAL_PORT, default the box's port, 45977 with the dev
+#            ini) and "host", if present, to 127.0.0.1; then brings up, or keeps, one ssh tunnel
+#            Linux 127.0.0.1:LOCAL -> box 127.0.0.1:PORT (control socket $SKYRIM_PYTHON_STATE/box-session.sock).
+#            Loopback on both ends. An inactive session file ("active": false) is written as is (the live tests'
+#            load_session reports its reason) and no tunnel is needed. Prints the session file's path last.
+#   env:     writes out/box-live.env (also done by up). `source out/box-live.env` sets SKYRIM_PYTHON_SESSION to
+#            out/box-session.json, SKSE_LOG_DIR and SKYRIM_PYTHON_LOG to the log mirror out/box-skse (box_files.sh
+#            pull) and SKYRIM_PYTHON_BOX=1 (livetest/support.py's box mode). No token in it.
+#   down / status: the session tunnel.
+#   probe [PORT]: on the box, "LISTEN pid <n>" (exit 0) or "NO_LISTENER" (exit 1) for 127.0.0.1:PORT (default
+#            45977). Through the tunnel a missing listener does not look refused, so the live tests ask the box.
+#   rewrite: the offline part of up (tested by test_box_tools.sh): IN (or - for stdin) -> OUT; prints
+#            "BOXPORT <port>" or "INACTIVE <reason>", never the token.
+set -euo pipefail
+source "$(dirname "$0")/box_env.sh"
+SESSION_OUT="$BOX_ROOT/out/box-session.json"
+ENV_OUT="$BOX_ROOT/out/box-live.env"
+FWD_STATE="$SKYRIM_PYTHON_STATE/box-session.fwd"
+
+# The rewrite program (python3 -c, so stdin stays free for the session JSON).
+REWRITE_PY="$(cat <<'PY'
+import json, os, sys
+src, out, local = sys.argv[1:4]
+data = json.load(sys.stdin if src == "-" else open(src, encoding="utf-8"))
+if not isinstance(data, dict):
+    sys.exit("box_session: session.json is not an object")
+def port(v, what):
+    if isinstance(v, bool) or not isinstance(v, int) or not 0 < v < 65536:
+        sys.exit(f"box_session: bad {what}: {v!r}")
+    return v
+if data.get("active") is False:
+    msg = f"INACTIVE {data.get('reason')}"
+else:
+    box_port = port(data.get("port"), "port in session.json")
+    if not isinstance(data.get("token"), str):
+        sys.exit("box_session: session.json has no token")
+    data["port"] = box_port if local == "same" else port(int(local) if local.isdigit() else local, "local port")
+    if "host" in data:
+        data["host"] = "127.0.0.1"
+    msg = f"BOXPORT {box_port}"
+os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+os.fchmod(fd, 0o600)
+with os.fdopen(fd, "w", encoding="utf-8") as f:
+    json.dump(data, f)
+print(msg)
+PY
+)"
+rewrite() { python3 -c "$REWRITE_PY" "$1" "$2" "$3"; }  # rewrite <in|-> <out> <local port|same>
+
+write_env() {
+  mkdir -p "$BOX_ROOT/out"
+  cat > "$ENV_OUT" <<ENV
+# Written by tools/box/box_session.sh: the live tests against the game on the box. No token here.
+export SKYRIM_PYTHON_SESSION="$SESSION_OUT"
+export SKSE_LOG_DIR="$BOX_ROOT/out/box-skse"
+export SKYRIM_PYTHON_LOG="$BOX_ROOT/out/box-skse/SkyrimPython/python.log"
+export SKYRIM_PYTHON_BOX=1
+ENV
+  echo "env: source $ENV_OUT"
+}
+
+case "${1:-}" in
+  rewrite) rewrite "${2:?IN}" "${3:?OUT}" "${4:?LOCAL_PORT}" ;;
+  env) write_env ;;
+  up)
+    write_env
+    mkdir -p "$SKYRIM_PYTHON_STATE"
+    st="$(bps 60 files.ps1 -Mode session | tr -d '\r')" || box_die "could not read the box's session.json: ${st%% *}"
+    case "$st" in
+      "NEW "*) ;;
+      UNCHANGED) box_die "session.json was not written in this launch (wait for 'python host: running' in SkyrimPython.log)" ;;
+      ABSENT) box_die "no session.json on the box (python host not running yet, or disabled)" ;;
+      *) box_die "session.json: ${st%% *}" ;;
+    esac
+    res="$(printf '%s' "${st#NEW }" | base64 -d | rewrite - "$SESSION_OUT" "${BOX_SESSION_LOCAL_PORT:-same}")" || box_die "rewrite failed"
+    echo "$res"
+    case "$res" in
+      "INACTIVE "*) echo "the bridge is not serving; no tunnel" ;;
+      "BOXPORT "*)
+        PORT="${res#BOXPORT }"; LOCAL="${BOX_SESSION_LOCAL_PORT:-$PORT}"
+        export TUNNEL_SOCK="$BOX_SESSION_SOCK"
+        if btunnel_ctl check 2>/dev/null; then
+          if [ "$(cat "$FWD_STATE" 2>/dev/null)" = "$LOCAL $PORT" ]; then echo "session tunnel already up: 127.0.0.1:$LOCAL -> box 127.0.0.1:$PORT"
+          else btunnel_ctl exit; fi
+        fi
+        if ! btunnel_ctl check 2>/dev/null; then
+          btunnel_start -L "127.0.0.1:$LOCAL:127.0.0.1:$PORT" || box_die "session tunnel did not come up (local port $LOCAL in use, or the box is unreachable)"
+          echo "$LOCAL $PORT" > "$FWD_STATE"
+          echo "session tunnel up: 127.0.0.1:$LOCAL -> box 127.0.0.1:$PORT"
+        fi ;;
+    esac
+    echo "$SESSION_OUT"
+    ;;
+  down)
+    export TUNNEL_SOCK="$BOX_SESSION_SOCK"
+    if btunnel_ctl check 2>/dev/null; then btunnel_ctl exit; echo "session tunnel down"; else echo "session tunnel not running"; fi ;;
+  status)
+    export TUNNEL_SOCK="$BOX_SESSION_SOCK"; btunnel_ctl check 2>&1 || true ;;
+  probe)
+    p="${2:-45977}"; [[ "$p" =~ ^[0-9]+$ ]] || box_die "probe: bad port '$p'"
+    r="$(bssh "\$c = Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; if (\$c) { 'LISTEN pid ' + \$c.OwningProcess } else { 'NO_LISTENER' }" | tr -d '\r')"
+    echo "$r"; case "$r" in "LISTEN "*) exit 0 ;; *) exit 1 ;; esac ;;
+  *) box_die "usage: box_session.sh up | env | down | status | probe [PORT] | rewrite IN|- OUT LOCAL_PORT|same" ;;
+esac
+```
+
+`tools/box/box_files.sh` (Part C): the live tests' local mirror of the box's logs and smoke files (text written since the launch stamp only), and the one file Linux writes on the box, `livetest_control.json`:
+```bash
+#!/usr/bin/env bash
+# Usage: tools/box/box_files.sh pull NAME... | put-control LOCAL_FILE
+#   pull: for each NAME relative to the box's SKSE log folder (SkyrimPython.log, SkyrimPythonLoader.log,
+#         SkyrimPython/python.log, SkyrimPython/livetest_smoke.json, ...), writes the text written there since the last
+#         box_launch.sh stamp to out/box-skse/NAME and prints that local path. The file is empty when nothing was
+#         written in this launch (or it is absent), so a log or result from an earlier launch never counts. Never
+#         session.json (the token stays only in box_session.sh's file). The live tests' box mode
+#         (SKYRIM_PYTHON_BOX=1, livetest/support.py) calls this before every log read.
+#   put-control: copies LOCAL_FILE to the box's SKSE\SkyrimPython\livetest_control.json, the only file Linux writes
+#         there (livetest/smoke.py's command channel, Task 31).
+#   BOX_FILES_PRINT=1 validates and prints the local targets (pull) and exits before any ssh (offline test).
+set -euo pipefail
+source "$(dirname "$0")/box_env.sh"
+MIRROR="$BOX_ROOT/out/box-skse"
+case "${1:-}" in
+  pull)
+    shift; [ $# -ge 1 ] || box_die "usage: box_files.sh pull NAME..."
+    for n in "$@"; do
+      case "$n" in ""|*..*|*:*|/*|\\*|*session.json) box_die "pull: refused name '$n'" ;; esac
+    done
+    if [ "${BOX_FILES_PRINT:-0}" = 1 ]; then for n in "$@"; do echo "$MIRROR/${n//\\//}"; done; exit 0; fi
+    out="$(bps 120 files.ps1 -Mode new -NamesB64 "$(b64 "$(printf '%s\n' "$@")")" | tr -d '\r')" || box_die "pull failed: $out"
+    while IFS=$'\t' read -r n state data; do
+      [ -n "$n" ] || continue
+      local_path="$MIRROR/${n//\\//}"; mkdir -p "$(dirname "$local_path")"
+      case "$state" in
+        NEW) printf '%s' "$data" | base64 -d > "$local_path" ;;
+        UNCHANGED|ABSENT) : > "$local_path" ;;
+        *) box_die "pull $n: $state" ;;
+      esac
+      echo "$local_path"
+    done <<< "$out"
+    ;;
+  put-control)
+    f="${2:?usage: box_files.sh put-control LOCAL_FILE}"; [ -f "$f" ] || box_die "no such file: $f"
+    r="$(bps 60 files.ps1 -Mode put -NameB64 "$(b64 'SkyrimPython/livetest_control.json')" -DataB64 "$(base64 -w0 < "$f")" | tr -d '\r')"
+    [ "$r" = 'PUT SkyrimPython\livetest_control.json' ] || box_die "put-control: '$r'"
+    ;;
+  *) box_die "usage: box_files.sh pull NAME... | put-control LOCAL_FILE" ;;
+esac
+```
+
+`tools/box/box_saves.sh` (Part C): read-only count of a save name's `.ess` files, before and after a throwaway save:
+```bash
+#!/usr/bin/env bash
+# Usage: tools/box/box_saves.sh count NAME
+#   Prints how many saves in the box's Saves folder match NAME*.ess (read-only). Used before a new throwaway save
+#   (must print 0: never save over an existing name) and after it (the .ess was written). NAME is [A-Za-z0-9_]
+#   only, checked before any ssh.
+set -euo pipefail
+source "$(dirname "$0")/box_env.sh"
+[ "${1:-}" = count ] || box_die "usage: box_saves.sh count NAME"
+name="${2:?usage: box_saves.sh count NAME}"
+[[ "$name" =~ ^[A-Za-z0-9_]+$ ]] || box_die "save name must be [A-Za-z0-9_]+ (got '$name')"
+bssh "@(Get-ChildItem '$BOX_SAVES_DIR' -Filter '$name*.ess' -ErrorAction SilentlyContinue).Count" | tr -d '\r'
+```
+
 - [ ] **Step 3: Write the box scripts**
 
 `tools/box/win/launch.ps1` (the scheduled task's action). Steam's logon is detected by a **new** `[Logged On, ...] RecvMsgClientLogOnResponse() : processing complete` line in `C:\Steam\logs\connection_log.txt` (compared with the last such line before Steam was started, so a rotated log still works), not by a fixed sleep:
@@ -453,7 +796,9 @@ if [ -n "$paths" ]; then bps 120 list.ps1 -PathsB64 "$(b64 "$paths")"; else bps 
 # 2. Steam: start it with -silent if it is not running, then wait (bounded, 120 s) for a NEW
 #    "[Logged On ...] RecvMsgClientLogOnResponse() : processing complete" line in connection_log.txt
 #    (if Steam already runs and its latest state line is "Logged On", no wait);
-# 3. start skse64_loader.exe from the game folder; if no SkyrimSE process 15 s later, retry once.
+# 3. apply launch.env (box_launch.sh --env; only SKYRIM_PYTHON_TEST_* lines) to this process's environment, which
+#    skse64_loader.exe and the game inherit, then empty the file so it is used by one launch only;
+# 4. start skse64_loader.exe from the game folder; if no SkyrimSE process 15 s later, retry once.
 # Every step goes to launch.log; the outcome goes to launch.result as "<launch stamp> ok|fail ...".
 $ErrorActionPreference = 'Continue'
 $box  = 'C:\dev\skyrim-python-box'
@@ -500,6 +845,15 @@ if ($needWait) {
   if (-not $got) { Result 'fail no new Steam "Logged On" line within 120 s'; exit 4 }
   Log "steam logged on: $got"
   Start-Sleep -Seconds 3
+}
+
+$envFile = Join-Path $box 'launch.env'
+if (Test-Path $envFile) {
+  foreach ($line in (Get-Content -Encoding UTF8 $envFile)) {
+    if ($line -match '^(SKYRIM_PYTHON_TEST_[A-Z0-9_]+)=(.*)$') { Set-Item -Path ('Env:' + $Matches[1]) -Value $Matches[2]; Log "env $($Matches[1])=$($Matches[2])" }
+    elseif ($line.Trim()) { Log "ignored launch.env line: $line" }
+  }
+  Set-Content -Encoding ASCII -NoNewline -Path $envFile -Value ''
 }
 
 $elsewhereBefore = LastMatch 'Logged In Elsewhere'
@@ -707,11 +1061,13 @@ if ($gone -and $crash.Count -eq 0) { "CLEAN_EXIT"; exit 0 }
 
 `tools/box/win/place.ps1`:
 ```powershell
-# place.ps1 -Mode exists|list|place -DestB64 <path> [-SrcB64 <staged file or .tar>] [-Kind file|tar]
+# place.ps1 -Mode exists|list|place|move -DestB64 <path> [-SrcB64 <staged file or .tar | path to move>] [-Kind file|tar]
 #   exists: prints EXISTS or ABSENT.   list: prints the names of the entries in a folder (nothing if absent).
 #   place:  file -> Copy-Item to Dest (parent created), prints "PLACED <sha256>";
 #           tar  -> extracts into a fresh folder next to the .tar, then robocopy /E merges it into Dest (
 #                   files with the same name are replaced, nothing else in Dest is touched), prints "PLACED <n> files".
+#   move:   Move-Item Src to Dest (no -Force), both inside Data\SKSE\Plugins; refuses when Src is absent or Dest
+#           exists; prints "MOVED". Used for Task 26's startup variants (moved, never deleted, moved back after).
 # Only box_deploy.sh calls this, for paths under the game's Data\SKSE\Plugins and for Data\Scripts\SkyrimPython.pex.
 param([string]$Mode, [string]$DestB64, [string]$SrcB64 = '', [string]$Kind = 'file')
 $ErrorActionPreference = 'Stop'
@@ -724,6 +1080,18 @@ if (-not $dest.StartsWith('C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\') -and 
 switch ($Mode) {
   'exists' { if (Test-Path -LiteralPath $dest) { 'EXISTS' } else { 'ABSENT' }; exit 0 }
   'list'   { if (Test-Path -LiteralPath $dest) { Get-ChildItem -LiteralPath $dest -Force | ForEach-Object { $_.Name } }; exit 0 }
+  'move' {
+    $src = From-B64 $SrcB64
+    $root = 'C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\'
+    foreach ($p in @($src, $dest)) {
+      if (-not ([IO.Path]::GetFullPath($p)).StartsWith($root) -or $p -match '\.\.') { "REFUSED $p is not inside Data\SKSE\Plugins"; exit 2 }
+    }
+    if (-not (Test-Path -LiteralPath $src)) { "ERR source absent $src"; exit 1 }
+    if (Test-Path -LiteralPath $dest) { "ERR destination exists $dest"; exit 1 }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+    Move-Item -LiteralPath $src -Destination $dest
+    'MOVED'; exit 0
+  }
   'place' {
     if ($dest -eq $PexDest -and $Kind -ne 'file') { "REFUSED $PexDest takes a single file"; exit 2 }
     $src = From-B64 $SrcB64
@@ -762,16 +1130,73 @@ $t = Get-ScheduledTask -TaskName SkyrimPythonGame -ErrorAction SilentlyContinue
 if ($t) { "SkyrimPythonGame -> " + ($t.Actions | % { "$($_.Execute) $($_.Arguments)" }) } else { '(not registered)' }
 "== logs written by the spikes and the plugin =="
 Get-ChildItem (Join-Path $my 'SKSE') -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'SkyrimPython*' } | ForEach-Object { Show $_.FullName }
-"== throwaway saves (spikebase, spytest, s4test) =="
-Get-ChildItem (Join-Path $my 'Saves') -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(spikebase|spytest|s4test)' } | ForEach-Object { Show $_.FullName }
+"== throwaway saves (spikebase, spytest, s4test, skypy_r38_savecall) =="
+Get-ChildItem (Join-Path $my 'Saves') -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(spikebase|spytest|s4test|skypy_r38_savecall)' } | ForEach-Object { Show $_.FullName }
 ''
 'Nothing was removed. Show this list to the owner; remove only what the owner signs off on, item by item.'
+```
+
+`tools/box/win/files.ps1` (Part C; `box_files.sh` and `box_session.sh` call it):
+```powershell
+# files.ps1 -Mode new -NamesB64 <base64 of newline-separated names> | -Mode session | -Mode put -NameB64 <n> -DataB64 <c>
+#   new: for each name (relative to the SKSE log folder), one line "<name>`t<state>`t<base64>": state NEW (the text
+#        written since the last launch stamp, see snapshot_lib.ps1; base64 of its UTF-8), UNCHANGED (nothing written
+#        since the stamp), ABSENT, or REFUSED (a path with '..', a drive or a leading slash, or session.json).
+#        Exit 3 with NO_STAMP when no launch was stamped.
+#   session: the same for SkyrimPython\session.json alone (box_session.sh; it holds the bridge token, so only that
+#        script reads it, and only into out/box-session.json).
+#   put: writes exactly one file, SkyrimPython\livetest_control.json (livetest/smoke.py's command channel; Task 31),
+#        through a temp file and an atomic replace. Any other name is refused. Nothing is ever deleted.
+param([string]$Mode, [string]$NamesB64 = '', [string]$NameB64 = '', [string]$DataB64 = '')
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'snapshot_lib.ps1')
+$PutAllowed = 'SkyrimPython\livetest_control.json'
+function Bad-Name([string]$n) { return ($n -match '\.\.' -or $n -match ':' -or $n -match '^[\\/]' -or $n -match 'session\.json$') }
+switch ($Mode) {
+  'new' {
+    $snap = Get-Snapshot
+    if (-not $snap) { 'NO_STAMP: run box_launch.sh first (launch-snapshot.json missing)'; exit 3 }
+    foreach ($n in ((From-B64 $NamesB64) -split "`n" | Where-Object { $_ })) {
+      $rel = $n -replace '/', '\'
+      if (Bad-Name $rel) { "$n`tREFUSED`t"; continue }
+      $t = $null
+      try { $t = Get-NewText $rel $snap } catch { $t = $null }
+      if ($null -eq $t) { "$n`tABSENT`t" }
+      elseif ($t -eq '') { "$n`tUNCHANGED`t" }
+      else { "$n`tNEW`t" + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($t)) }
+    }
+    exit 0
+  }
+  'session' {
+    $snap = Get-Snapshot
+    if (-not $snap) { 'NO_STAMP: run box_launch.sh first (launch-snapshot.json missing)'; exit 3 }
+    $t = $null
+    try { $t = Get-NewText 'SkyrimPython\session.json' $snap } catch { $t = $null }
+    if ($null -eq $t) { 'ABSENT' } elseif ($t -eq '') { 'UNCHANGED' } else { 'NEW ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($t)) }
+    exit 0
+  }
+  'put' {
+    $rel = (From-B64 $NameB64) -replace '/', '\'
+    if ($rel -ne $PutAllowed) { "REFUSED $rel (only $PutAllowed may be written)"; exit 2 }
+    $dest = Join-Path $LogDir $rel
+    $tmp = $dest + '.linux-tmp'
+    [IO.File]::WriteAllBytes($tmp, [Convert]::FromBase64String($DataB64))
+    # The in-game script may be reading the file at that moment: a few short retries.
+    for ($i = 1; $i -le 10; $i++) {
+      try {
+        if (Test-Path -LiteralPath $dest) { [IO.File]::Replace($tmp, $dest, $null) } else { [IO.File]::Move($tmp, $dest) }
+        "PUT $rel"; exit 0
+      } catch { if ($i -eq 10) { "ERR $($_.Exception.Message)"; exit 1 }; Start-Sleep -Milliseconds 100 }
+    }
+  }
+  default { "ERR unknown mode $Mode"; exit 1 }
+}
 ```
 
 - [ ] **Step 4: Run the offline test**
 
 Run: `chmod +x tools/box/*.sh && tools/box/test_box_tools.sh; echo rc=$?`
-Expected: every line `ok ...`, then `BOX TOOLS OFFLINE PASS`, `rc=0`.
+Expected: every line `ok ...` (the first ones `BOX_OFFLINE=1: ... refuses`, the last one `no ssh/scp call reached PATH`), then `BOX TOOLS OFFLINE PASS`, `rc=0`. If the offline guard check fails, the test stops at once (`TEST ABORTED`) and nothing else runs.
 
 - [ ] **Step 5: Install on the box, register the task, deploy**
 
@@ -950,3 +1375,4 @@ bssh "if (Test-Path '$BOX_GAME_DIR\\dxvk.conf') { Get-Content '$BOX_GAME_DIR\\dx
 5. Global Constraints: "The game runs on the Windows box (Task 1b); no step launches the game on the Linux desktop, uses xdotool, or starts Linux Steam."
 6. Ruling R30's scope in the index's deploy-safety text: one file outside `Data\SKSE\Plugins` on the box, `Data\Scripts\SkyrimPython.pex`; Task 8's box run is a Windows-native data point and the Proton S6 stays pending.
 7. The open question on the box exit hang (Step 6, Known issue) before Task 3's clean-exit criterion is judged on the box.
+8. File Structure, under `tools/box/` (ruling R42): `box_session.sh`, `box_files.sh`, `box_saves.sh` and `win/files.ps1`; Contracts → Tools: the Part C additions and `BOX_OFFLINE=1` from this task's Interfaces block.

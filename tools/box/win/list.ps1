@@ -13,7 +13,7 @@ $t = Get-ScheduledTask -TaskName SkyrimPythonGame -ErrorAction SilentlyContinue
 if ($t) { "SkyrimPythonGame -> " + ($t.Actions | % { "$($_.Execute) $($_.Arguments)" }) } else { '(not registered)' }
 "== logs written by the spikes and the plugin =="
 Get-ChildItem (Join-Path $my 'SKSE') -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'SkyrimPython*' } | ForEach-Object { Show $_.FullName }
-"== throwaway saves (spikebase, spytest, s4test) =="
-Get-ChildItem (Join-Path $my 'Saves') -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(spikebase|spytest|s4test)' } | ForEach-Object { Show $_.FullName }
+"== throwaway saves (spikebase, spytest, s4test, skypy_r38_savecall) =="
+Get-ChildItem (Join-Path $my 'Saves') -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(spikebase|spytest|s4test|skypy_r38_savecall)' } | ForEach-Object { Show $_.FullName }
 ''
 'Nothing was removed. Show this list to the owner; remove only what the owner signs off on, item by item.'

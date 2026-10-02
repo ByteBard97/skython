@@ -12,7 +12,13 @@
 #   tools/box/box_deploy.sh --file LOCAL REL                 -> Plugins\SkyrimPython\REL (one file: s10_check.py, markers)
 #   tools/box/box_deploy.sh --pex path/to/SkyrimPython.pex   -> exactly Data\Scripts\SkyrimPython.pex (Task 7; the only
 #                                                               target outside Plugins; placed only if absent or ours)
-#   BOX_DEPLOY_PRINT_TARGET=1 with --pex prints the resolved target and exits before any ssh (offline test).
+#   tools/box/box_deploy.sh --move REL NEWREL                -> moves Plugins\REL to Plugins\NEWREL (Task 26's startup
+#                                                               variants; Task 25 moves the spike DLL aside). REL must be
+#                                                               a recorded target or inside one; NEWREL must be absent.
+#                                                               Move-Item, never a delete. Each move is appended to
+#                                                               out/box-moves.txt and NEWREL is recorded.
+#   BOX_DEPLOY_PRINT_TARGET=1 with --pex, a DLL or --move prints the resolved target(s) and exits before any ssh
+#   (offline test).
 # Every target is recorded in out/box-deployed.txt. A target that exists on the box and is not recorded there
 # was not deployed by this tool: the deploy refuses (it never overwrites what it did not put there).
 # A *Spike* DLL needs CONFIRM_THROWAWAY_SAVE=1. Refuses while the game runs (DLLs are locked).
@@ -67,12 +73,47 @@ put_entries() {  # put_entries <local dir> <windows dest dir>: each top-level en
 spike_ok() { case "$(basename "$1")" in *Spike*) [ "${CONFIRM_THROWAWAY_SAVE:-0}" = 1 ] || box_die "$1 is spike code (unauthenticated port); use a throwaway save and re-run with CONFIRM_THROWAWAY_SAVE=1" ;; esac; }
 
 [ $# -ge 1 ] || box_die "usage: see the header of $0"
+owned() {  # owned <windows path>: recorded, or inside a recorded folder
+  local r
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    [ "$1" = "$r" ] && return 0
+    case "$1" in "$r\\"*) return 0 ;; esac
+  done < "$BOX_DEPLOYED"
+  return 1
+}
+plugins_rel() {  # plugins_rel <REL>: the Windows path under Plugins, or die
+  local r="${1//\//\\}"
+  case "$r" in ""|*..*|*:*|\\*) box_die "bad path '$1': give it relative to Plugins, without '..' or a drive" ;; esac
+  echo "$BOX_PLUGINS\\$r"
+}
 if [ "$1" = --pex ]; then
   PEX="${2:?usage: box_deploy.sh --pex path/to/SkyrimPython.pex}"
   [ -f "$PEX" ] || box_die "no such file: $PEX"
   [ "$(basename "$PEX")" = SkyrimPython.pex ] || box_die "--pex places only SkyrimPython.pex (got $(basename "$PEX"))"
   PEX_DEST="$BOX_DATA\\Scripts\\SkyrimPython.pex"
   if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then echo "$PEX_DEST"; exit 0; fi
+elif [ "$1" = --move ]; then
+  [ $# -eq 3 ] || box_die "usage: box_deploy.sh --move REL NEWREL (both relative to Plugins)"
+  MV_SRC="$(plugins_rel "$2")"; MV_DEST="$(plugins_rel "$3")"
+  [ "$MV_SRC" != "$MV_DEST" ] || box_die "--move: source and destination are the same"
+  owned "$MV_SRC" || box_die "--move: $MV_SRC was not deployed by this tool (not in out/box-deployed.txt); not moving it"
+  if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then echo "MOVE $MV_SRC -> $MV_DEST"; exit 0; fi
+elif [ "${1#-}" = "$1" ]; then
+  DLL="$1"; [ -f "$DLL" ] || box_die "no such file: $DLL"; spike_ok "$DLL"
+  base="$(basename "$DLL")"
+  if [ "$base" = SkyrimPython.dll ]; then
+    CORE="$(dirname "$DLL")/SkyrimPythonCore.dll"
+    [ -f "$CORE" ] || box_die "$CORE missing: run tools/remote_build.sh plugin SkyrimPythonCore.dll"
+    [ "$DLL" -nt "$CORE" ] && box_die "$CORE is older than $DLL: rebuild it"
+  fi
+  [ $# -ge 2 ] && { [ -f "$2" ] || box_die "no such file: $2"; }
+  if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then
+    echo "$BOX_PLUGINS\\$base"
+    [ "$base" = SkyrimPython.dll ] && echo "$BOX_OWN\\SkyrimPythonCore.dll"
+    [ $# -ge 2 ] && echo "$BOX_PLUGINS\\${base%.dll}.ini"
+    exit 0
+  fi
 fi
 st="$(bssh 'if (Get-Process -Name SkyrimSE,skse64_loader -ErrorAction SilentlyContinue) { "RUNNING" } else { "IDLE" }' | tr -d '\r')" \
   || box_die "cannot ssh to $BOX (STOP and ask the owner)"
@@ -108,15 +149,15 @@ case "$1" in
   --pex)
     put_file "$PEX" "$PEX_DEST"
     ;;
+  --move)
+    r="$(bps 60 place.ps1 -Mode move -SrcB64 "$(b64 "$MV_SRC")" -DestB64 "$(b64 "$MV_DEST")" | tr -d '\r')"
+    [ "$r" = MOVED ] || box_die "moving $MV_SRC: '$r'"
+    echo "$(date -Is) $MV_SRC -> $MV_DEST" >> "$BOX_ROOT/out/box-moves.txt"
+    rec "$MV_DEST"; echo "moved $MV_SRC -> $MV_DEST (recorded in out/box-moves.txt)"
+    ;;
   -*) box_die "unknown option $1" ;;
   *)
-    DLL="$1"; [ -f "$DLL" ] || box_die "no such file: $DLL"; spike_ok "$DLL"
-    base="$(basename "$DLL")"
-    if [ "$base" = SkyrimPython.dll ]; then
-      CORE="$(dirname "$DLL")/SkyrimPythonCore.dll"
-      [ -f "$CORE" ] || box_die "$CORE missing: run tools/remote_build.sh plugin SkyrimPythonCore.dll"
-      [ "$DLL" -nt "$CORE" ] && box_die "$CORE is older than $DLL: rebuild it"
-    fi
+    # DLL, base and CORE were checked before the ssh (above)
     put_file "$DLL" "$BOX_PLUGINS\\$base"
     [ "$base" = SkyrimPython.dll ] && put_file "$CORE" "$BOX_OWN\\SkyrimPythonCore.dll"
     [ $# -ge 2 ] && put_file "$2" "$BOX_PLUGINS\\${base%.dll}.ini"

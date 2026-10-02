@@ -1,8 +1,10 @@
-# place.ps1 -Mode exists|list|place -DestB64 <path> [-SrcB64 <staged file or .tar>] [-Kind file|tar]
+# place.ps1 -Mode exists|list|place|move -DestB64 <path> [-SrcB64 <staged file or .tar | path to move>] [-Kind file|tar]
 #   exists: prints EXISTS or ABSENT.   list: prints the names of the entries in a folder (nothing if absent).
 #   place:  file -> Copy-Item to Dest (parent created), prints "PLACED <sha256>";
 #           tar  -> extracts into a fresh folder next to the .tar, then robocopy /E merges it into Dest (
 #                   files with the same name are replaced, nothing else in Dest is touched), prints "PLACED <n> files".
+#   move:   Move-Item Src to Dest (no -Force), both inside Data\SKSE\Plugins; refuses when Src is absent or Dest
+#           exists; prints "MOVED". Used for Task 26's startup variants (moved, never deleted, moved back after).
 # Only box_deploy.sh calls this, for paths under the game's Data\SKSE\Plugins and for Data\Scripts\SkyrimPython.pex.
 param([string]$Mode, [string]$DestB64, [string]$SrcB64 = '', [string]$Kind = 'file')
 $ErrorActionPreference = 'Stop'
@@ -15,6 +17,18 @@ if (-not $dest.StartsWith('C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\') -and 
 switch ($Mode) {
   'exists' { if (Test-Path -LiteralPath $dest) { 'EXISTS' } else { 'ABSENT' }; exit 0 }
   'list'   { if (Test-Path -LiteralPath $dest) { Get-ChildItem -LiteralPath $dest -Force | ForEach-Object { $_.Name } }; exit 0 }
+  'move' {
+    $src = From-B64 $SrcB64
+    $root = 'C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\'
+    foreach ($p in @($src, $dest)) {
+      if (-not ([IO.Path]::GetFullPath($p)).StartsWith($root) -or $p -match '\.\.') { "REFUSED $p is not inside Data\SKSE\Plugins"; exit 2 }
+    }
+    if (-not (Test-Path -LiteralPath $src)) { "ERR source absent $src"; exit 1 }
+    if (Test-Path -LiteralPath $dest) { "ERR destination exists $dest"; exit 1 }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+    Move-Item -LiteralPath $src -Destination $dest
+    'MOVED'; exit 0
+  }
   'place' {
     if ($dest -eq $PexDest -and $Kind -ne 'file') { "REFUSED $PexDest takes a single file"; exit 2 }
     $src = From-B64 $SrcB64
