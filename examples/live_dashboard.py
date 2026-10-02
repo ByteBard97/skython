@@ -50,7 +50,7 @@ def poll(game):
     game.wait_ready()
     player, hour = game.form(PLAYER), game.form(GAME_HOUR)
     while True:
-        b = game.batch()                        # all seven reads run in one game frame
+        b = game.batch()                        # seven reads, in order (one game task each: ordered, not atomic, not one frame)
         for av in ("Health", "Magicka", "Stamina"):
             b.call_method(player, "Actor", "GetActorValue", av)
         b.call_method(player, "Actor", "GetGoldAmount")
