@@ -1,10 +1,10 @@
-"""Skyrim's weather follows the real weather where you live: rain outside, rain in Skyrim.
+"""Skyrim's weather follows the real weather where you live.
 
 Every 10 minutes it asks Open-Meteo (free, no API key) for your city's current weather and forces the
 matching Skyrim weather.
 
 Install: copy this file into Data/SKSE/Plugins/Skython/scripts/ and set LATITUDE and LONGITUDE below.
-Needs: Skython M1 (Papyrus calls). Standard library only.
+Needs: Skython 0.1 (Papyrus calls). Standard library only.
 """
 import json
 import threading

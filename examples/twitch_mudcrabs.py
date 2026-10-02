@@ -1,10 +1,10 @@
 """Twitch chat spawns mudcrabs named after the viewers who summoned them.
 
 A viewer types `!mudcrab` in your Twitch chat; a mudcrab carrying their name appears next to you.
-No Twitch account, bot token, server, or extra mod is needed: it reads chat anonymously over IRC.
+It reads chat anonymously over IRC, so there is no bot account or token to set up.
 
 Install: copy this file into Data/SKSE/Plugins/Skython/scripts/ and set CHANNEL below.
-Needs: Skython M1 (Papyrus calls). Standard library only.
+Needs: Skython 0.1 (Papyrus calls). Standard library only.
 """
 import socket
 import threading

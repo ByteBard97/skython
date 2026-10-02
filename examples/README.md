@@ -4,7 +4,7 @@ Each example is one Python file. Drop it into `Data/SKSE/Plugins/Skython/scripts
 
 | Example | What it does | Lines |
 |---|---|---|
-| [`twitch_mudcrabs.py`](twitch_mudcrabs.py) | A viewer types `!mudcrab` in your Twitch chat and a mudcrab carrying their name appears next to you. Anonymous chat read: no bot account, token, or server. | ~90 |
+| [`twitch_mudcrabs.py`](twitch_mudcrabs.py) | A viewer types `!mudcrab` in your Twitch chat and a mudcrab carrying their name appears next to you. Reads chat anonymously, so no bot account or token is needed. | ~90 |
 | [`talk_to_npc_llm.py`](talk_to_npc_llm.py) | Look at any NPC, press K, and they greet you in character through a language model (local Ollama/LM Studio or any OpenAI-compatible API). | ~80 |
 | [`live_dashboard.py`](live_dashboard.py) | A live stats page (health, magicka, stamina, gold, level, location, time) at `http://127.0.0.1:8765`, usable as an OBS browser source. | ~100 |
 | [`real_weather.py`](real_weather.py) | Skyrim's weather follows the real weather in your city (Open-Meteo, no API key). | ~60 |
@@ -48,4 +48,4 @@ Scripts run on their own threads, so a slow network call never stalls the game; 
 
 ## Status
 
-Written for Skython M1 (`live_dashboard.py` has been run in the game; the argument count of every Papyrus call in the others was checked against the running game). Event examples come with M2.
+I've run `live_dashboard.py` in game. For the other three I checked every Papyrus call against the running game but haven't run them end to end yet. There are no event examples yet.

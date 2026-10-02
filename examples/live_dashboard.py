@@ -4,7 +4,7 @@ level, location and time of day, refreshed every second.
 Open http://127.0.0.1:8765 while the game runs. In OBS: add a Browser source with that URL.
 
 Install: copy this file into Data/SKSE/Plugins/Skython/scripts/.
-Needs: Skython M1 (Papyrus calls). Standard library only.
+Needs: Skython 0.1 (Papyrus calls). Standard library only.
 """
 import json
 import threading

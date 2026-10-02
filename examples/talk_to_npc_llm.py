@@ -1,10 +1,9 @@
 """Talk to any NPC through a language model: look at them, press K, read their answer.
 
-The core idea behind mods like Mantella, without a separate server, an HTTP plugin, or dozens of
-Papyrus scripts. Works with any OpenAI-compatible endpoint: a local Ollama or LM Studio, or a hosted API.
+Works with any OpenAI-compatible endpoint: a local Ollama or LM Studio, or a hosted API.
 
 Install: copy this file into Data/SKSE/Plugins/Skython/scripts/ and set ENDPOINT and MODEL below.
-Needs: Skython M1 (Papyrus calls, SKSE's Input and Game.GetCurrentCrosshairRef). Standard library only.
+Needs: Skython 0.1 (Papyrus calls, SKSE's Input and Game.GetCurrentCrosshairRef). Standard library only.
 """
 import json
 import os
