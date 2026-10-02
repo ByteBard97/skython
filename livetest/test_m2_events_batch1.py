@@ -11,7 +11,9 @@ from support import raw_connect, read_event, read_events, rpc, subscribe
 
 PLAYER = Form(form_id=0x14)
 CHICKEN = "Skyrim.esm|0x0A91A0"       # NPC_ EncChicken (checked in Skyrim.esm, 2026-10-02)
-QUEST = "Skyrim.esm|0x0357E5"         # QUST dunKarthspireRedoubtQST: no script, no aliases, stages 10 and 100
+# QUST PerkInvestor: Papyrus Start() starts it (no Story Manager event, ENAM empty), not start-game-enabled, not
+# run-once, no aliases, one stage (10) with no fragment and no log entry; checked on s4test twice in one launch (Task 39 fix round 1)
+QUEST = "Skyrim.esm|0x0ABD94"
 CRIME_WHITERUN = "Skyrim.esm|0x0267EA"  # FACT CrimeFactionWhiterun: a chicken killed by the player near Whiterun may be a crime
 
 
@@ -89,7 +91,7 @@ def test_death_killer_is_null_for_kill_none(game, session):
 def test_quest_start_stage_stop(game):
     quest = game.form(QUEST)
     if game.call_method(quest, "Quest", "IsRunning") or game.call_method(quest, "Quest", "IsCompleted"):
-        pytest.fail("dunKarthspireRedoubtQST is running or completed on this save: STOP and ask the owner")
+        pytest.fail("PerkInvestor is running or completed on this save: STOP and ask the owner")
     got: queue.Queue = queue.Queue()
     subs = [game.on(name, {"quest": [quest]}, got.put) for name in ("quest_start", "quest_stage", "quest_stop")]
     try:

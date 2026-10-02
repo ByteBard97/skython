@@ -4,7 +4,7 @@
 >
 > **Runs on:** Linux (code, the API check), then the Windows build box (build) and the game on the box (live tests), exactly as v1 Part C did ([v1 Task 1c](../2026-10-01-skyrim-python-v1-embedded/task-01c-part-c-on-the-box.md): `tools/remote_build.sh`, `tools/box/*`; never the Linux desktop). Plugin code builds only on Windows, so this task's "test" for C++ is the build (0 warnings) plus the live tests.
 >
-> **STOP and ask the owner (do not improvise) if:** a struct or field named below differs at the pin by more than a rename; the game crashes or hangs during a live test; the game does not reach the main menu within 10 minutes; the box does not answer `ssh` within 10 s; quest `dunKarthspireRedoubtQST` (Skyrim.esm|0x0357E5) is already running or completed on `s4test` (pick nothing else yourself: report it); the Whiterun bounty (`CrimeFactionWhiterun`, Skyrim.esm|0x0267EA, `Faction.GetCrimeGold`) rises when the death tests kill a chicken with the player as killer; the game runs on anything other than AE 1.6.1170.
+> **STOP and ask the owner (do not improvise) if:** a struct or field named below differs at the pin by more than a rename; the game crashes or hangs during a live test; the game does not reach the main menu within 10 minutes; the box does not answer `ssh` within 10 s; quest `PerkInvestor` (Skyrim.esm|0x0ABD94) is already running or completed on `s4test` (pick nothing else yourself: report it). It was chosen (fix round 1) by these criteria, all read from the QUST record: not a Story Manager event quest (`ENAM` empty: Papyrus `Start()` returns `False` on an event quest, as `dunKarthspireRedoubtQST` with `ENAM = CLOC` showed), not start-game-enabled (`DNAM` 0x0001), not run-once (neither 0x0004 nor 0x0100 set), no aliases, the stage the test sets has no fragment, no log entry and no complete/fail flag, no start-up stage; and on `s4test` Start/SetStage/Stop raised all three events twice in one launch. No Skyrim.esm quest meets the stricter "no script at all" rule (none of the 1811 QUST records has `ENAM` empty, no `VMAD`, no aliases, stages and no start-game-enabled flag); `PerkInvestor` carries `PerkInvestorQuestScript` and an empty fragment script; the Whiterun bounty (`CrimeFactionWhiterun`, Skyrim.esm|0x0267EA, `Faction.GetCrimeGold`) rises when the death tests kill a chicken with the player as killer; the game runs on anything other than AE 1.6.1170.
 >
 > **Box rules:** `s4test` is loaded and **never saved** in this task (no `save` command, no `game.save`). End every game with `tools/box/box_stop.sh` (not `qqq`); `NOT_CLEAN` + `NO_NEW_CRASH_LOG` with the R46 signature is the box baseline, not ours. List the SKSE plugins loaded in the RESULTS entry.
 
@@ -514,7 +514,9 @@ from support import raw_connect, read_event, read_events, rpc, subscribe
 
 PLAYER = Form(form_id=0x14)
 CHICKEN = "Skyrim.esm|0x0A91A0"       # NPC_ EncChicken (checked in Skyrim.esm, 2026-10-02)
-QUEST = "Skyrim.esm|0x0357E5"         # QUST dunKarthspireRedoubtQST: no script, no aliases, stages 10 and 100
+# QUST PerkInvestor: Papyrus Start() starts it (no Story Manager event, ENAM empty), not start-game-enabled, not
+# run-once, no aliases, one stage (10) with no fragment and no log entry; checked on s4test twice in one launch (Task 39 fix round 1)
+QUEST = "Skyrim.esm|0x0ABD94"
 CRIME_WHITERUN = "Skyrim.esm|0x0267EA"  # FACT CrimeFactionWhiterun: a chicken killed by the player near Whiterun may be a crime
 
 
@@ -592,7 +594,7 @@ def test_death_killer_is_null_for_kill_none(game, session):
 def test_quest_start_stage_stop(game):
     quest = game.form(QUEST)
     if game.call_method(quest, "Quest", "IsRunning") or game.call_method(quest, "Quest", "IsCompleted"):
-        pytest.fail("dunKarthspireRedoubtQST is running or completed on this save: STOP and ask the owner")
+        pytest.fail("PerkInvestor is running or completed on this save: STOP and ask the owner")
     got: queue.Queue = queue.Queue()
     subs = [game.on(name, {"quest": [quest]}, got.put) for name in ("quest_start", "quest_stage", "quest_stop")]
     try:
