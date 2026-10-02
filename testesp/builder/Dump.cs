@@ -21,6 +21,7 @@ namespace SkythonTestEsp
                     foreach (var c in sb.Cells)
                     {
                         Console.WriteLine($"cell {c.EditorID} {c.FormKey} block={b.BlockNumber}/{sb.BlockNumber} location={c.Location.FormKey}");
+                        Console.WriteLine($"  cell-data flags={c.Flags} lighting_template={c.LightingTemplate.FormKey} lighting={(c.Lighting == null ? "-" : "inherits=" + c.Lighting.Inherits)} water_height={(c.WaterHeight?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "-")} image_space={c.ImageSpace.FormKeyNullable?.ToString() ?? "-"} acoustic_space={c.AcousticSpace.FormKeyNullable?.ToString() ?? "-"}");
                         foreach (var r in c.Persistent) Console.WriteLine($"  persistent {r.EditorID ?? "-"} {r.FormKey} base={BaseOf(r)}");
                         foreach (var r in c.Temporary) Console.WriteLine($"  temporary {r.EditorID ?? "-"} {r.FormKey} base={BaseOf(r)}");
                     }
