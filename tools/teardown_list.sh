@@ -11,5 +11,4 @@ echo "== throwaway saves (names used by the spikes) =="
 SAVES="$(dirname "$SKSE_LOG_DIR")/Saves"
 ls -l "$SAVES"/spikebase* "$SAVES"/spytest* "$SAVES"/s4test* 2>/dev/null || echo "(none found under $SAVES; look where your Stock Game keeps saves)"
 echo
-echo "Nothing was removed. Show this list to the owner. Only after the owner signs off on exactly these"
-echo "paths, move each one with: gio trash <path>.  Never rm. Do not remove anything not on the approved list."
+echo "Nothing was removed. Delete what you no longer want by hand (gio trash <path> keeps it recoverable)."

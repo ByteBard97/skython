@@ -8,7 +8,7 @@ ok()  { echo "ok   $*"; }
 bad() { echo "FAIL $*"; fail=1; }
 T="$ROOT/out/papyrus-compile-test"; mkdir -p "$T"  # gitignored, overwritten each run
 
-# 1. never a window on the owner's desktop: both display variables unset on the compiler's command line
+# 1. no Wine window: both display variables unset on the compiler's command line
 grep -qF 'env -u DISPLAY -u WAYLAND_DISPLAY' "$PC" && ok "the compiler runs with DISPLAY and WAYLAND_DISPLAY unset" \
   || bad "papyrus_compile.sh does not unset DISPLAY and WAYLAND_DISPLAY"
 # 2. Skython.psc compiles to a non-empty Skyrim .pex, also when the caller's environment has a display

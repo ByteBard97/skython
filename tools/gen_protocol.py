@@ -4,7 +4,7 @@
     python3 tools/gen_protocol.py            write the generated files
     python3 tools/gen_protocol.py --check    exit 1 and print a diff if a committed generated file is stale
 
-Outputs (all committed, so the Windows build box needs no extra tooling; the C++ header is read by core/ and the plugin,
+Outputs (all committed, so the Windows build machine needs no extra tooling; the C++ header is read by core/ and the plugin,
 the Python module by the skython package, the dev bridge and skython.remote):
     core/include/spy/protocol_generated.h      C++ constants, ErrorCode, op and config tables
     python/src/skython/_protocol_generated.py   Python constants, error-code registry data, op table

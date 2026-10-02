@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: tools/deploy.sh out/<Dll>.dll [path/to/ini]  -- copies into SimpleSkyrim's Data/SKSE/Plugins.
+# Usage: tools/deploy.sh out/<Dll>.dll [path/to/ini]  copies into $SKYRIM_DATA/SKSE/Plugins (tools/env.sh).
 # Every copied path is appended to out/deployed.txt so tools/teardown_list.sh can list it later.
 # Deploying Skython.dll also copies SkythonCore.dll from the same folder into Data/SKSE/Plugins/Skython/.
 # A target that already exists and is not listed in out/deployed.txt is never overwritten (it is not ours).
@@ -12,7 +12,7 @@ mkdir -p "$ROOT/out"; touch "$LEDGER"
 # ours_or_new <target>: refuse a target that exists but this repo did not deploy.
 ours_or_new() {
   if [ -e "$1" ] && ! grep -qxF "$1" "$LEDGER"; then
-    echo "deploy: $1 exists but was not deployed by this repo; not overwriting it. Ask the owner." >&2; exit 1
+    echo "deploy: $1 exists but was not deployed by this repo; not overwriting it (move it away, or add it to out/deployed.txt if it is ours)" >&2; exit 1
   fi
 }
 record() { grep -qxF "$1" "$LEDGER" || echo "$1" >> "$LEDGER"; }
@@ -22,7 +22,7 @@ record() { grep -qxF "$1" "$LEDGER" || echo "$1" >> "$LEDGER"; }
 if [ "${1:-}" = "--python" ]; then
   shift
   "$ROOT/tools/fetch_python.sh" --check || { echo "deploy: third_party/cpython does not match docs/PINS.md" >&2; exit 1; }
-  DEST="$SIMPLESKYRIM_DATA/SKSE/Plugins"; OWN="$DEST/Skython"; PYDIR="$OWN/python"
+  DEST="$SKYRIM_DATA/SKSE/Plugins"; OWN="$DEST/Skython"; PYDIR="$OWN/python"
   [ -d "$DEST" ] || { echo "deploy: $DEST does not exist" >&2; exit 1; }
   ours_or_new "$PYDIR"
   mkdir -p "$PYDIR"
@@ -49,7 +49,7 @@ case "$(basename "$1")" in
       echo "deploy: use only with a throwaway save, then re-run with CONFIRM_THROWAWAY_SAVE=1." >&2
       exit 1; } ;;
 esac
-DEST="$SIMPLESKYRIM_DATA/SKSE/Plugins"
+DEST="$SKYRIM_DATA/SKSE/Plugins"
 [ -d "$DEST" ] || { echo "deploy: $DEST does not exist" >&2; exit 1; }
 TARGETS=("$DEST/$(basename "$1")")
 CORE=""

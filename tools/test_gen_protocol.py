@@ -290,7 +290,7 @@ def test_the_committed_generated_files_are_current():
     assert gen.run(ROOT, check=True, out=open(os.devnull, "w"), err=sys.stderr) == 0
 
 
-# ---- rules the index's Contracts fix ------------------------------------------------------------------------
+# ---- fixed facts of protocol.json -------------------------------------------------------------------------------
 def test_the_ops_answered_without_a_game():
     assert [o["name"] for o in model()["ops"] if not o["needs_game"]] == ["game.state", "events.subscribe", "events.unsubscribe", "game.load"]
 

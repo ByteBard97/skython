@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Compile Papyrus sources on Linux, headless, with the SimpleSkyrim Papyrus Compiler under GE-Proton10-14's wine64
+# Compile Papyrus sources on Linux, headless, with the Creation Kit's Papyrus Compiler under GE-Proton10-14's wine64
 # (spike S5's recipe, spikes/RESULTS.md). Compiles only: it never starts the game or Steam.
 # Usage:
 #   tools/papyrus_compile.sh <source.psc>... -o <out_dir> [-i <extra import dir>]...
@@ -14,13 +14,19 @@
 # rebuild never matches a recorded raw SHA-256. --stable-hash zeroes both; it is the value docs/PINS.md compares across
 # rebuilds. The header also holds the source file name, user name and machine name, so the stable hash holds only for
 # the same file name, machine and account that built the recorded file.
-# Env (defaults are the S5 values): PAPYRUS_COMPILER, PAPYRUS_WINEPREFIX, PAPYRUS_WINE, SKYRIM_SCRIPTS_ZIP.
+# Env (set in your shell or in tools/local.env, which is gitignored and read if present):
+#   PAPYRUS_COMPILER    PapyrusCompiler.exe (default: $SKYRIM_GAME_DIR/Papyrus Compiler/PapyrusCompiler.exe)
+#   PAPYRUS_WINEPREFIX  a Wine prefix to run it in (default: $SKYRIM_PREFIX)
+#   PAPYRUS_WINE        wine64 (default: GE-Proton10-14's, under ~/.local/share/Steam/compatibilitytools.d)
+#   SKYRIM_SCRIPTS_ZIP  the game's Data/Scripts.zip (default: $SKYRIM_GAME_DIR/Data/Scripts.zip)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PAPYRUS_COMPILER="${PAPYRUS_COMPILER:-/home/geoff/Games/SimpleSkyrim/Stock Game/Papyrus Compiler/PapyrusCompiler.exe}"
-PAPYRUS_WINEPREFIX="${PAPYRUS_WINEPREFIX:-/home/geoff/.local/share/Steam/steamapps/compatdata/4190904831/pfx}"
+[ -f "$ROOT/tools/local.env" ] && source "$ROOT/tools/local.env"
+GAME="${SKYRIM_GAME_DIR:-}"
+PAPYRUS_COMPILER="${PAPYRUS_COMPILER:-${GAME:+$GAME/Papyrus Compiler/PapyrusCompiler.exe}}"
+PAPYRUS_WINEPREFIX="${PAPYRUS_WINEPREFIX:-${SKYRIM_PREFIX:-}}"
 PAPYRUS_WINE="${PAPYRUS_WINE:-$HOME/.local/share/Steam/compatibilitytools.d/GE-Proton10-14/files/bin/wine64}"
-SKYRIM_SCRIPTS_ZIP="${SKYRIM_SCRIPTS_ZIP:-/mnt/games/SteamLibrary/steamapps/common/Skyrim Special Edition/Data/Scripts.zip}"
+SKYRIM_SCRIPTS_ZIP="${SKYRIM_SCRIPTS_ZIP:-${GAME:+$GAME/Data/Scripts.zip}}"
 VANILLA="$ROOT/out/papyrus-import/vanilla/Source/Scripts"
 die() { echo "papyrus_compile: $*" >&2; exit 1; }
 
@@ -49,6 +55,7 @@ PY
 }
 vanilla() {  # extract the vanilla sources and the flags file once
   if [ ! -f "$VANILLA/TESV_Papyrus_Flags.flg" ] || [ ! -f "$VANILLA/Quest.psc" ]; then
+    [ -n "$SKYRIM_SCRIPTS_ZIP" ] || die "set SKYRIM_SCRIPTS_ZIP to the game's Data/Scripts.zip (or SKYRIM_GAME_DIR to the game folder)"
     [ -f "$SKYRIM_SCRIPTS_ZIP" ] || die "no $SKYRIM_SCRIPTS_ZIP (set SKYRIM_SCRIPTS_ZIP to the game's Data/Scripts.zip)"
     mkdir -p "$ROOT/out/papyrus-import/vanilla"
     unzip -q -o "$SKYRIM_SCRIPTS_ZIP" 'Source/Scripts/*' -d "$ROOT/out/papyrus-import/vanilla" || die "could not extract $SKYRIM_SCRIPTS_ZIP"
@@ -79,18 +86,20 @@ while [ $# -gt 0 ]; do
 done
 [ ${#sources[@]} -ge 1 ] || die "no sources"
 [ -n "$out" ] || die "no -o <out_dir>"
+[ -n "$PAPYRUS_COMPILER" ] || die "set PAPYRUS_COMPILER to PapyrusCompiler.exe (or SKYRIM_GAME_DIR to the game folder)"
 [ -f "$PAPYRUS_COMPILER" ] || die "no compiler at $PAPYRUS_COMPILER"
+[ -n "$PAPYRUS_WINEPREFIX" ] || die "set PAPYRUS_WINEPREFIX to a Wine prefix (or SKYRIM_PREFIX to the game's Proton pfx folder)"
 [ -x "$PAPYRUS_WINE" ] || die "no wine64 at $PAPYRUS_WINE"
 vanilla
 mkdir -p "$out"; out="$(cd "$out" && pwd)"
 # Fixed, gitignored scratch files overwritten on every run (no temp files left behind); one compile at a time.
 work="$ROOT/out/papyrus-compile"; mkdir -p "$work"; start="$work/start"; log="$work/compiler.log"; touch "$start"
 for src in "${sources[@]}"; do
-  # The compiler takes ONE -i (a second -i replaces the first): join the import dirs with ';'.
+  # The compiler takes one -i (a second -i replaces the first): join the import dirs with ';'.
   dirs=("$(dirname "$src")" "${imports[@]}" "$ROOT/plugin/papyrus" "$VANILLA")
   imp=""; for d in "${dirs[@]}"; do imp+="${imp:+;}$(winpath "$d")"; done
   name="$(basename "$src")"
-  # env -u DISPLAY -u WAYLAND_DISPLAY: no window can open on the owner's desktop (S5). WINEDEBUG=-all: quiet.
+  # env -u DISPLAY -u WAYLAND_DISPLAY: so no Wine window pops up (S5). WINEDEBUG=-all: quiet.
   ( cd "$(dirname "$src")" && timeout 300 env -u DISPLAY -u WAYLAND_DISPLAY WINEPREFIX="$PAPYRUS_WINEPREFIX" WINEDEBUG=-all \
       "$PAPYRUS_WINE" "$PAPYRUS_COMPILER" "$name" -i="$imp" -o="$(winpath "$out")" -f=TESV_Papyrus_Flags.flg ) > "$log" 2>&1 || true
   tr -d '\r' < "$log" | grep -v '^wineserver:' || true

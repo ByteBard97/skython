@@ -18,8 +18,11 @@ __pycache__/
 *.swp
 .DS_Store
 
-# subagent-driven-development workspace (ledgers, briefs, review packages)
+# local working notes
 .superpowers/
+
+# machine-specific paths and hosts for the dev scripts (see tools/env.sh)
+tools/local.env
 
 # plugin and Papyrus build artifacts
 **/build/

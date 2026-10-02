@@ -4,8 +4,9 @@
 #   nuget/  <- python.3.14.8.nupkg (nuget.org): tools/include/ and tools/libs/python314.lib for the build
 # Usage: tools/fetch_python.sh          download (if needed), verify SHA-256, unpack
 #        tools/fetch_python.sh --check  verify only; downloads and unpacks nothing; non-zero on any mismatch
-# The expected SHA-256s are the sha256sum-format lines in docs/PINS.md. A mismatch is never "fixed" here:
-# STOP and ask the owner. This script removes nothing; a stale unpacked folder is reported, not replaced.
+# The expected SHA-256s are the sha256sum-format lines in docs/PINS.md. A mismatch means the download changed
+# upstream or got corrupted; find out which before you update the pin. This script deletes nothing: a stale
+# unpacked folder is reported, not replaced.
 # Env (for tests): CPYTHON_DIR (default third_party/cpython), PINS_FILE (default docs/PINS.md),
 #                  FETCH_FROM=<dir> copies the archives from a local folder instead of downloading.
 set -euo pipefail
@@ -27,7 +28,7 @@ case "${1:-}" in
   "") ;;
   *) die "usage: fetch_python.sh [--check]" ;;
 esac
-[ -f "$PINS" ] || die "no pins file at $PINS (Task 0 Step 4 writes it)"
+[ -f "$PINS" ] || die "no pins file at $PINS"
 
 expected() {  # sha256 of $1 from the pins file, or empty
   grep -E "^[0-9a-f]{64}  $1\$" "$PINS" | head -n1 | cut -d' ' -f1
@@ -50,7 +51,7 @@ for f in "$EMBED" "$NUPKG"; do
     echo "fetch_python: SHA-256 mismatch for $arch" >&2
     echo "  expected $want (docs/PINS.md)" >&2
     echo "  got      $got" >&2
-    echo "  STOP and ask the owner. Nothing was unpacked." >&2
+    echo "  nothing was unpacked; check the download before changing docs/PINS.md" >&2
     exit 1
   fi
   out="$CPY/${DEST[$f]}"
@@ -61,7 +62,7 @@ for f in "$EMBED" "$NUPKG"; do
   fi
   if [ "$CHECK" = 1 ]; then echo "NOT UNPACKED (or stale) $out" >&2; status=1; continue; fi
   if [ -e "$out" ]; then
-    die "$out exists but was not unpacked from this archive; ask the owner to approve moving it away (gio trash), then re-run"
+    die "$out exists but was not unpacked from this archive; move it out of the way and re-run"
   fi
   mkdir -p "$out"
   unzip -q "$arch" -d "$out" || die "unzip of $arch failed"
@@ -69,7 +70,7 @@ for f in "$EMBED" "$NUPKG"; do
   echo "unpacked $f -> $out"
 done
 
-# The files later tasks rely on must be there.
+# The files the build and deploy steps need must be there.
 if [ "$status" = 0 ]; then
   for need in embed/python314.dll embed/python314.zip embed/LICENSE.txt \
               nuget/tools/include/Python.h nuget/tools/libs/python314.lib; do

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Launch SimpleSkyrim through GE-Proton with skse64_loader.exe (not MO2), in the background.
+# Launch the game in $SKYRIM_GAME_DIR through GE-Proton with skse64_loader.exe (not MO2), in the background.
+# Paths come from tools/env.sh. Env: STEAM_ROOT (default ~/.local/share/Steam), PROTON (default GE-Proton10-14's
+# proton script), STEAM_COMPAT_MOUNTS (extra library folders Proton must see, e.g. where Skyrim.esm lives).
 # Refuses when: the game/loader is already running, a launch is already pending, or Steam is not running
 # (without Steam the game hands off to steam://run/489830 and exits). A Wine session left over from a failed
 # launch makes 'proton waitforexitandrun' hang, so it is stopped with the prefix's own 'wineserver -k'
@@ -10,9 +12,9 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/tools/env.sh"
-STEAM_ROOT="$HOME/.local/share/Steam"
-PFX_DIR="$STEAM_ROOT/steamapps/compatdata/4190904831/pfx"
-COMPAT_DIR="$STEAM_ROOT/steamapps/compatdata/4190904831"
+STEAM_ROOT="${STEAM_ROOT:-$HOME/.local/share/Steam}"
+PFX_DIR="$SKYRIM_PREFIX"
+COMPAT_DIR="$(dirname "$SKYRIM_PREFIX")"
 PROC_ROOT="${PROC_ROOT:-/proc}"   # overridable so the matcher can be tested against a fake /proc
 
 # classify_cmdline: reads one NUL-separated command line on stdin, prints game | loader | wrapper | other.
@@ -97,11 +99,11 @@ if [ "$action" = kill_only ] || [ "$action" = kill_launch ]; then
 fi
 export STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT"
 export STEAM_COMPAT_DATA_PATH="$COMPAT_DIR"
-export STEAM_COMPAT_MOUNTS="/mnt/games/SteamLibrary"
+export STEAM_COMPAT_MOUNTS="${STEAM_COMPAT_MOUNTS:-}"
 export DISPLAY="${DISPLAY:-:1}"
-export XAUTHORITY="${XAUTHORITY:-/run/user/1000/gdm/Xauthority}"
-PROTON="$STEAM_ROOT/compatibilitytools.d/GE-Proton10-14/proton"
-cd "$HOME/Games/SimpleSkyrim/Stock Game"
+export XAUTHORITY="${XAUTHORITY:-/run/user/$(id -u)/gdm/Xauthority}"
+PROTON="${PROTON:-$STEAM_ROOT/compatibilitytools.d/GE-Proton10-14/proton}"
+cd "$SKYRIM_GAME_DIR"
 : > "$SKYTHON_STATE/launch.stamp"   # logs older than this stamp belong to an earlier run
 nohup "$PROTON" waitforexitandrun "$(pwd)/skse64_loader.exe" > "$SKYTHON_STATE/launch.log" 2>&1 &
 echo "launched pid $! (log: $SKYTHON_STATE/launch.log)"
