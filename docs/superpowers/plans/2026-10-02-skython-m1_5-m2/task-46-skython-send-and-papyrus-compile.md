@@ -104,6 +104,18 @@ TEST_CASE("channel: the cut never splits a UTF-8 sequence")
     }
 }
 
+TEST_CASE("channel: a lead byte at the limit and stray continuation bytes at the cut")
+{
+    // A sequence that starts exactly at the limit is cut whole: everything before it stays.
+    auto lead = make_channel_event("c", std::string(spy::kMaxChannelPayloadBytes, 'a') + "\xC3\xA9");
+    CHECK(payload_of(lead).size() == spy::kMaxChannelPayloadBytes);
+    CHECK((*lead)["truncated"] == true);
+    // Invalid UTF-8 (a run of continuation bytes) across the cut: it backs up at most 3 bytes, never further.
+    auto stray = make_channel_event("c", std::string(spy::kMaxChannelPayloadBytes - 5, 'a') + std::string(10, '\x80'));
+    CHECK(payload_of(stray).size() == spy::kMaxChannelPayloadBytes - 3);
+    CHECK((*stray)["truncated"] == true);
+}
+
 TEST_CASE("channel: an empty or over-long channel is dropped")
 {
     CHECK_FALSE(make_channel_event("", "x"));
@@ -265,7 +277,9 @@ while [ $# -gt 0 ]; do
     -o) out="${2:?-o needs a directory}"; shift 2 ;;
     -i) [ -d "${2:?-i needs a directory}" ] || die "no such import dir: $2"; imports+=("$(cd "$2" && pwd)"); shift 2 ;;
     -*) die "unknown option $1" ;;
-    *.psc) [ -f "$1" ] || die "no such source: $1"; sources+=("$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"); shift ;;
+    *.psc) [ -f "$1" ] || die "no such source: $1"
+           for s in "${sources[@]}"; do [ "$(basename "$s")" != "$(basename "$1")" ] || die "two sources named $(basename "$1") (the second .pex would replace the first)"; done
+           sources+=("$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"); shift ;;
     *) die "not a .psc: $1" ;;
   esac
 done
@@ -275,7 +289,8 @@ done
 [ -x "$PAPYRUS_WINE" ] || die "no wine64 at $PAPYRUS_WINE"
 vanilla
 mkdir -p "$out"; out="$(cd "$out" && pwd)"
-start="$(mktemp)"; log="$(mktemp)"
+# Fixed, gitignored scratch files overwritten on every run (no temp files left behind); one compile at a time.
+work="$ROOT/out/papyrus-compile"; mkdir -p "$work"; start="$work/start"; log="$work/compiler.log"; touch "$start"
 for src in "${sources[@]}"; do
   # The compiler takes ONE -i (a second -i replaces the first): join the import dirs with ';'.
   dirs=("$(dirname "$src")" "${imports[@]}" "$ROOT/plugin/papyrus" "$VANILLA")
@@ -302,7 +317,7 @@ PC="$ROOT/tools/papyrus_compile.sh"
 fail=0
 ok()  { echo "ok   $*"; }
 bad() { echo "FAIL $*"; fail=1; }
-T="$(mktemp -d)"
+T="$ROOT/out/papyrus-compile-test"; mkdir -p "$T"  # gitignored, overwritten each run
 
 # 1. never a window on the owner's desktop: both display variables unset on the compiler's command line
 grep -qF 'env -u DISPLAY -u WAYLAND_DISPLAY' "$PC" && ok "the compiler runs with DISPLAY and WAYLAND_DISPLAY unset" \
@@ -324,6 +339,9 @@ printf 'ScriptName Broken\nFunction X(\n' > "$T/Broken.psc"
 # 5. argument checks
 if "$PC" "$ROOT/plugin/papyrus/Skython.psc" >/dev/null 2>&1; then bad "accepted no -o"; else ok "refuses without -o"; fi
 if "$PC" "$T/nope.psc" -o "$T/x" >/dev/null 2>&1; then bad "accepted a missing source"; else ok "refuses a missing source"; fi
+mkdir -p "$T/dup"; cp "$T/Broken.psc" "$T/dup/Broken.psc"
+dup="$("$PC" "$T/Broken.psc" "$T/dup/Broken.psc" -o "$T/x" 2>&1)"; rc=$?
+if [ "$rc" != 0 ] && grep -q 'two sources named Broken.psc' <<< "$dup"; then ok "refuses two sources with one name"; else bad "accepted two sources named Broken.psc"; fi
 if "$PC" --stable-hash "$T/Broken.psc" >/dev/null 2>&1; then bad "--stable-hash accepted a non-.pex"; else ok "--stable-hash refuses a non-.pex"; fi
 # 6. the vanilla script sources live only under out/ (gitignored, never committed)
 d="$("$PC" --vanilla-dir 2>/dev/null)"
