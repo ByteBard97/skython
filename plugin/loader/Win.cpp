@@ -94,7 +94,9 @@ std::string StartCore(const void* skse, LogFn log) noexcept
         if (!fs::exists(core)) return "missing " + U8(core);
         HMODULE c = LoadLibraryExW(core.c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
         if (!c) return WinError("cannot load " + U8(core));
-        const fs::path inUse = ModulePath(GetModuleHandleW(L"python314.dll"));
+        HMODULE inUseHandle = GetModuleHandleW(L"python314.dll");
+        if (!inUseHandle) return "python314.dll not loaded after loading the core";
+        const fs::path inUse = ModulePath(inUseHandle);
         log("core loaded from " + U8(ModulePath(c)) + "; python314.dll in use: " + U8(inUse));
         if (!SamePath(inUse, pyDll)) return "the core resolved python314.dll to " + U8(inUse);
 

@@ -26,7 +26,7 @@ Adapted from: branch `plan-out-of-process`, task 15 (`task-15-plugin-skeleton-bu
   - `spy::life::OnMessage(Message*)`, `DataReady()`, `GameLoaded()`, `Loading()`, `Interactive()`, `Paused()`, `Epoch()`, `LoadsStarted()`, `NotReadyReason(bool require_unpaused = false) -> std::optional<std::string>`, `OpenMenus()`, `BaseState() -> json`.
   - `spy::host::LinkedPythonVersion() -> std::string` (Task 26 adds `Start`/`State` to the same files).
   - Deploying uses Task 1b's `tools/box/box_deploy.sh out/Skython.dll [ini]` (loader to `Plugins\`, `out/SkythonCore.dll`, required and not older than the loader, to `Plugins\Skython\`, the ini to `Plugins\Skython.ini`) and `--python`; the game runs on the Windows box ([Task 1c](task-01c-part-c-on-the-box.md), ruling R42). `tools/deploy.sh` is not changed.
-  - Test hooks (only in a loader built with `SPY_TEST_HOOKS=ON`): `SKYTHON_TEST_PRELOAD=<path>` (Task 26's collision variant) and `SKYTHON_TEST_UNVERIFIED_RUNTIME=1` (Step 10). Such a loader logs one `TEST HOOK:` line per hook, also when its variable is not set.
+  - Test hooks (only in a loader built with `SPY_TEST_HOOKS=ON`): `SKYTHON_TEST_PRELOAD=<path>` (Task 26's collision variant) and `SKYTHON_TEST_UNVERIFIED_RUNTIME=1` (Step 10). Such a loader logs the `SKYTHON_TEST_UNVERIFIED_RUNTIME` hook line on every start, also when its variable is not set. The `SKYTHON_TEST_PRELOAD` hook line (`TEST HOOK: preloaded ...` or `TEST HOOK: SKYTHON_TEST_PRELOAD not set`) appears only when the core start is reached, so not on an unverified runtime.
   - Build: run `tools/remote_build.sh plugin Skython.dll` **and** `tools/remote_build.sh plugin SkythonCore.dll` (the script fetches one DLL per call; the second call is an incremental no-op build plus the copy).
 
 Rules (spec 4.1, 6):
@@ -357,7 +357,7 @@ SKSE_PLUGIN_LOAD(const SKSE::LoadInterface* skse)
     return true;  // never fail the game's plugin load
 }
 ```
-Loader log lines (tests and later tasks wait for these exact phrases): `Skython loader 0.1.0 on Skyrim 1.6.1170.0 (AE)`, `runtime check: ... is not a verified runtime; Python and Skython stay off`, `loaded python314.dll from <path>`, `core loaded from <path>; python314.dll in use: <path>`, `SpyCore_Load returned true`, `Python disabled: <why>`; in a `SPY_TEST_HOOKS` build only, `TEST HOOK: ...` (one line per hook, `... not set` when its variable is absent).
+Loader log lines (tests and later tasks wait for these exact phrases): `Skython loader 0.1.0 on Skyrim 1.6.1170.0 (AE)`, `runtime check: ... is not a verified runtime; Python and Skython stay off`, `loaded python314.dll from <path>`, `core loaded from <path>; python314.dll in use: <path>`, `SpyCore_Load returned true`, `Python disabled: <why>`; in a `SPY_TEST_HOOKS` build only, `TEST HOOK: ...` (`... not set` when its variable is absent; the `SKYTHON_TEST_PRELOAD` line only when the core start is reached).
 
 - [ ] **Step 5: Core logging and settings (no CommonLib headers)**
 

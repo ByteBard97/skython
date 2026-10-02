@@ -52,9 +52,13 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
     case SKSE::MessagingInterface::kDataLoaded: {
         static MenuSink& sink = *new MenuSink();
         auto* ui = RE::UI::GetSingleton();
-        ui->AddEventSink<RE::MenuOpenCloseEvent>(&sink);
+        if (ui) ui->AddEventSink<RE::MenuOpenCloseEvent>(&sink);
         State().on_data_loaded();
         log::Info("Skython core: data loaded");
+        if (!ui) {
+            log::Error("lifecycle: RE::UI singleton is null at kDataLoaded; menu events will not be tracked");
+            break;
+        }
         // The sink sees only events from now on. If the main menu opened before kDataLoaded, record it here
         // (on_menu is idempotent, so a sink event for the same opening does no harm).
         if (ui->IsMenuOpen(RE::MainMenu::MENU_NAME)) {

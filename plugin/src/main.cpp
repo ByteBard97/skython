@@ -85,7 +85,11 @@ extern "C" __declspec(dllexport) bool SpyCore_Load(const SKSE::LoadInterface* sk
             spy::settings::GetRuntime().game_version, spy::settings::GetRuntime().runtime,
             spy::host::LinkedPythonVersion()));
         spy::settings::Load();
-        SKSE::GetMessagingInterface()->RegisterListener(OnMessage);
+        auto* messaging = SKSE::GetMessagingInterface();
+        if (!messaging || !messaging->RegisterListener(OnMessage)) {
+            spy::log::Error("messaging listener registration failed");
+            return false;
+        }
         return true;
     } catch (...) {
         return false;  // the loader logs "SpyCore_Load returned false"
