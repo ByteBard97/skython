@@ -81,3 +81,8 @@ a1cc06b524ab3edca51f8ad3895f9c4fa20b8b19283173dff4ae781449dc9639  pybind11-3.1.0
 - `.pex` hashes: "raw" is the committed file; "stable" is `tools/papyrus_compile.sh --stable-hash` (compile time and source modification time zeroed). A rebuild is checked against the stable hash; it holds for the same source file name, machine and user (`geoff` on this machine).
 - pin plugin/papyrus/compiled/Skython.pex stable 36082f6c01b9f9e125fe2a239e4a7d8afc787c7d2b3424182cecbdbcaad22341
   (informational only, never compared: the committed file's raw sha256 03738c8307c2681327e0f1d1f32b63d10b83dd4fe16bd141aa2b6a93343da3fe)
+
+## Test ESP (Tasks 47-48)
+- Builder: `testesp/builder` (development tool, GPL-3.0-only through Mutagen, never distributed; see its LICENSE-NOTE.md), .NET SDK 8.0.424 at `~/.dotnet/dotnet`, target `net8.0`, restored offline from `~/.nuget/packages`.
+- Mutagen 23.4.0 nupkg sha256: Skyrim 4bdec615ae07c8ac9066f62d8a6420f0355e76c94db69e730a46bfc296856696, Core fa50598700a836dfef6639fbc1893aaf276d3f9383d51437cc8d6b8f6c254313, Kernel 07f9fbd65c846f2071a3c752671c5860409766715bab0ed9450796331a774b55.
+- `testesp/spike/SkythonTest.esp` (Task 47 spike) sha256 00a11e2e3481e87d02f38d8ff23d0b8a42ce9df6fbd6bde0aca66c288479cbce (deterministic: rebuilds are byte-identical).
