@@ -4,10 +4,15 @@ Run from the repo root, the game on the Windows test machine:
 Without SKYTHON_LIVE=1 every test is skipped (so a plain pytest run on a machine without the game is clean).
 """
 import os
+import pathlib
+import sys
 
 import pytest
 
 from support import load_session
+
+# livetest/scripts holds _testesp (the shared ESP helpers) and the in-process scripts' importable modules.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "scripts"))
 
 
 def pytest_collection_modifyitems(config, items):
