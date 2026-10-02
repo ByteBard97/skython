@@ -133,8 +133,8 @@ def to_wire(v: Any) -> Any:
     """Python value -> wire value.
 
     A scalar Python int is always sent as a Papyrus Int and range-checked to 32 bits, even when the
-    Papyrus parameter is a Float (the client cannot tell the difference until the M3 signature table
-    exists). The plugin accepts an Int for a Float parameter, so 3 works there as well as 3.0; use
+    Papyrus parameter is a Float (the client cannot tell the difference until there is a
+    signature table). The plugin accepts an Int for a Float parameter, so 3 works there as well as 3.0; use
     float(n) only for an n outside the 32-bit range. Inside a list that is (or is declared by PArray as)
     Float, ints are converted with float() and are not range-checked.
     """

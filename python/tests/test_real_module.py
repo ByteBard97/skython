@@ -1,7 +1,7 @@
-"""The skython package against the REAL _skython (C++ Dispatcher + FakeBackend, Task 19), not fake_skython.
+"""The skython package against the real _skython (C++ Dispatcher + FakeBackend), not fake_skython.
 
 Skipped unless SKYTHON_REAL_MODULE_DIR names the folder holding the built _skython*.so
-(pyglue/build after Task 19). It pins fake_skython's behaviour to the real Dispatcher's.
+(pyglue/build). It pins fake_skython's behaviour to the real Dispatcher's.
 """
 import importlib
 import json
@@ -171,7 +171,7 @@ def test_bridge_over_the_real_module(real):
 
 
 def test_bridge_connections_are_isolated_over_the_real_module(real):
-    # Task 37 (Review A#12): two connections over the real C++ hub. One cannot unsubscribe the other's subscription,
+    # Two connections over the real C++ hub. One cannot unsubscribe the other's subscription,
     # and each sees only its own events.
     srv = bridge.serve(real, port=0, token=TOKEN,
                        welcome_info={"plugin_version": "0.0.0-fake", "game_version": "0.0.0", "runtime": "fake", "epoch": 0})

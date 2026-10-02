@@ -1,6 +1,6 @@
 """The Game API (both modes share it), exercised over the in-process transport and the fake `_skython`.
 The requests the Game builds are checked against the golden fixtures; transport-specific behaviour
-(sockets, handshake) is Task 22's."""
+(sockets, handshake) is tested in test_remote.py."""
 import contextlib
 import inspect
 import pickle

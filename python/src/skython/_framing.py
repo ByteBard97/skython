@@ -38,7 +38,7 @@ def encode(obj: dict) -> bytes:
 
 
 def _recv_exact(sock: socket.socket, n: int, deadline: float | None) -> bytes:
-    """Read exactly n bytes. With a deadline (time.monotonic() value) the WHOLE read is bounded and
+    """Read exactly n bytes. With a deadline (time.monotonic() value) the whole read, not each recv, is bounded and
     TimeoutError is raised when it passes; without one, wait as long as it takes (a socket timeout is then
     only a wake-up tick and is retried, keeping the bytes read so far)."""
     buf = bytearray()

@@ -1,4 +1,4 @@
-"""The in-process transport, and the fake `_skython` it runs against in these tests (Tasks 23 and 24 rely on
+"""The in-process transport, and the fake `_skython` it runs against in these tests (the bridge and host tests rely on
 the fake behaving like core's Dispatcher, so its rules are pinned here too)."""
 import json
 import threading

@@ -18,7 +18,7 @@ def wait_until(predicate, timeout=5.0, what="the condition"):
         time.sleep(0.01)
 
 
-# ---- Task 22: a protocol-v1 socket server for the remote transport's tests -------------------------------
+# ---- a protocol-v1 socket server for the remote transport's tests -------------------------------
 import socket  # noqa: E402
 import threading  # noqa: E402
 import traceback  # noqa: E402
@@ -61,7 +61,7 @@ def hello_problems(hello):
 
 class FakeServer:
     """A protocol-v1 server on a random loopback port, one thread per connection: it stands in for the
-    dev bridge (Task 23) so the remote transport can be driven into every failure a real peer could cause.
+    dev bridge so the remote transport can be driven into every failure a real peer could cause.
 
     modes: "normal"; "hang" (accept, read the hello, never answer); "mismatch" (handshake_error
     protocol_mismatch); "garbage" (answer with a non-protocol byte stream); "drip" (send the welcome one

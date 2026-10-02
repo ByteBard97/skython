@@ -1,4 +1,4 @@
-"""Events (spec 4.6): subscriptions, their callbacks, and the one dispatch thread per Game that runs them.
+"""Events: subscriptions, their callbacks, and the one dispatch thread per Game that runs them.
 
 A Game subscribes with events.subscribe; the plugin's EventHub queues each matching event per subscription (bounded,
 drop-oldest, with a `dropped` count on the next delivered event) and the Game's EventStream hands the event objects
@@ -228,7 +228,7 @@ class EventDispatcher:
     def close(self) -> None:
         """Close every subscription (no unsubscribe requests: closing the stream drops them), close the stream, stop
         the thread and join it, never from the dispatch thread itself. The join waits at most _JOIN_S (2 s): a
-        callback still running after that keeps running and may finish after close() returns (spec 4.6 allows it);
+        callback still running after that keeps running and may finish after close() returns;
         no further callback starts."""
         with self.lock:
             for sub in self._subs.values():

@@ -1,6 +1,6 @@
 """The Game API, the same in both modes. A Game talks to the game through a Transport:
 skython.inprocess.InProcessTransport inside the game (over the built-in _skython module), or
-skython.remote.RemoteTransport from another process (over the dev bridge, Task 22)."""
+skython.remote.RemoteTransport from another process (over the dev bridge)."""
 import math
 import threading
 import time
@@ -30,7 +30,7 @@ class Transport(Protocol):
 
     def close(self) -> None: ...
 
-    def events(self) -> EventStream: ...  # one stream per transport, made on first use (Task 36)
+    def events(self) -> EventStream: ...  # one stream per transport, made on first use
 
 
 def _positive_seconds(value, name: str) -> float:
@@ -40,7 +40,7 @@ def _positive_seconds(value, name: str) -> float:
 
 
 def _timeout_ms(timeout: float) -> int:
-    """Seconds -> whole milliseconds, rounded UP so that 0.0004 s is 1 ms, never the 0 that means nothing."""
+    """Seconds -> whole milliseconds, rounded up so that 0.0004 s is 1 ms, never the 0 that means nothing."""
     _positive_seconds(timeout, "timeout")
     ms = max(_g.MIN_TIMEOUT_MS, math.ceil(round(timeout * 1000, 6)))  # round() first: 1.001 * 1000 is 1000.9999999999999
     if ms > _g.MAX_TIMEOUT_MS:
@@ -77,7 +77,7 @@ class Game:
             self._retry_not_ready = _positive_seconds(retry_not_ready, "retry_not_ready")
         self.transport = transport
         self.welcome: dict = transport.welcome
-        #: The epoch when this Game was made, fixed for its life. It does NOT follow save loads: read
+        #: The epoch when this Game was made, fixed for its life. It does not follow save loads; read
         #: state()["epoch"] for the current one.
         self.epoch: int = self.welcome.get("epoch", 0)
         self._events_lock = threading.Lock()
@@ -92,7 +92,7 @@ class Game:
     @property
     def settings(self) -> Mapping[str, Any]:
         """This player script's settings file (scripts/<name>.toml or scripts/<name>/settings.toml), read-only:
-        tables are MappingProxyType, arrays tuples. Empty for a Game that is not a player script's (Task 43)."""
+        tables are MappingProxyType, arrays tuples. Empty for a Game that is not a player script's."""
         return self._settings
 
     # -- plumbing -------------------------------------------------------------------------------
@@ -178,7 +178,7 @@ class Game:
                                       {**st, "reason": "wait_ready timed out"})
             time.sleep(0.25)
 
-    # -- events (spec 4.6) ----------------------------------------------------------------------------
+    # -- events ----------------------------------------------------------------------------------
     def _event_dispatcher(self) -> EventDispatcher:
         with self._events_lock:
             if self._closing or self.closed:
@@ -246,7 +246,7 @@ class Game:
         return self.on("game_loaded", None, fn)
 
     def wait_for(self, predicate: Callable[[], Any], timeout: float, *, interval: float = 0.25) -> Any:
-        """Call predicate() every `interval` seconds until it returns something truthy, and return that (spec 4.7).
+        """Call predicate() every `interval` seconds until it returns something truthy, and return that.
         Raises WaitTimeout when `timeout` seconds pass first."""
         _positive_seconds(timeout, "timeout")
         _positive_seconds(interval, "interval")
@@ -273,7 +273,7 @@ class Game:
         """Load the save `name`. Without `wait`, returns {"save", "started"} once the load has started. With `wait`,
         returns the first interactive state() whose epoch is above the one before the call; NotReady with detail
         reason "load timed out" (plus the last state) if that takes longer than `timeout`. Every call in flight when
-        the load starts ends NotReady (spec 4.5); subscriptions stay."""
+        the load starts ends NotReady; subscriptions stay."""
         deadline = time.monotonic() + _positive_seconds(timeout, "timeout")
         before = self.state().get("epoch", 0) if wait else 0  # without wait, game.load is the only request sent
         started = _expect_dict(self._request(_g.OP_GAME_LOAD, {"save": name, "timeout_ms": _timeout_ms(timeout)}, timeout),
@@ -291,8 +291,8 @@ class Game:
 
     def close(self) -> None:
         """Close every subscription, close the event stream and the transport, and stop the event thread. The thread
-        is joined for at most 2 s: a callback still running after that may finish after close() returns (spec 4.6
-        allows it), but no further callback starts. Safe to call from inside a callback (it then does not join)."""
+        is joined for at most 2 s: a callback still running after that may finish after close() returns,
+        but no further callback starts. Safe to call from inside a callback (it then does not join)."""
         with self._events_lock:
             self._closing = True
             d, self._dispatcher = self._dispatcher, None
@@ -308,10 +308,10 @@ class Game:
 
 
 class Batch:
-    """Several papyrus.* steps in one request, run in order. Not a transaction (spec 4.3).
+    """Several papyrus.* steps in one request, run in order. Not a transaction.
 
     Each step method takes an optional `timeout` (seconds). The plugin applies one timeout to the whole
-    batch, so run() always sends one: run(timeout=...) if given, else the SUM of the step timeouts (5 s for
+    batch, so run() always sends one: run(timeout=...) if given, else the sum of the step timeouts (5 s for
     a step with none, the plugin's default), capped at MAX_TIMEOUT_MS; it waits that long plus GRACE_S."""
 
     def __init__(self, game: Game):

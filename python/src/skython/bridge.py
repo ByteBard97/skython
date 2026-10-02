@@ -20,7 +20,7 @@ connection's consumer, 0.25 s at a time; each event object becomes one frame thr
 max_queued_bytes cap covers events too). The connection's consumer is opened once its hello is accepted, travels
 beside every request text it submits (the text is forwarded unchanged, so a client cannot name another consumer),
 and is closed with the connection, which drops its subscriptions. The Dispatcher's reaper enforces
-each request's timeout_ms: the bridge never times a call out itself. With trace_timing (dev only, Task 38) the writer logs
+each request's timeout_ms: the bridge never times a call out itself. With trace_timing (dev only) the writer logs
 "timing: id=<id> bridge_read=<us> bridge_write=<us>" per request on the given clock (in the game _skython.now_us, the
 plugin's steady clock): read when the request frame was complete, write when its response frame was sent. An error from accept() (a client that
 reset before it was accepted, no descriptors left) is logged and the bridge keeps accepting."""
@@ -57,7 +57,7 @@ _STRUCTURE = re.compile(r'"(?:[^"\\]++|\\.)*+"?|[\[\]{}]', re.S)
 
 
 def _log_no_consumer(e: Exception) -> None:
-    """open_consumer failed. The expected case (a build with no event hub, before Task 39) is logged once per process
+    """open_consumer failed. The expected case (an older plugin build with no event hub) is logged once per process
     with its documented text; any other failure is unexpected and logged every time, naming the actual error."""
     global _no_hub_logged
     if "no event hub" not in str(e):
@@ -222,7 +222,7 @@ class _Conn:
             return False
         try:
             consumer = self.server.backend.open_consumer()  # before the welcome: every request has a consumer
-        except Exception as e:  # noqa: BLE001 - no event hub (the game build before Task 39): serve without events
+        except Exception as e:  # noqa: BLE001 - no event hub (an older plugin build): serve without events
             _log_no_consumer(e)
             consumer = 0  # requests still go with consumer 0; events.* answer unsupported (the hub is null)
         with self.cond:  # set under cond, so exactly one of this thread and close() closes the consumer
@@ -544,8 +544,8 @@ def serve(backend, *, host: str = _g.HOST, port: int = _g.CONFIG_KEYS["port"]["d
     `welcome_info` is a dict, or a function returning one, with plugin_version, game_version, runtime and
     epoch (a function gives every client the current epoch). Port 0 picks a free port (see .port). The
     session file, when given, gets the port and token; if the bridge cannot start, it gets an inactive
-    record with the reason instead, and the error is raised. trace_timing logs one timing line per request (Task 38;
-    clock: a function returning microseconds, default time.monotonic_ns() // 1000)."""
+    record with the reason instead, and the error is raised. trace_timing logs one timing line per request
+    (clock: a function returning microseconds, default time.monotonic_ns() // 1000)."""
     return BridgeServer(backend, host=host, port=port, token=token, session_file=session_file,
                         welcome_info=welcome_info, max_connections=max_connections,
                         max_inflight_per_connection=max_inflight_per_connection,

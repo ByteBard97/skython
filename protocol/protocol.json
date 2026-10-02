@@ -119,7 +119,7 @@
     {"name": "max_inflight_total", "type": "u32", "default": 1024, "min": 1, "max": 4294967295,
      "doc": "Requests in flight in the whole plugin (in-process and bridge together)."},
     {"name": "enable_console", "type": "bool", "default": false,
-     "doc": "Allow native.console (M2)."},
+     "doc": "Allow native.console."},
     {"name": "trace_timing", "type": "bool", "default": false,
      "doc": "Development only: log one timing line per request (submit, task start, callback, done)."},
     {"name": "console_echo_errors", "type": "bool", "default": true,

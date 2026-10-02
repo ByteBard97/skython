@@ -42,7 +42,7 @@ def test_float_array_items_skip_the_int_range_check():
 
 
 def test_int_arrays_and_scalars_are_still_range_checked():
-    # the scalar ambiguity: a bare int is an Int until the M3 signature table says otherwise
+    # the scalar ambiguity: a bare int is an Int until a signature table says otherwise
     with pytest.raises(errors.TypeMismatch):
         to_wire([3_000_000_000, 4])
     with pytest.raises(errors.TypeMismatch):

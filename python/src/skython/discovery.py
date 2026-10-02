@@ -1,4 +1,4 @@
-"""Find the dev bridge: explicit port+token, a session file, or environment variables. The bridge (Task 23)
+"""Find the dev bridge: explicit port+token, a session file, or environment variables. The bridge
 writes the session file with write_session_file, or write_inactive_session_file when it is not serving."""
 import json
 import os

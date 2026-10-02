@@ -1,5 +1,5 @@
-"""The Python fake's event hub and save/load (Task 36a). Every behaviour test runs against the fake and against the
-REAL Linux _skython (C++ EventHub + Dispatcher + FakeBackend, Tasks 34-35) when SKYTHON_REAL_MODULE_DIR names its
+"""The Python fake's event hub and save/load. Every behaviour test runs against the fake and against the
+real Linux _skython (C++ EventHub + Dispatcher + FakeBackend) when SKYTHON_REAL_MODULE_DIR names its
 build folder, so the fake cannot drift from core. The fake-only tests at the end cover the test-only counters."""
 import importlib
 import itertools
@@ -240,7 +240,7 @@ def test_one_consumer_holds_at_most_max_subscriptions_per_consumer(module):
 
 
 def test_a_consumers_queued_bytes_are_bounded(module):
-    # R61: 300 events of about 60 KB into a max_queue 1024 subscription nobody drains: the 16 MiB byte budget, not
+    # Byte budget: 300 events of about 60 KB into a max_queue 1024 subscription nobody drains: the 16 MiB byte budget, not
     # max_queue, decides how many stay, and the rest are counted in dropped on the first delivered frame.
     c = module.open_consumer()
     subscribe(module, c, "channel", {"channel": ["bytes"]}, max_queue=1024)
@@ -446,7 +446,7 @@ def test_counters_follow_consumers_and_subscriptions(fake):
 
 
 def test_without_a_hub_events_are_unsupported_and_open_consumer_raises(fake):
-    fake.hub = None  # the game build before Task 39 sets ModuleHost.events
+    fake.hub = None  # an older plugin build with no ModuleHost.events
     with pytest.raises(RuntimeError, match="no event hub"):
         fake.open_consumer()
     assert fake.next_events(1, 1.0) == "[]" and (fake.consumers(), fake.subscriptions()) == (0, 0)

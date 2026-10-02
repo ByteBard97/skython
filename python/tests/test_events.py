@@ -1,6 +1,6 @@
-"""skython.events and the Game event API over _skython: always against the fake, and against the REAL Linux module
-(C++ EventHub + Dispatcher, Task 35) when SKYTHON_REAL_MODULE_DIR names its build folder. Review Focus 2 (a slow
-callback) and 4 (close races), and the "no lost first event" rule, are pinned here for the in-process transport."""
+"""skython.events and the Game event API over _skython: always against the fake, and against the real Linux module
+(C++ EventHub + Dispatcher) when SKYTHON_REAL_MODULE_DIR names its build folder. A slow callback, close races,
+and the "no lost first event" rule, are pinned here for the in-process transport."""
 import importlib
 import json
 import logging
@@ -158,7 +158,7 @@ def test_a_raising_callback_is_logged_and_later_events_still_arrive(game, module
 
 
 def test_a_slow_callback_drops_only_its_own_events(game, module):
-    # Review Focus 2: its queue fills (drop-oldest), the drops arrive on its next event, another subscription of the
+    # A slow callback: its queue fills (drop-oldest), the drops arrive on its next event, another subscription of the
     # same Game keeps every event in order once the slow callback returns, and another Game is not held up at all.
     started = threading.Event()
     slow_seen, fast_seen, other_seen = [], [], []
@@ -169,7 +169,7 @@ def test_a_slow_callback_drops_only_its_own_events(game, module):
             started.set()
             time.sleep(2.0)
 
-    game.on("channel", {"channel": ["slow"]}, slow, max_queue=4)  # on_channel has no max_queue (Contracts)
+    game.on("channel", {"channel": ["slow"]}, slow, max_queue=4)  # on_channel has no max_queue
     game.on_channel("fast", fast_seen.append)
     with connect_in_process(module=module) as other:
         other.on_channel("slow", other_seen.append)
@@ -189,7 +189,7 @@ def test_a_slow_callback_drops_only_its_own_events(game, module):
 
 
 def test_events_during_a_load_are_suppressed_and_counted(game, module):
-    # Review Focus 3, Python side: death is deliver_while_loading false, channel is true.
+    # The loading rule, Python side: death is deliver_while_loading false, channel is true.
     deaths, msgs = [], []
     game.on_death(None, deaths.append)
     game.on_channel("c", msgs.append)
@@ -208,7 +208,7 @@ def test_events_during_a_load_are_suppressed_and_counted(game, module):
     assert msgs[0].data["payload"] == "during the load" and msgs[0].suppressed == 0
 
 
-# -- close races (Review Focus 4) --------------------------------------------------------------------------
+# -- close races ----------------------------------------------------------------------------------------
 def test_close_waits_for_a_running_callback_and_no_later_callback_starts(game, module):
     inside, release, closed = threading.Event(), threading.Event(), threading.Event()
     calls = []
@@ -273,9 +273,9 @@ def test_game_close_with_8_subscriptions_frees_the_consumer(module, fake):
 # -- no lost first event -----------------------------------------------------------------------------------
 def test_subscribe_then_immediate_push_loses_no_first_event(game, module):
     # The push happens after the hub accepted the subscription and before Game.on() registered it, and the patched
-    # request() returns only once the dispatch thread has FETCHED that event, i.e. while on() still holds the
+    # request() returns only once the dispatch thread has fetched that event, i.e. while on() still holds the
     # dispatcher's lock: exactly the window the lock closes. Without the lock (send() outside it) the dispatch thread
-    # would look the sub up, find nothing and drop the event, and this test fails at once. Review A#4.
+    # would look the sub up, find nothing and drop the event, and this test fails at once.
     stream = game.transport.events()
     fetched = threading.Event()
     real_next = stream.next
@@ -408,7 +408,7 @@ def test_on_after_close_is_connection_lost(fake):
     gm.close()
     with pytest.raises(errors.ConnectionLost):
         gm.on_channel("x", lambda e: None)
-    # An on() that got the dispatcher just before Game.close() stopped it (Review A#10): refused, nothing sent.
+    # An on() that got the dispatcher just before Game.close() stopped it: refused, nothing sent.
     gm2 = connect_in_process(module=fake)
     d = gm2._event_dispatcher()
     d.close()
@@ -418,7 +418,7 @@ def test_on_after_close_is_connection_lost(fake):
 
 
 def test_a_server_without_the_events_ops_is_unsupported():
-    # A protocol 1.0 server (Review A#12): its welcome lists no events.subscribe, so on() refuses before sending.
+    # A protocol 1.0 server: its welcome lists no events.subscribe, so on() refuses before sending.
     class OldServer:
         welcome, closed = {"epoch": 0, "protocol": [1, 0], "capabilities": ["game.state"]}, False
 
@@ -436,7 +436,7 @@ def test_a_server_without_the_events_ops_is_unsupported():
 
 
 def test_a_module_without_an_event_hub_is_unsupported(fake):
-    # The game build before Task 39 fills ModuleHost.events: open_consumer raises RuntimeError (Review A#1).
+    # An older plugin build has no ModuleHost.events: open_consumer raises RuntimeError.
     fake.hub = None
     with connect_in_process(module=fake) as gm:
         with pytest.raises(errors.Unsupported, match="no event hub"):
@@ -445,7 +445,7 @@ def test_a_module_without_an_event_hub_is_unsupported(fake):
 
 
 def test_the_dispatcher_tracks_and_untracks_each_subscription(fake_game):
-    # Task 37's remote stream bounds each subscription by these calls; in-process they are no-ops but still made.
+    # The remote stream bounds each subscription by these calls; in-process they are no-ops but still made.
     stream = fake_game.transport.events()
     calls = []
     stream.track = lambda sub, max_queue: calls.append(("track", sub, max_queue))
@@ -457,7 +457,7 @@ def test_the_dispatcher_tracks_and_untracks_each_subscription(fake_game):
     assert calls == [("track", a.sub, g.DEFAULT_EVENT_QUEUE), ("track", b.sub, 16), ("untrack", a.sub)]
 
 
-# -- close and re-entrancy (Task 36 review) ----------------------------------------------------------------
+# -- close and re-entrancy ------------------------------------------------------------------------------
 def _dispatch_threads() -> set:
     return {t for t in threading.enumerate() if t.name == "skython-events"}
 

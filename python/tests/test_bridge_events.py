@@ -1,5 +1,5 @@
 """Events through the dev bridge, end to end on Linux: a real BridgeServer over the fake _skython, the real remote
-transport and raw sockets. Review Focus 4 (a client disconnecting with events queued) and the "no lost first event"
+transport and raw sockets. A client disconnecting with events queued and the "no lost first event"
 rule over the bridge are pinned here."""
 import json
 import logging
@@ -132,8 +132,8 @@ def test_a_client_cannot_unsubscribe_another_connections_subscription(bridge, fa
 
 
 def test_subscribe_then_immediate_push_over_the_bridge_loses_no_first_event(bridge, fake):
-    # As in Task 36: request() returns only once the dispatch thread has FETCHED the pushed event, i.e. while Game.on()
-    # still holds the dispatcher's lock; without the lock the event would be dropped as unknown. Review A#4.
+    # As in-process: request() returns only once the dispatch thread has fetched the pushed event, i.e. while Game.on()
+    # still holds the dispatcher's lock; without the lock the event would be dropped as unknown.
     with remote(bridge) as game:
         stream = game.transport.events()
         fetched = threading.Event()
@@ -168,7 +168,7 @@ def test_subscribe_then_immediate_push_over_the_bridge_loses_no_first_event(brid
 
 
 def test_a_blocked_callback_on_one_connection_does_not_hold_up_another(bridge, fake):
-    # Review Focus 2 remotely (Review A#13): each connection has its own consumer, pump and client queues.
+    # A slow callback, remotely: each connection has its own consumer, pump and client queues.
     release, started = threading.Event(), threading.Event()
     other_seen = []
 
@@ -189,9 +189,9 @@ def test_a_blocked_callback_on_one_connection_does_not_hold_up_another(bridge, f
 
 
 def test_a_backend_without_an_event_hub_still_serves_requests(start, fake, caplog, monkeypatch):
-    # The game build deploys this bridge (Task 38) before Task 39 fills ModuleHost.events, so open_consumer raises
+    # An older plugin build serves this bridge without ModuleHost.events, so open_consumer raises
     # RuntimeError. Each connection is served with consumer 0 and no pump, events.* answer unsupported, and the
-    # warning is logged once per process. Review A#1.
+    # warning is logged once per process.
     caplog.set_level(logging.WARNING, logger="skython.bridge")
     monkeypatch.setattr("skython.bridge._no_hub_logged", False)
     fake.hub = None
@@ -222,7 +222,7 @@ def test_an_event_frame_before_its_subscribe_response_is_delivered():
         else:
             reply(ok(req["id"], None))
 
-    # A protocol 1.1 welcome: Game.on() refuses a server whose capabilities lack events.subscribe (Task 36).
+    # A protocol 1.1 welcome: Game.on() refuses a server whose capabilities lack events.subscribe.
     with FakeServer(handler, welcome={"protocol": [1, 1], "capabilities": list(g.OPS)}) as srv:
         with connect_remote(port=srv.port, token=srv.token) as game:
             game.on_channel("warm", lambda e: None)  # starts the dispatch thread
@@ -244,7 +244,7 @@ def test_an_unknown_message_type_closes_the_connection():
 
 
 def test_disconnect_with_1000_events_queued_frees_its_consumer(start, fake):
-    # Review Focus 4: the connection's consumer and every subscription it owned are closed; others keep working.
+    # A client disconnecting: the connection's consumer and every subscription it owned are closed; others keep working.
     b = start()
     other_seen = []
     with remote(b) as other:
@@ -306,7 +306,7 @@ def test_request_text_reaches_submit_unchanged_with_the_consumer_beside_it(start
     s.close()
 
 
-# -- the client-side bound (Review Focus 1-2 remotely) -------------------------------------------------------
+# -- the client-side bound (floods and slow callbacks, remotely) ----------------------------------------------------
 def frame(sub, seq, **extra):
     return {"type": "event", "event": "channel", "sub": sub, "seq": seq, "epoch": 1, "data": chan("u", str(seq)), **extra}
 
@@ -426,7 +426,7 @@ def test_a_connection_closed_while_its_consumer_opens_does_not_leak_it(start, fa
     s.close()
 
 
-# -- Task 37 review minors (fixed in Task 38's first commit) ---------------------------------------------------
+# -- RemoteEventStream edge cases --------------------------------------------------------------------------------
 def test_track_with_max_queue_0_keeps_one_frame_like_the_hub():
     s = RemoteEventStream()
     for seq in range(1, 4):

@@ -1,11 +1,11 @@
-"""Task 43: scripts/<name>.toml as a read-only game.settings, and console echo of script failures (fake _skython)."""
+"""scripts/<name>.toml as a read-only game.settings, and console echo of script failures (fake _skython)."""
 import sys
 import textwrap
 
 import pytest
 
 from skython.inprocess import connect_in_process
-from test_host import host, script  # noqa: F401  (the host fixture and the script writer from Task 24's tests)
+from test_host import host, script  # noqa: F401  (the host fixture and the script writer from test_host.py)
 
 CAPTURE = """
 SEEN = {}

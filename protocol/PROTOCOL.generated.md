@@ -266,7 +266,7 @@ Save names (`game.save`, `game.load`) match `^[A-Za-z0-9_]{1,64}$`.
 | `default_timeout_ms` | u32 | 5000 | 1..3600000 | Timeout applied to a call that sends none. |
 | `max_inflight_per_connection` | u32 | 256 | 1..4294967295 | Requests one dev-bridge connection may have in flight. |
 | `max_inflight_total` | u32 | 1024 | 1..4294967295 | Requests in flight in the whole plugin (in-process and bridge together). |
-| `enable_console` | bool | false | - | Allow native.console (M2). |
+| `enable_console` | bool | false | - | Allow native.console. |
 | `trace_timing` | bool | false | - | Development only: log one timing line per request (submit, task start, callback, done). |
 | `console_echo_errors` | bool | true | - | A failing player script also prints one rate-limited line in the in-game console. |
 

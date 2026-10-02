@@ -1,8 +1,8 @@
-"""A pure-Python stand-in for the built-in `_skython` module (plan index, Contracts), for tests.
+"""A pure-Python stand-in for the built-in `_skython` module, for tests.
 
 It speaks the same text as the real module: a request is the JSON text {"type": "request", "id", "op", "args"}
 and a response is the JSON text {"type": "response", "id", "ok", "result" | "error"}. It behaves like core's
-Dispatcher (Task 18) over FakeBackend:
+Dispatcher over FakeBackend:
 - an op whose table entry has needs_game answers not_ready at submit while the fake is "not ready"
   (_fake_set_not_ready), or while it is paused and the request has require_unpaused;
 - more than max_inflight_total requests in flight answers busy;
@@ -20,13 +20,13 @@ Dispatcher (Task 18) over FakeBackend:
 Handlers run on their own daemon threads, so blocking handlers behave like slow game calls.
 
 Use the `fake` fixture in conftest.py: it installs an instance as sys.modules["_skython"] and closes it
-afterwards. Tasks 23 (bridge) and 24 (skython._host) reuse it.
+afterwards. The bridge and skython._host tests reuse it.
 
-Events (Task 36a): `hub` is a FakeHub, a Python copy of core's EventHub (Task 34). events.subscribe and
+Events: `hub` is a FakeHub, a Python copy of core's EventHub. events.subscribe and
 events.unsubscribe are answered at submit time through the hub, with the consumer passed beside the request text
 (0 -> bad_request "no event consumer", as the Dispatcher; an unknown or closed consumer -> the hub's own texts);
-open_consumer, close_consumer, next_events and _fake_push_event are the Task 35 module API; consumers() and
-subscriptions() are test-only counters. game.save and game.load follow FakeBackend (Task 35): save names are kept in
+open_consumer, close_consumer, next_events and _fake_push_event are the module's event API; consumers() and
+subscriptions() are test-only counters. game.save and game.load follow FakeBackend: save names are kept in
 `saves`; a load bumps the loads counter (so the epoch); the error texts are responses.json 64-65.
 """
 import collections
@@ -286,10 +286,11 @@ class _FakeSub:
 
 
 class FakeHub:
-    """core's EventHub (Task 34) in Python: consumers, a bounded drop-oldest queue per subscription, seq from 1 per
+    """core's EventHub in Python: consumers, a bounded drop-oldest queue per subscription, seq from 1 per
     subscription (gaps equal drops), the epoch stamp, equality-set filters, the loading rule (an event whose
     table entry has deliver_while_loading false is not queued while loading() is true; it counts as suppressed), and
-    R61's bounds: max_subscriptions_per_consumer and a byte budget per consumer."""
+    the per-consumer bounds (max_subscriptions_per_consumer and a byte budget per consumer), so one consumer cannot
+    starve the others."""
 
     def __init__(self, epoch, loading, max_queued_bytes_per_consumer: int = _g.MAX_QUEUED_EVENT_BYTES_PER_CONSUMER):
         self._epoch, self._loading = epoch, loading  # callables
@@ -325,7 +326,7 @@ class FakeHub:
     def subscribe(self, consumer: int, args: dict) -> dict:
         event = args.get("event")
         spec = _g.EVENTS.get(event) if isinstance(event, str) else None
-        if spec is None:  # _op_problem (Task 33) refuses unknown events first; this is core's own check
+        if spec is None:  # _op_problem refuses unknown events first; this is core's own check
             raise _bad(f"unknown event '{_clip_text(str(event), 64)}'")
         flt = _parse_filter(event, spec, args.get("filter"))  # before max_queue, as core
         max_queue = args.get("max_queue", _g.DEFAULT_EVENT_QUEUE)
@@ -380,7 +381,7 @@ class FakeHub:
                                     "data": data}, size))
                 self._consumers[s.consumer] += size
                 while self._consumers[s.consumer] > self.max_queued_bytes_per_consumer and s.queue:
-                    self._drop_oldest(s)  # R61: the pushed subscription's oldest first, the new event last
+                    self._drop_oldest(s)  # over budget: the pushed subscription's oldest first, the new event last
             self._cond.notify_all()
 
     def next(self, consumer: int, timeout: float, max_events: int = _g.MAX_EVENTS_PER_NEXT) -> list[dict]:
@@ -469,14 +470,14 @@ def fake_handler(op: str, args: dict, ctx: Ctx):
         if fn == "Count":
             return fake.handler_calls
         raise FakeRemoteError(_g.CODE_UNKNOWN_FUNCTION, f"Fake has no function {fn}")
-    if op == _g.OP_GAME_SAVE:  # FakeBackend (Task 35): never overwrites; texts are responses.json 64
+    if op == _g.OP_GAME_SAVE:  # as FakeBackend: never overwrites; texts are responses.json 64
         with fake._cond:
             if args["name"] in fake.saves:
                 raise FakeRemoteError(_g.CODE_BAD_REQUEST, f"a save named {args['name']} already exists",
                                       {"reason": "save_exists"})
             fake.saves.add(args["name"])
         return {"name": args["name"]}
-    if op == _g.OP_GAME_LOAD:  # needs_game false, so the readiness check is the handler's own (index Contracts)
+    if op == _g.OP_GAME_LOAD:  # needs_game false, so the readiness check is the handler's own
         reason = fake._not_ready
         if reason in ("starting", "loading"):  # FakeBackend's texts and detail (core's not_ready_message)
             raise FakeRemoteError(_g.CODE_NOT_READY, _NOT_READY_TEXT[reason],
@@ -543,7 +544,7 @@ class FakeSkython:
                 return ticket
             self.requests.append(obj)
             op, args = obj["op"], obj["args"]
-            if op in _EVENT_OPS:  # answered by the hub at once: no backend call, no deadline (Task 35's Dispatcher)
+            if op in _EVENT_OPS:  # answered by the hub at once: no backend call, no deadline (as the Dispatcher)
                 self._finish_now(ticket, req_id, self._hub_answer(op, args, consumer, req_id))
                 return ticket
             needs_game = _g.OPS[op]["needs_game"]
@@ -621,10 +622,10 @@ class FakeSkython:
             return self._in_flight()
 
     def now_us(self) -> int:
-        """Like the real module's (Task 38): steady microseconds (CLOCK_MONOTONIC, as std::chrono::steady_clock)."""
+        """Like the real module's: steady microseconds (CLOCK_MONOTONIC, as std::chrono::steady_clock)."""
         return time.monotonic_ns() // 1000
 
-    # -- events (the Task 35 module API) ---------------------------------------------------------
+    # -- events (the module's event API) ------------------------------------------------------
     # A test may set self.hub = None: the fake then acts like a build with no event hub (ModuleHost.events null).
     def open_consumer(self) -> int:
         if self.hub is None:
@@ -667,9 +668,9 @@ class FakeSkython:
         return 0 if self.hub is None else self.hub.subscriptions(consumer)
 
     def _hub_answer(self, op: str, args: dict, consumer: int, req_id: int) -> str:
-        if self.hub is None:  # the Dispatcher with DispatcherOptions::events null (Task 35)
+        if self.hub is None:  # the Dispatcher with DispatcherOptions::events null
             return _response(req_id, False, _g.CODE_UNSUPPORTED, message=_NO_HUB)
-        if consumer == 0:  # the Dispatcher's own check, before the hub (Task 35)
+        if consumer == 0:  # the Dispatcher's own check, before the hub
             return _response(req_id, False, _g.CODE_BAD_REQUEST, message="no event consumer")
         try:
             if op == _g.OP_EVENTS_SUBSCRIBE:

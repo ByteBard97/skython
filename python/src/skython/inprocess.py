@@ -56,7 +56,7 @@ class InProcessTransport:
                     raise errors.Unsupported(_g.CODE_UNSUPPORTED, "this _skython module has no event API")
                 try:
                     self._stream = InProcessEventStream(self._m)
-                except RuntimeError as e:  # ModuleHost.events is null: the game build before Task 39 (Review A#1)
+                except RuntimeError as e:  # ModuleHost.events is null: an older plugin build with no event hub
                     raise errors.Unsupported(_g.CODE_UNSUPPORTED, f"no event hub: {e}") from None
             return self._stream
 
@@ -68,7 +68,7 @@ class InProcessTransport:
         text = _framing.dumps({"type": "request", "id": req_id, "op": op, "args": args})  # EncodeError: nothing sent
         stream = self._stream
         consumer = stream.consumer if stream is not None else 0
-        # The consumer travels beside the request text (index Contracts), only when there is one: 0 is the default.
+        # The consumer travels beside the request text, only when there is one: 0 is the default.
         raw = self._m.call(text, wait_s, consumer) if consumer else self._m.call(text, wait_s)
         resp = _object(raw, f"the response to {op}")
         if type(resp.get("id")) is not int or resp["id"] != req_id:
@@ -85,5 +85,5 @@ class InProcessTransport:
 
 def connect_in_process(*, module=None, call_timeout: float = _g.CALL_TIMEOUT_S,
                        retry_not_ready: bool | float = False) -> Game:
-    """A Game over _skython. skython.connect() calls this inside the game (Task 22)."""
+    """A Game over _skython. skython.connect() calls this inside the game."""
     return Game(InProcessTransport(module), call_timeout=call_timeout, retry_not_ready=retry_not_ready)

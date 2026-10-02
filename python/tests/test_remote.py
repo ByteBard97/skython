@@ -1,6 +1,6 @@
 """The remote transport against a fake socket server: the handshake, every way a peer can misbehave, and
-the bookkeeping (pending calls, unmatched responses, closed sockets). The Game API on top is Task 21's and is
-tested there; the real bridge is Task 23's."""
+the bookkeeping (pending calls, unmatched responses, closed sockets). The Game API on top is
+tested in test_game.py; the real bridge in test_bridge.py."""
 import inspect
 import re
 import socket

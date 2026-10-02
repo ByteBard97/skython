@@ -89,7 +89,7 @@ def test_bad_explicit_port_is_not_running():
         find_session(port="abc", token=TOK, env={})
 
 
-# -- writing session files (the bridge, Task 23) ------------------------------------------------------------
+# -- writing session files (the bridge) ------------------------------------------------------------------
 def test_write_session_file_round_trips_and_has_exactly_the_table_fields(tmp_path):
     p = tmp_path / "deeper" / "session.json"  # the folder is created
     write_session_file(p, Session("127.0.0.1", 45999, TOK, pid=7, plugin_version="0.1.0"))

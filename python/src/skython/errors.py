@@ -4,7 +4,7 @@ Every exception here survives pickle and copy (multiprocessing, concurrent.futur
 all rely on that), so the classes with a custom __init__ define __reduce__.
 
 The classes are written out so that `errors.NotReady`, pickling and type checkers work. Which wire code maps to
-which class is NOT decided here: it is the generated table in _protocol_generated (protocol/protocol.json).
+which class is not decided here: it is the generated table in _protocol_generated (protocol/protocol.json).
 At the bottom of this module each class is looked up by the name the table gives and takes its `code` from it.
 """
 from . import _protocol_generated as _g

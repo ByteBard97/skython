@@ -511,7 +511,7 @@ def test_a_stale_load_finishing_during_reloads_teardown_never_runs_setup(host, f
 
 
 def test_reload_drops_the_old_scripts_subscriptions(host, fake, tmp_path):
-    # The old Game is closed by reload(); with Task 36 that also closes its consumer and subscriptions.
+    # The old Game is closed by reload(), which also closes its consumer and subscriptions.
     script(tmp_path, "t24_events", """
         seen = []
 

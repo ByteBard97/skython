@@ -22,7 +22,7 @@ def game(fake):
         yield g
 
 
-# ---- Task 22: socket fixtures for the remote transport's tests --------------------------------------------
+# ---- socket fixtures for the remote transport's tests --------------------------------------------
 import socket  # noqa: E402
 
 from support import FakeServer  # noqa: E402

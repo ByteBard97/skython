@@ -1,13 +1,13 @@
-"""What the plugin runs inside the game. SkythonCore.dll (Task 26) imports this module on its host
+"""What the plugin runs inside the game. SkythonCore.dll imports this module on its host
 thread right after Py_InitializeFromConfig and calls main() once.
 
 main() sets up logging (python.log next to session.json, rotating 1 MiB x 3; WARNING and above also go to
 the plugin's own log through _skython.log), sends stdout, stderr and uncaught exceptions to that log, starts
 the dev bridge when bridge_enabled is set, loads the player scripts, and returns. It never raises: a failure
 is logged and the game goes on. Long-running work lives on threads the scripts start; the host thread
-itself releases the GIL once main() returns (Global Constraints).
+itself releases the GIL once main() returns.
 
-Player scripts (spec 4.10): every module `<name>.py` and package `<name>/__init__.py` in the scripts folder,
+Player scripts: every module `<name>.py` and package `<name>/__init__.py` in the scripts folder,
 in name order (names starting with "_" or "." are skipped), with `setup(game)` and an optional
 `teardown()`. Each import + setup runs on its own thread while the host thread waits up to SETUP_TIMEOUT_S:
 a script whose setup blocks is reported as "timeout: ..." and keeps running, and the next script still
@@ -42,7 +42,7 @@ log = logging.getLogger("skython.host")
 
 SETUP_WARN_S = 1.0
 SETUP_TIMEOUT_S = 10.0
-#: None keeps CPython's default switch interval (0.005 s). Spike S9 (Task 5) measures what a CPU-bound
+#: None keeps CPython's default switch interval (0.005 s). Spike S9 measures what a CPU-bound
 #: Python thread costs other threads' game calls; if its RESULTS.md row recommends 0.001, set it here.
 SWITCH_INTERVAL_S: float | None = None
 LOG_FILE_NAME = "python.log"
@@ -374,7 +374,7 @@ def _drop_script_modules(name: str, folder: pathlib.Path) -> None:
 
 
 def reload(name: str) -> str:
-    """Development aid, best effort (spec 4.10): teardown(), close the script's previous Game, forget the
+    """Development aid, best effort: teardown(), close the script's previous Game, forget the
     script's modules, import it again and call setup() with a new Game. State in C extensions is not reset;
     threads teardown() did not stop keep running, but their Game is closed (ConnectionLost). Don't call reload on
     a script's own name from its setup()."""

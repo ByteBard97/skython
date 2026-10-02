@@ -1,8 +1,8 @@
-"""The remote transport: the Game API from another process, over the dev bridge (Task 23).
+"""The remote transport: the Game API from another process, over the dev bridge.
 
 One socket and one reader thread per connection; any thread may call. Responses are matched to callers by
 request id. A send that times out may have put half a frame on the wire, so the connection is then closed,
-never reused. Event frames go to the connection's RemoteEventStream (Task 37); any other message type after the
+never reused. Event frames go to the connection's RemoteEventStream; any other message type after the
 handshake closes the connection."""
 import collections
 import itertools
@@ -202,7 +202,7 @@ class RemoteTransport:
                 reason = str(e) or type(e).__name__
             else:
                 return
-            # Mark closed BEFORE releasing the send lock, so a queued sender sees it and writes nothing.
+            # Mark closed before releasing the send lock, so a queued sender sees it and writes nothing.
             with self._lock:
                 self.closed = True
         self._fail_all(reason)  # outside the send lock: closes the socket, fails the waiting callers
@@ -210,7 +210,7 @@ class RemoteTransport:
 
     def request(self, op: str, args: dict, wait_s: float) -> dict:
         req_id = next(self._ids)
-        # Encode BEFORE registering the future: an oversize or unencodable request raises EncodeError
+        # Encode before registering the future: an oversize or unencodable request raises EncodeError
         # and leaves nothing behind in _pending.
         frame = _framing.encode({"type": "request", "id": req_id, "op": op, "args": args})
         fut: Future = Future()
@@ -242,7 +242,7 @@ class RemoteTransport:
 
 
 def _handshake(sock: socket.socket, token: str, client_name: str, deadline: float) -> dict:
-    """Send hello, read welcome. The WHOLE exchange is bounded by `deadline`, not each recv."""
+    """Send hello, read welcome. The whole exchange, not each recv, is bounded by `deadline`."""
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise TimeoutError("connect_timeout used up before the hello was sent")
