@@ -23,13 +23,14 @@ namespace SkythonTestEsp
         static readonly FormKey COCMarkerHeading = E(0x000032);
         static readonly FormKey ImpFloorMid01 = E(0x03CB89);       // 256 x 256 floor piece; scaled x4 below
         static readonly FormKey WhiterunBreezehome = E(0x0165A8);   // vanilla interior whose cell record ours copies
+        static readonly FormKey WRFireLightShadow01 = E(0x077FCE);  // a light Breezehome places (radius 768, shadow casting)
 
         static readonly (string EditorId, FormKey Key)[] EsmRefs =
         {
             ("NordRace", NordRace), ("WEFarmerMale", WEFarmerMale), ("EncClassBanditMelee", EncClassBanditMelee),
             ("XMarker", XMarker),
             ("COCMarkerHeading", COCMarkerHeading), ("ImpFloorMid01", ImpFloorMid01),
-            ("WhiterunBreezehome", WhiterunBreezehome),
+            ("WhiterunBreezehome", WhiterunBreezehome), ("WRFireLightShadow01", WRFireLightShadow01),
         };
 
         // `verify-esm <Skyrim.esm>`: prints "<EditorID> <FormKey> ok|MISMATCH <found>" for each reference above.
@@ -51,7 +52,8 @@ namespace SkythonTestEsp
 
         // Ours (SkythonTest.esp|0x0008xx)
         public const uint LocationId = 0x000801, CellId = 0x000802, NpcBaseId = 0x000803, NpcRefId = 0x000804,
-                          MarkerId = 0x000805, CocMarkerId = 0x000806, FloorId = 0x000807, NextId = 0x000808;
+                          MarkerId = 0x000805, CocMarkerId = 0x000806, FloorId = 0x000807, LightRefId = 0x000808,
+                          NextId = 0x000809;
 
         public static void Write(string path, string esmPath)
         {
@@ -124,6 +126,11 @@ namespace SkythonTestEsp
             var floor = new PlacedObject(O(FloorId), R) { Scale = 4f, Placement = At(0, 0, 0) };
             floor.Base = ImpFloorMid01;
             cell.Temporary.Add(floor);
+            // One placed light above the floor's centre (R69). The copied cell had no light reference of its own, and coc
+            // from an exterior crashed reading a null NiLight (Task 48 launches 1, 2, 4, 5).
+            var light = new PlacedObject(O(LightRefId), R) { Placement = At(0, 0, 256) };
+            light.Base = WRFireLightShadow01;
+            cell.Temporary.Add(light);
             return cell;
         }
 

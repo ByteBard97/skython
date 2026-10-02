@@ -7,6 +7,7 @@ cell SkythonTestCell 000802:SkythonTest.esp block=0/5 location=000801:SkythonTes
   persistent SkythonTestMarker 000805:SkythonTest.esp base=00003B:Skyrim.esm
   temporary - 000806:SkythonTest.esp base=000032:Skyrim.esm
   temporary - 000807:SkythonTest.esp base=03CB89:Skyrim.esm
+  temporary - 000808:SkythonTest.esp base=077FCE:Skyrim.esm
 quest SkythonTestQuest 000800:SkythonTest.esp flags=AllowRepeatedStages form_version=0
   alias 0 SkythonTarget Reference flags=Optional, AllowDead, AllowDisabled, AllowReserved, AllowCleared
   alias 1 SkythonItem Reference flags=Optional, AllowDead, AllowDisabled, AllowReserved, AllowCleared
