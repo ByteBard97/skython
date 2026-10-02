@@ -1,5 +1,5 @@
 # list.ps1 -PathsB64 <base64 of newline-separated paths>: LISTS (removes nothing) what the harness put on the box:
-# the given deployed paths, our folder, our scheduled task, spike/plugin logs and the spike throwaway saves.
+# the given deployed paths, our folder, our scheduled tasks, spike/plugin logs and the spike throwaway saves.
 param([string]$PathsB64 = '')
 $my = Join-Path $env:USERPROFILE 'Documents\My Games\Skyrim Special Edition'
 function Show($p) { if (Test-Path -LiteralPath $p) { $i = Get-Item -LiteralPath $p -Force; "{0,-10} {1:s} {2}" -f $(if ($i.PSIsContainer) { 'dir' } else { $i.Length }), $i.LastWriteTime, $i.FullName } }
@@ -8,9 +8,11 @@ if ($PathsB64) { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Pa
 else { '(none recorded)' }
 "== our folder C:\dev\skyrim-python-box =="
 Get-ChildItem 'C:\dev\skyrim-python-box' -Force -ErrorAction SilentlyContinue | ForEach-Object { Show $_.FullName }
-"== our scheduled task =="
-$t = Get-ScheduledTask -TaskName SkyrimPythonGame -ErrorAction SilentlyContinue
-if ($t) { "SkyrimPythonGame -> " + ($t.Actions | % { "$($_.Execute) $($_.Arguments)" }) } else { '(not registered)' }
+"== our scheduled tasks =="
+foreach ($n in 'SkyrimPythonGame','SkyrimPythonShot') {
+  $t = Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue
+  if ($t) { "$n -> " + ($t.Actions | % { "$($_.Execute) $($_.Arguments)" }) } else { "$n (not registered)" }
+}
 "== logs written by the spikes and the plugin =="
 Get-ChildItem (Join-Path $my 'SKSE') -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'SkyrimPython*' } | ForEach-Object { Show $_.FullName }
 "== throwaway saves (spikebase, spytest, s4test, skypy_r38_savecall) =="

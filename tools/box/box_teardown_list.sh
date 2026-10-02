@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # LISTS what the harness put on the box (deployed paths from out/box-deployed.txt, C:\dev\skyrim-python-box,
-# the scheduled task SkyrimPythonGame, spike/plugin logs, throwaway saves). It removes nothing.
+# the scheduled tasks SkyrimPythonGame and SkyrimPythonShot, spike/plugin logs, throwaway saves). It removes nothing.
 set -euo pipefail
 source "$(dirname "$0")/box_env.sh"
 paths=""; [ -f "$BOX_DEPLOYED" ] && paths="$(cat "$BOX_DEPLOYED")"
