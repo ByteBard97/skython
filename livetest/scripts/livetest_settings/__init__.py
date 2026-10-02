@@ -2,6 +2,7 @@
 import json
 import os
 import pathlib
+import time
 
 import _skython
 
@@ -22,5 +23,5 @@ def setup(game) -> None:
         frozen = True
     out = pathlib.Path(json.loads(_skython.config())["log_dir"]) / "livetest_settings.json"
     tmp = out.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"settings": _plain(game.settings), "frozen": frozen}))
+    tmp.write_text(json.dumps({"settings": _plain(game.settings), "frozen": frozen, "written_at": time.time()}))
     os.replace(tmp, out)
