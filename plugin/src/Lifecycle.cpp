@@ -1,8 +1,10 @@
 #include "Lifecycle.h"
+#include "Events.h"
 #include "Log.h"
 #include "spy/lifecycle_state.h"
 #include <RE/Skyrim.h>
 #include <atomic>
+#include <cstring>
 
 namespace spy::life {
 namespace {
@@ -16,13 +18,22 @@ LifecycleState& State()
 
 std::atomic_bool g_lastInteractive{ false };
 std::atomic_bool g_saveLoadInProgress{ false };  // Task 39 (R60): see SaveLoadInProgress in Lifecycle.h
+// game_loaded waits for the interactive transition (S6: kPostLoadGame comes before the Loading Menu closes).
+// 0 = nothing pending, 1 = a save load succeeded, 2 = a new game started.
+std::atomic_int g_pendingLoaded{ 0 };
 
 void NoteInteractive()
 {
     const bool now = State().interactive();
     if (g_lastInteractive.exchange(now) == now) return;
     log::Info(std::string("lifecycle: interactive = ") + (now ? "true" : "false") + ", epoch " + std::to_string(State().epoch()));
-    if (now) g_saveLoadInProgress.store(false);  // the save load or new game is over (Task 40 moves this to game_loaded)
+    if (!now) return;
+    const int pending = g_pendingLoaded.exchange(0);
+    g_saveLoadInProgress.store(false);  // R60: the save load / new game ends here, right before game_loaded is pushed
+    if (pending == 0) return;
+    // No lifecycle lock is held here (Lifecycle.cpp has none): Push takes only the hub's mutex.
+    events::Push("game_loaded", json{ { "new_game", pending == 2 } });  // the hub stamps the new epoch
+    log::Info("events: game_loaded epoch " + std::to_string(State().epoch()));
 }
 
 struct MenuSink final : RE::BSTEventSink<RE::MenuOpenCloseEvent>
@@ -71,22 +82,36 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
         break;
     }
     case SKSE::MessagingInterface::kPreLoadGame:
-        g_saveLoadInProgress.store(true);
+        g_pendingLoaded.store(0);
+        g_saveLoadInProgress.store(true);  // Task 39 (R60)
         State().on_pre_load_game();
         log::Info("lifecycle: loading a save");
         break;
     case SKSE::MessagingInterface::kPostLoadGame: {
         const bool ok = reinterpret_cast<std::uintptr_t>(m->data) != 0;  // a packed bool, not a pointer
-        if (!ok) g_saveLoadInProgress.store(false);  // a failed load raises no interactive signal of its own
+        g_pendingLoaded.store(ok ? 1 : 0);
+        if (!ok) g_saveLoadInProgress.store(false);  // Task 39 (R60): a failed load raises no game_loaded
         State().on_post_load_game(ok);
         log::Info(std::string("lifecycle: save load ") + (ok ? "succeeded" : "FAILED") + ", epoch " + std::to_string(State().epoch()));
         break;
     }
     case SKSE::MessagingInterface::kNewGame:
-        g_saveLoadInProgress.store(true);
+        g_pendingLoaded.store(2);
+        g_saveLoadInProgress.store(true);  // Task 39 (R60)
         State().on_new_game();
+        events::Push("new_game", json::object());
         log::Info("lifecycle: new game, epoch " + std::to_string(State().epoch()));
         break;
+    case SKSE::MessagingInterface::kSaveGame: {
+        // SKSE sends the save's name as data (dataLen bytes, maybe NUL-terminated). Logged raw once per launch so the
+        // RESULTS entry can confirm the payload (Task 41 matches pending saves on it).
+        std::string name;
+        if (m->data && m->dataLen > 0) name.assign(static_cast<const char*>(m->data), strnlen(static_cast<const char*>(m->data), m->dataLen));
+        static std::atomic_bool logged{ false };
+        if (!logged.exchange(true)) log::Info("lifecycle: kSaveGame data '" + name + "' (" + std::to_string(m->dataLen) + " bytes)");
+        events::Push("game_saved", json{ { "name", name } });
+        break;
+    }
     default:
         return;
     }

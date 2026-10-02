@@ -258,3 +258,60 @@ def read_events(sock: socket.socket, n: int, timeout: float) -> list[dict]:
             break
         out.append(f)
     return out
+
+
+# ---- Task 40: world helpers. Everything here runs on s4test and is never saved. ---------------------------
+from skython import errors as _errors  # noqa: E402
+from skython.values import Form as _Form  # noqa: E402
+
+PLAYER = _Form(form_id=0x14)
+
+
+def spawn(game, base_key: str, dx: float = 600.0):
+    """A new reference of base_key, dx units from the player (PlaceAtMe takes every argument: no defaults)."""
+    ref = game.call_method(PLAYER, "ObjectReference", "PlaceAtMe", game.form(base_key), 1, False, False)
+    game.call_method(ref, "ObjectReference", "MoveTo", PLAYER, dx, 0.0, 0.0, True)
+    return ref
+
+
+def cleanup(game, *refs) -> None:
+    for r in refs:
+        try:
+            game.call_method(r, "ObjectReference", "Disable", False)
+            game.call_method(r, "ObjectReference", "Delete")
+        except _errors.SkythonError:
+            pass
+
+
+def neutral_fight(game, a, b, aggression: float = 0.0, health: float = 5000.0) -> None:
+    """a and b fight each other and leave the player alone: the player is a ghost (undo with
+    game.call_method(PLAYER, "Actor", "SetGhost", False)), both get `aggression`, then StartCombat both ways.
+    Aggression 0 keeps them off the player but may let them drop out of a forced fight; the tests retry once with
+    aggression 3 (frenzied: still harmless to a ghost) when no hit arrives.
+    Both leave every faction first (s4test is next to Whiterun: guards attacked the wolves as predators and killed
+    them in 2-4 s, so they never hit each other) and get `health` (wolves at 22 Health killed each other within
+    about 6 s; the flood test needs 30 s of combat). Live measurement, Task 40."""
+    game.call_method(PLAYER, "Actor", "SetGhost", True)
+    for x in (a, b):
+        game.call_method(x, "Actor", "RemoveFromAllFactions")
+        game.call_method(x, "Actor", "SetActorValue", "Health", health)
+        game.call_method(x, "Actor", "SetActorValue", "Aggression", aggression)
+    game.call_method(a, "Actor", "StartCombat", b)
+    game.call_method(b, "Actor", "StartCombat", a)
+
+
+def box_menu(action: str, name: str) -> None:
+    """Open or close a menu through DevBench on the box (Task 1c); no player input."""
+    body = json.dumps({"action": action, "name": name})
+    subprocess.run([str(REPO / "tools" / "box" / "box_console.sh"), "--tool", "menu", body], check=True,
+                   capture_output=True, text=True, timeout=90)
+
+
+def translate_player(game, dx: float, dy: float, dz: float, speed: float = 3000.0, settle: float = 6.0) -> tuple:
+    """Glide the player by (dx, dy, dz) with TranslateTo (no MoveTo, so no Loading Menu), wait, stop. Returns the
+    position before the move."""
+    x, y, z = (game.call_method(PLAYER, "ObjectReference", f"GetPosition{c}") for c in "XYZ")
+    game.call_method(PLAYER, "ObjectReference", "TranslateTo", x + dx, y + dy, z + dz, 0.0, 0.0, 0.0, speed, 0.0)
+    time.sleep(settle)
+    game.call_method(PLAYER, "ObjectReference", "StopTranslation")
+    return x, y, z

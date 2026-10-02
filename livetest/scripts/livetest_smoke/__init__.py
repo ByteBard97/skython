@@ -25,6 +25,7 @@ _stop = threading.Event()
 _spin_stop = threading.Event()
 _spin_thread = None
 _spin_loops = 0
+_held: dict = {}  # Task 40: consumer -> sub of the undrained hold_sub subscriptions
 
 
 def _dir() -> pathlib.Path:
@@ -164,6 +165,29 @@ def _mod_event(game, event_name: str) -> dict:
     return {"received": got}
 
 
+def _hold_sub(cmd: dict) -> dict:
+    """An in-process consumer with one subscription that nobody drains (Review Focus 1: its queue must stay bounded)."""
+    consumer = _skython.open_consumer()
+    args = {"event": cmd["event"], "max_queue": int(cmd.get("max_queue", 4))}
+    if cmd.get("filter") is not None:
+        args["filter"] = cmd["filter"]
+    r = json.loads(_skython.call(json.dumps({"type": "request", "id": 1, "op": "events.subscribe", "args": args}), 5.0, consumer))
+    if not r.get("ok"):
+        _skython.close_consumer(consumer)
+        return {"error": r.get("error")}
+    _held[consumer] = r["result"]["sub"]
+    return {"consumer": consumer, "sub": r["result"]["sub"]}
+
+
+def _release_sub(cmd: dict) -> dict:
+    consumer = int(cmd["consumer"])
+    events = json.loads(_skython.next_events(consumer, 0.5))
+    _skython.close_consumer(consumer)
+    _held.pop(consumer, None)
+    return {"count": len(events), "seqs": [e["seq"] for e in events],
+            "first_dropped": events[0].get("dropped", 0) if events else 0}
+
+
 def _handle(game, cmd: dict) -> dict:
     global _spin_thread, _spin_loops
     name = cmd.get("cmd")
@@ -185,6 +209,10 @@ def _handle(game, cmd: dict) -> dict:
         return _sweep(cmd)
     if name == "mod_event":
         return _mod_event(game, str(cmd.get("event", "skython_smoke")))
+    if name == "hold_sub":
+        return _hold_sub(cmd)
+    if name == "release_sub":
+        return _release_sub(cmd)
     return {"error": f"unknown command {name!r}"}
 
 
