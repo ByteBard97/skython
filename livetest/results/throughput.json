@@ -1,0 +1,82 @@
+{
+  "date": "2026-10-02T03:19:39",
+  "game_version": "1.6.1170.0",
+  "runtime": "AE",
+  "sequential_calls": 500,
+  "sequential_seconds": 46.256,
+  "sequential_per_s": 10.8,
+  "p50_ms": 92.39,
+  "p99_ms": 100.28,
+  "curve": [
+    {
+      "depth": 1,
+      "calls": 2000,
+      "seconds": 184.764,
+      "per_s": 10.8,
+      "busy": 0
+    },
+    {
+      "depth": 8,
+      "calls": 2000,
+      "seconds": 23.725,
+      "per_s": 84.3,
+      "busy": 0
+    },
+    {
+      "depth": 32,
+      "calls": 2000,
+      "seconds": 5.846,
+      "per_s": 342.1,
+      "busy": 0
+    },
+    {
+      "depth": 128,
+      "calls": 2000,
+      "seconds": 1.611,
+      "per_s": 1241.2,
+      "busy": 0
+    },
+    {
+      "depth": 256,
+      "calls": 2000,
+      "seconds": 1.016,
+      "per_s": 1968.5,
+      "busy": 0
+    }
+  ],
+  "batch": {
+    "steps": 100,
+    "seconds": 4.663,
+    "ms_per_step": 46.63
+  },
+  "spin": {
+    "switch_interval_s": 0.005,
+    "calls": 300,
+    "remote": {
+      "no_spin": {
+        "per_s": 10.8,
+        "p50_ms": 92.24,
+        "p99_ms": 99.16
+      },
+      "spin": {
+        "per_s": 10.8,
+        "p50_ms": 92.73,
+        "p99_ms": 117.47
+      }
+    },
+    "inprocess": {
+      "no_spin": {
+        "per_s": 21.6,
+        "p50_ms": 46.11,
+        "p99_ms": 47.83
+      },
+      "spin": {
+        "per_s": 11.0,
+        "p50_ms": 92.17,
+        "p99_ms": 97.92
+      }
+    },
+    "spin_loops": 129320,
+    "fps_observed_spin": null
+  }
+}

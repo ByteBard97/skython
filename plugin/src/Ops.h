@@ -1,6 +1,9 @@
 #pragma once
 #include "spy/dispatcher.h"
 #include "spy/requests.h"
+#include <atomic>
+#include <chrono>
+#include <cstdint>
 #include <utility>
 
 namespace spy::ops {
@@ -8,6 +11,56 @@ namespace spy::ops {
 inline thread_local bool t_inTask = false;
 struct InTask { InTask() : prev_(std::exchange(t_inTask, true)) {} ~InTask() { t_inTask = prev_; }
                 InTask(const InTask&) = delete; InTask& operator=(const InTask&) = delete; private: bool prev_; };
+
+// Task 31 (ruling R38): how long our queued task bodies hold the main thread in one frame. Bodies that start less than
+// kGap after the previous one ended belong to the same run (one frame's drain). A run is folded into the two maxima
+// when the next run starts, so the latest run shows up after one more task. Written only from inside our SKSE tasks,
+// which are serialized (observed, R49), on varying threads; the maxima are atomics because BaseState() reads them
+// from any thread. No I/O, no allocation.
+class DrainMeter
+{
+public:
+    void Begin()
+    {
+        const auto now = Clock::now();
+        if (count_ == 0 || now - lastEnd_ > kGap) {
+            Fold();
+            start_ = now;
+            count_ = 0;
+        }
+        ++count_;
+    }
+    void End() { lastEnd_ = Clock::now(); }
+    double MaxMs() const { return maxMs_.load(); }
+    std::uint32_t MaxCount() const { return maxCount_.load(); }
+
+private:
+    using Clock = std::chrono::steady_clock;
+    static constexpr auto kGap = std::chrono::milliseconds(1);
+    void Fold()
+    {
+        if (count_ == 0) return;
+        const double ms = std::chrono::duration<double, std::milli>(lastEnd_ - start_).count();
+        if (ms > maxMs_.load()) maxMs_.store(ms);
+        if (count_ > maxCount_.load()) maxCount_.store(count_);
+    }
+    Clock::time_point start_{}, lastEnd_{};
+    std::uint32_t count_ = 0;
+    std::atomic<double> maxMs_{0.0};
+    std::atomic<std::uint32_t> maxCount_{0};
+};
+
+inline DrainMeter& Meter()
+{
+    static auto* meter = new DrainMeter();  // immortal, like the dispatcher
+    return *meter;
+}
+
+struct Measured
+{
+    Measured() { Meter().Begin(); }
+    ~Measured() { Meter().End(); }
+};
 
 // Inside an SKSE task only. Validation failures become Err results; nothing throws out of Run.
 // `done` may be called inside an SKSE task or on a VM thread; the Dispatcher accepts either (Task 18).

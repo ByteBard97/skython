@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-02T03:19:41",
+  "requested": 1024,
+  "per_connection": 256,
+  "connections": 4,
+  "ok": 1024,
+  "busy": 0,
+  "seconds": 1.31,
+  "max_task_drain_ms": 2.2454,
+  "max_task_drain_count": 904,
+  "max_task_drain_ms_before": 0.7351,
+  "s9_frame_ms": 46.1,
+  "worst_frame_ms_estimate": 48.35,
+  "unmeasured": "the object-conversion AddTask, when the callback runs outside our task (Task 27), is not metered",
+  "per_task_drain_ms": 0.0025,
+  "drain_ms_at_cap_extrapolated": 2.54,
+  "worst_frame_ms_estimate_at_cap": 48.64
+}

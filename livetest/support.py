@@ -178,3 +178,12 @@ def refused(port: int = 45977) -> bool:
     except (ConnectionRefusedError, socket.timeout, OSError):
         return True
     return False
+
+
+def diagnostics(session) -> dict:
+    """game.state's diagnostics over a fresh raw connection (late_results_dropped, in_flight, and Task 31's drain meter)."""
+    s = raw_connect(session)
+    try:
+        return rpc(s, "game.state")["result"]["diagnostics"]
+    finally:
+        s.close()

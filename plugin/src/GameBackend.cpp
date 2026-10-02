@@ -19,6 +19,7 @@ public:
         // Exactly one AddTask; never block the submitting Python thread.
         SKSE::GetTaskInterface()->AddTask([op, args, done, cancelled, progress] {
             ops::InTask in;
+            ops::Measured measured;  // Task 31 drain meter: before the cancelled() check, a cancelled body still ran
             if (cancelled()) return;  // timed out, cancelled or a load started while queued
             try {
                 ops::Run(op, args, done, cancelled, progress);
@@ -43,7 +44,8 @@ private:
     static json WithDiagnostics(json s)
     {
         auto& d = GetDispatcher();
-        s["diagnostics"] = {{"late_results_dropped", d.LateResults()}, {"in_flight", d.InFlight()}};
+        s["diagnostics"] = {{"late_results_dropped", d.LateResults()}, {"in_flight", d.InFlight()},
+                            {"max_task_drain_ms", ops::Meter().MaxMs()}, {"max_task_drain_count", ops::Meter().MaxCount()}};
         return s;
     }
 
@@ -57,6 +59,7 @@ private:
         if (!life::GameLoaded() || life::Loading()) return done(OpResult::Ok(std::move(s)));
         SKSE::GetTaskInterface()->AddTask([done, cancelled, s = std::move(s)]() mutable {
             ops::InTask in;
+            ops::Measured measured;  // Task 31 drain meter: before the cancelled() check, a cancelled body still ran
             if (cancelled()) return;
             try {
                 ops::AddStateExtras(s);

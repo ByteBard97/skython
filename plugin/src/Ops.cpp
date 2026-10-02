@@ -293,7 +293,7 @@ void BatchStep(const std::shared_ptr<BatchState>& st);
 
 void QueueBatchStep(const std::shared_ptr<BatchState>& st)
 {
-    SKSE::GetTaskInterface()->AddTask([st] { ops::InTask in; BatchStep(st); });  // one task per step (spec 4.5)
+    SKSE::GetTaskInterface()->AddTask([st] { ops::InTask in; ops::Measured measured; BatchStep(st); });  // one task per step (spec 4.5)
 }
 
 void BatchStep(const std::shared_ptr<BatchState>& st)
