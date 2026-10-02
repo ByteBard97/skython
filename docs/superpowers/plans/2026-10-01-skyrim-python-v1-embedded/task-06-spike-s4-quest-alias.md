@@ -4,14 +4,14 @@ Adapted from: branch `plan-out-of-process`, task 4 (`task-04-spike-s4-bind-a-que
 
 > Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, section 4.4). Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **M0 spike rules:** The spike DLLs are throwaway code. They are written for speed, not quality, and never linked into the real plugin. Every spike records PASS/FAIL with evidence in `spikes/RESULTS.md`. S1 gates Task 3; S8 gates Tasks 18-32; **S2, S9 and S4 gate Part C (Tasks 25-32)**; S7 gates Tasks 28 and 29; S5, S6 and S10 gate only the M2 plan. **S4 FAIL: STOP and ask the owner.** An S4 failure routes alias calls (spec 4.4) through a pre-authored Papyrus helper, which needs the M1.5 test ESP and **invalidates Task 29's alias code** (`ResolveAlias`, `AliasRef` handling, alias calls in `ResolveTarget`); do not start Part C until the owner has decided.
+> **M0 spike rules:** The spike DLLs are throwaway code. They are written for speed, not quality, and never linked into the real plugin. Every spike records PASS/FAIL with evidence in `spikes/RESULTS.md`. S1 gates Task 3; S8 gates Tasks 18-32; **S2, S9 and S4 gate Part C (Tasks 25-32)**; S7 gates Tasks 28 and 29; S5, S6 and S10 gate only the M2 plan. **S4 outcome (ruling R45, measured on the box 2026-10-01): PASS with constraint.** Scripted aliases pass; plain (unscripted) aliases are not dispatchable, so v1 drives only aliases that carry a script. (Original rule, not triggered for scripted aliases: S4 FAIL: STOP and ask the owner.) An S4 failure routes alias calls (spec 4.4) through a pre-authored Papyrus helper, which needs the M1.5 test ESP and **invalidates Task 29's alias code** (`ResolveAlias`, `AliasRef` handling, alias calls in `ResolveTarget`); do not start Part C until the owner has decided.
 
 **Files:**
 - Modify: `spikes/spike-dll/src/main.cpp`
 
 **Interfaces:**
 - Consumes (Task 4): `spike::OnMainThread`, `spike::Functor`, `spike::NoArgs`, `spike::Log`, `spike::ParseInt`. No new includes are needed (Task 1's block covers them).
-- Produces for Tasks 9 and 29: the quest FormID, alias ID and original reference (`SPY_S4_QUEST`, `SPY_S4_ALIAS`, `SPY_S4_REF`), the working read-back function name (`GetReference` or `GetRef`), the alias handle layout, whether a scripted and an unscripted alias both dispatch, and a LocationAlias yes/no, all in `spikes/RESULTS.md`.
+- Produces for Tasks 9 and 29 (recorded in the S4 row, R45: PASS with constraint): the quest FormID, alias ID and original reference (`SPY_S4_QUEST`, `SPY_S4_ALIAS`, `SPY_S4_REF`), the working read-back function name (`GetReference` or `GetRef`), the alias handle layout, whether a scripted and an unscripted alias both dispatch, and a LocationAlias yes/no, all in `spikes/RESULTS.md`.
 - Produces for Task 9 (code): `spike::AliasCand`, `spike::AliasPick` (`quest`, `alias`, `original`, `attached`, `candidates`), `spike::PickAlias(isLoc)` (first candidate in `quest`/`alias`/`original`; up to `kMaxAliasCandidates` = 50 in `candidates`), `spike::AliasCall`.
 
 Spec S4 criterion: `ForceRefTo` on an alias bound by quest + alias ID, then `GetRef` returns the same reference. There is no test ESP until M1.5, so the spike borrows a running vanilla quest's filled alias in a **throwaway save**, forces it to the player, reads it back, and restores the original. What makes the test meaningful: the original is **not** the player (otherwise "forced to the player, reads back the player" proves nothing), and the alias is re-resolved from quest FormID plus alias ID inside every main-thread task (the spec 4.4 path), with no engine pointer kept across tasks. Each step is its own main-thread task (no dispatch from inside a callback), so S4 does not depend on S2's nested-dispatch answer.
@@ -256,8 +256,81 @@ std::string S4Loc()
         pass ? "PASS" : "FAIL", q, a, orig, want, before, forced, after, restored, last, tried);
 }
 }
+
+namespace spike {
+// Diagnostics (S4 deviation): list the candidates, run S4On on one by index.
+std::string S4Cands()
+{
+    auto pick = PickAlias(false);
+    std::string out = std::format("S4CANDS n={}", pick->candidates.size());
+    std::size_t i = 0;
+    for (const auto& c : pick->candidates)
+        out += std::format(" [{}:{:08X}/{}/{:08X}/{}]", i++, c.quest, c.alias, c.original, c.attached ? "scripted" : "plain");
+    return out;
+}
+std::string S4Bound(std::size_t idx)
+{
+    auto pick = PickAlias(false);
+    if (idx >= pick->candidates.size()) return "S4BOUND out of range";
+    const auto c = pick->candidates[idx];
+    return OnMainThread([c](std::function<void(std::string)> finish) {
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        auto* policy = vm->GetObjectHandlePolicy();
+        auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(c.quest);
+        RE::BGSBaseAlias* base = nullptr;
+        if (quest) for (auto* a : quest->aliases) if (a && a->aliasID == c.alias) { base = a; break; }
+        auto* ra = skyrim_cast<RE::BGSRefAlias*>(base);
+        if (!ra) return finish("no alias");
+        const auto h = policy->GetHandleForObject(RE::BGSRefAlias::VMTYPEID, ra);
+        RE::BSTSmartPointer<RE::BSScript::Object> o1, o2;
+        const bool f1 = vm->FindBoundObject(h, "ReferenceAlias", o1);
+        const bool f2 = vm->FindBoundObject(h, "Alias", o2);
+        finish(std::format("S4BOUND handle={:016X} type={} q={:08X} attached={} find_ReferenceAlias={} obj1={} find_Alias={} obj2={}", h,
+            RE::BGSRefAlias::VMTYPEID, c.quest, c.attached, f1, o1 ? "yes" : "no", f2, o2 ? "yes" : "no"));
+    }, std::chrono::seconds(10));
+}
+// Diagnostic probe for a plain (unscripted) reference alias: create a ReferenceAlias script object, bind it to the
+// alias handle, dispatch GetReference on the object (read only: no ForceRefTo), report. Spike only.
+std::string S4Plain(std::size_t idx)
+{
+    auto pick = PickAlias(false);
+    if (idx >= pick->candidates.size()) return "S4PLAIN out of range";
+    const auto c = pick->candidates[idx];
+    auto res = std::make_shared<std::string>("none");
+    const auto r = OnMainThread([c, res](std::function<void(std::string)> finish) {
+        auto* vm = RE::BSScript::Internal::VirtualMachine::GetSingleton();
+        auto* policy = vm->GetObjectHandlePolicy();
+        auto* quest = RE::TESForm::LookupByID<RE::TESQuest>(c.quest);
+        RE::BGSBaseAlias* base = nullptr;
+        if (quest) for (auto* a : quest->aliases) if (a && a->aliasID == c.alias) { base = a; break; }
+        auto* ra = skyrim_cast<RE::BGSRefAlias*>(base);
+        if (!ra) return finish("no alias");
+        const auto h = policy->GetHandleForObject(RE::BGSRefAlias::VMTYPEID, ra);
+        RE::BSTSmartPointer<RE::BSScript::Object> obj;
+        const bool created = vm->CreateObject(RE::BSFixedString("ReferenceAlias"), obj);
+        if (!created || !obj) return finish(std::format("S4PLAIN create_failed created={}", created));
+        vm->BindObject(obj, h, false);
+        RE::BSTSmartPointer<RE::BSScript::Object> found;
+        const bool f = vm->FindBoundObject(h, "ReferenceAlias", found);
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{ new Functor([finish, h, f](Var v) {
+            std::uint32_t id = 0;
+            if (v.IsObject() && v.GetObject()) id = static_cast<std::uint32_t>(v.GetObject()->GetHandle() & 0xFFFFFFFF);
+            finish(std::format("S4PLAIN created=true bound_find={} handle={:016X} GetReference_via_object={:08X}", f, h, id));
+        }) };
+        if (!vm->DispatchMethodCall(obj, RE::BSFixedString("GetReference"), RE::MakeFunctionArguments(), cb))
+            finish(std::format("S4PLAIN created=true bound_find={} dispatch_on_object_failed", f));
+    }, std::chrono::seconds(10));
+    return r;
+}
+std::string S4Idx(std::size_t idx)
+{
+    auto pick = PickAlias(false);
+    if (idx >= pick->candidates.size()) return "S4IDX out of range";
+    return "S4IDX " + std::to_string(idx) + " " + S4On(pick->candidates[idx]).text;
+}
+}
 ```
-And in `Handle`: `if (line == "s4") return S4(); if (line == "s4loc") return S4Loc();`
+And in `Handle`: `if (line == "s4") return S4(); if (line == "s4loc") return S4Loc();` plus the diagnostics `if (line.rfind("s4bound ", 0) == 0) ...; if (line == "s4cands") ...; if (line.rfind("s4idx ", 0) == 0) ...; if (line.rfind("s4plain ", 0) == 0) ...` (see main.cpp: `S4Cands`, `S4Idx N`, `S4Bound N`, `S4Plain N` run on candidate N).
 
 Names to confirm by grepping `plugin/extern/CommonLibSSE-NG` before building (record in `docs/PINS.md`; fix compile errors by matching the header): `TESQuest::aliases`/`aliasAccessLock`/`IsRunning`, `BGSBaseAlias::aliasID`, `BGSRefAlias::GetReference`, `BGSLocAlias` location accessor, `BGSRefAlias::VMTYPEID`/`BGSLocAlias::VMTYPEID`, `TESDataHandler::GetFormArray`, `MakeFunctionArguments` with a `BGSLocation*`, `Variable::IsObject`/`GetObject`, and that `LookupByID<T>` exists with that template form.
 
@@ -284,3 +357,5 @@ Fill the S4 row in `spikes/RESULTS.md` (S4 and S4LOC outputs, which read-back na
 ```bash
 git add spikes && git commit -m "test(spike): S4 bind ReferenceAlias and LocationAlias by quest and alias id, ForceRefTo and read back"
 ```
+
+> **Measured on the box (2026-10-01, Windows-native), ruling R45:** the pass criterion is now: `ForceRefTo` then `GetReference`/`GetRef` round trip on a **scripted** `ReferenceAlias` bound by quest + alias ID. Result: PASS on 3 scripted aliases (e.g. quest 0010FDD5 alias 7, original 0001A677: `after=00000014 last=0001A677`); both `GetReference` and `GetRef` work; handle = `(aliasID << 32) | questFormID`, `BGSRefAlias::VMTYPEID` 140. A plain (unscripted) alias is not dispatchable: `FindBoundObject` is false, `DispatchMethodCall` returns false (`DISPATCH_FAILED`, no crash), so the original `S4` (whose first candidate was plain) reports FAIL; that FAIL no longer stops the plan. **If it fails (plain alias):** v1 rule: aliases we drive carry a minimal `ReferenceAlias` script (the M1.5 test ESP gives every alias one; tell skyrim-dm); Task 29 returns `type_mismatch "unscripted alias; attach a script or call the quest's own function"` when `FindBoundObject` is false. The `CreateObject` + `BindObject` probe (`s4plain`) made a plain alias work but was refused (it persists script instances into saves). Native C++ alias operations are recorded for after this plan. LocationAlias is NOT_RUN (all 50 location aliases tried are empty) and is verified in M1.5. Task 29 inputs: `SPY_S4_QUEST=0010FDD5 SPY_S4_ALIAS=7 SPY_S4_REF=0001A677`. Diagnostic commands kept: `s4cands`, `s4idx N`, `s4bound N`, `s4plain N`.
