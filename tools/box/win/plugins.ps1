@@ -1,4 +1,4 @@
-# plugins.ps1 -Mode read|backup|add|restore [-ExpectCur <sha256>] [-ExpectNew <sha256>]   (Gate 0)
+# plugins.ps1 -Mode read|backup|add|restore [-ExpectCur <sha256>] [-ExpectNew <sha256>]   (test ESP switch)
 # The box's plugins.txt (%LOCALAPPDATA%\Skyrim Special Edition, the same file for every install) changes only by one
 # added line "*SkythonTest.esp" and by putting the backup back.
 # read: "CUR <sha|NONE> <b64|->", "BAK <sha|NONE> <b64|->", "GAME IDLE|RUNNING".
@@ -70,7 +70,7 @@ switch ($Mode) {
     $c = Bytes $PluginsTxt; $b = Bytes $Backup
     if ($null -eq $c -or $null -eq $b) { Refuse 'plugins.txt or its backup is missing' }
     if ((Sha $c) -ne $ExpectCur) { Refuse "plugins.txt has sha $(Sha $c), Linux expected $ExpectCur" }
-    # R71: also the game's own inactive line (no "*"), written when the ESP is in Data but not enabled.
+    # Also the game's own inactive line (no "*"), written when the ESP is in Data but not enabled.
     if ((Sha $c) -ne (Sha (Compose $b)) -and (Sha $c) -ne (Sha (Compose $b ''))) { Refuse 'plugins.txt is not exactly the backup plus *SkythonTest.esp or SkythonTest.esp' }
     Copy-Item -LiteralPath $Backup -Destination $PluginsTxt -Force
     $w = Bytes $PluginsTxt

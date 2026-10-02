@@ -8,7 +8,7 @@
 # Only box_deploy.sh calls this. -Game names the install (ae1170, ae17104); its game folder comes from box.config
 # (config_lib.ps1), never from the caller, and an unknown or unconfigured key is refused. Allowed destinations are
 # paths under that install's Data\SKSE\Plugins and the single files in $Singles: Data\Scripts\SkyrimPython.pex (the
-# spike's script) and, under Gate 0, Data\SkythonTest.esp and exactly six Data\Scripts\*.pex. Each single file takes
+# spike's script) and, for the test ESP switch, Data\SkythonTest.esp and exactly six Data\Scripts\*.pex. Each single file takes
 # -Kind file only.
 param([string]$Mode, [string]$Game = '', [string]$DestB64, [string]$SrcB64 = '', [string]$Kind = 'file')
 $ErrorActionPreference = 'Stop'
@@ -18,7 +18,7 @@ $dest = From-B64 $DestB64
 $gameDir = Get-GameDir $Game
 if (-not $gameDir) { "REFUSED unknown install '$Game' (not in box.config; run tools/box/box_setup.sh)"; exit 2 }
 # Allowed destinations: the install's Data\SKSE\Plugins tree, and the single files below outside it: the spike's
-# compiled Papyrus script (box_deploy.sh --pex) and the Gate 0 list (box_deploy.sh --esp, --test-pex).
+# compiled Papyrus script (box_deploy.sh --pex) and the test ESP list (box_deploy.sh --esp, --test-pex).
 $data = $gameDir + '\Data'
 $PexDest = $data + '\Scripts\SkyrimPython.pex'
 $EspDest = $data + '\SkythonTest.esp'

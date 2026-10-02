@@ -6,10 +6,10 @@
 # 3. no destructive verb in any script that acts on the box (Remove-Item, Unregister-ScheduledTask, rm, del, ...);
 # 4. Stop-Process only by the two game process names;
 # 5. the box paths box_env.sh derives from the settings file (box.local.env.example's placeholders here);
-# 6. Part C (Tasks 25-32): the two-DLL deploy targets, recorded moves, launch env, the bridge session tunnel
+# 6. the two-DLL deploy targets, recorded moves, launch env, the bridge session tunnel
 #    (loopback only, token only in out/), the box file mirror, save-name checks, the teardown list's saves, and the
 #    snapshot's rule for a log rewritten with the same bytes after the stamp;
-#    Gate 0 (Task 45, owner decision 7): --esp, --test-pex, the single-file allow-list, plugins.txt add/restore.
+#    the test ESP switch: --esp, --test-pex, the single-file allow-list, plugins.txt add/restore.
 # 8. the settings file and the two installs: a missing file or variable is a clear error, BOX_GAME picks the folders,
 #    place.ps1's allow-list and launch.ps1's required version follow the install, and no private name is committed.
 # Every check runs against tools/box/box.local.env.example (BOX_LOCAL_ENV), never this machine's box.local.env.
@@ -97,7 +97,7 @@ t="$(BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --pex "$tmpd/SkyrimPython.pex"
 [ "$t" = "$EX_1170\Data\Scripts\SkyrimPython.pex" ] && ok "--pex target is Data\\Scripts\\SkyrimPython.pex" || bad "--pex target: '$t'"
 if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --pex "$tmpd/Other.pex" >/dev/null 2>&1; then bad "--pex accepted Other.pex"; else ok "--pex refuses a file not named SkyrimPython.pex"; fi
 if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --pex "$tmpd/missing.pex" >/dev/null 2>&1; then bad "--pex accepted a missing file"; else ok "--pex refuses a missing file"; fi
-# place.ps1 allows outside Data\SKSE\Plugins only the single files in $Singles: that .pex plus the Gate 0 list (6j)
+# place.ps1 allows outside Data\SKSE\Plugins only the single files in $Singles: that .pex plus the test ESP list (6j)
 grep -qF "\$PexDest = \$data + '\Scripts\SkyrimPython.pex'" "$B/win/place.ps1" 2>/dev/null \
   && grep -qF -- '-and -not ($Singles -ccontains $dest)' "$B/win/place.ps1" && ok "place.ps1 allow-list: Plugins tree + the single files" || bad "place.ps1 allow-list"
 # box_deploy records through put_file, which refuses a target that exists and is not recorded
@@ -156,7 +156,7 @@ t="$(BOX_LAUNCH_PRINT_ENV=1 "$B/box_launch.sh" --env SKYTHON_TEST_UNVERIFIED_RUN
 t="$(BOX_LAUNCH_PRINT_ENV=1 "$B/box_launch.sh" 2>&1)"; [ -z "$t" ] && ok "no --env: launch.env is empty (nothing leaks into the next launch)" || bad "launch.env without --env: '$t'"
 if BOX_LAUNCH_PRINT_ENV=1 "$B/box_launch.sh" --env PATH=/x >/dev/null 2>&1; then bad "--env accepted PATH"; else ok "--env refuses a name outside SKYTHON_TEST_*"; fi
 grep -qF "'^(SKYTHON_TEST_[A-Z0-9_]+)=(.*)\$'" "$B/win/launch.ps1" 2>/dev/null && ok "launch.ps1 applies only SKYTHON_TEST_* lines" || bad "launch.ps1 does not filter launch.env"
-# 6c2. launch.ps1 Steam logoff (ruling A7): detects LoggedOff / "Logged In Elsewhere", retries the loader at most
+# 6c2. launch.ps1 Steam logoff (spike S8): detects LoggedOff / "Logged In Elsewhere", retries the loader at most
 #      once, re-ensures Steam only by starting it -silent, and names the reason in the RESULT line
 L="$B/win/launch.ps1"; lc="$(grep -vE '^\s*#' "$L" 2>/dev/null)"
 grep -qF "\$logoffPat = 'LoggedOff|Logged In Elsewhere'" "$L" 2>/dev/null && ok "launch.ps1 matches LoggedOff / Logged In Elsewhere" || bad "launch.ps1 has no logoff pattern"
@@ -257,10 +257,10 @@ echo "$pre" | grep -qF '$fullDest = [IO.Path]::GetFullPath($dest)' \
   && echo "$pre" | grep -qF "if (\$dest -match '\.\.' -or -not (\$fullDest.StartsWith(\$root) -or (\$Singles -ccontains \$fullDest))) { \"REFUSED" \
   && ok "place.ps1 checks GetFullPath(Dest) and '..' before the mode switch (all modes)" || bad "place.ps1 does not normalise Dest for every mode"
 
-# 6g. the teardown list shows Task 31's save
+# 6g. the teardown list shows the save-call test's save
 grep -qF 'spikebase|spytest|s4test|skypy_r38_savecall' "$B/win/list.ps1" 2>/dev/null && ok "list.ps1 lists skypy_r38_savecall" || bad "list.ps1 does not list skypy_r38_savecall"
 
-# 6h. the SKSE modal dialog (R50): wait_log.ps1 exits 2 with DIALOG; box_shot.sh and its task
+# 6h. the SKSE modal dialog: wait_log.ps1 exits 2 with DIALOG; box_shot.sh and its task
 wl="$B/win/wait_log.ps1"
 grep -qF 'Start-ScheduledTask -TaskName SkyrimPythonShot' "$wl" 2>/dev/null && grep -qF "'^\s*SkyrimSE\s.*SKSE Plugin Loader'" "$wl" \
   && grep -qF '"DIALOG $dlg"' "$wl" && grep -qE '^\s*exit 2$' "$wl" && grep -qF 'LastWriteTimeUtc -gt $t0' "$wl" \
@@ -297,7 +297,7 @@ grep -vE '^\s*#' "$sl" | grep -qE 'LastWriteTime(Utc)? *-(lt|le)|launch\.stamp' 
 grep -qF 'reads as UNCHANGED: snapshot_lib cannot tell' "$B/win/files.ps1" "$B/win/wait_log.ps1" 2>/dev/null \
   && bad "the old 'reads as UNCHANGED' caveat is still documented" || ok "no stale 'reads as UNCHANGED' caveat"
 
-# 6j. Gate 0 (Task 45, owner decision 7): exactly Data\SkythonTest.esp, exactly six Data\Scripts\*.pex, and
+# 6j. the test ESP switch: exactly Data\SkythonTest.esp, exactly six Data\Scripts\*.pex, and
 #     plugins.txt changed only by adding *SkythonTest.esp and putting the backup back (no ssh in print/local modes).
 D="$EX_1170\Data"
 gd="$(mktemp -d)"; mkdir -p "$gd/sub"
@@ -325,17 +325,17 @@ grep -qE 'TEST_PEX_NAMES=\(Skython\.pex SkythonTestQuestBase\.pex SkythonTestQue
   && ok "box_deploy.sh TEST_PEX_NAMES is exactly the six names" || bad "box_deploy.sh TEST_PEX_NAMES"
 grep -qE 'put_file "\$ESP" "\$ESP_DEST"' "$B/box_deploy.sh" && grep -qE 'put_file "\$\{TPEX\[\$i\]\}" "\$\{TPEX_DEST\[\$i\]\}"' "$B/box_deploy.sh" \
   && ok "--esp and --test-pex go through put_file (absent or ours; recorded)" || bad "--esp/--test-pex do not use put_file"
-# Gate 0 file and the deploy record, against 6f3's stub (never print mode): without out/gate0-accepted nothing is
+# test ESP switch file and the deploy record, against 6f3's stub (never print mode): without out/gate0-accepted nothing is
 # placed; with it, an existing Data\SkythonTest.esp or Data\Scripts\*.pex that is not ours is never overwritten.
 drec2="$gd/box-deployed.txt"; : > "$drec2"; g0="$gd/gate0-accepted"
 gdep() { : > "$STUBLOG"; STUB_EXISTS="$1" BOX_DEPLOYED="$drec2" BOX_GATE0_FILE="$g0" BOX_SSH_STUB="$STUB" "$B/box_deploy.sh" "${@:2}" 2>&1; }
 for m in "--esp $gd/SkythonTest.esp" "--test-pex $gd/Skython.pex"; do
   # shellcheck disable=SC2086
   t="$(gdep ABSENT $m)"; rc=$?
-  [ "$rc" != 0 ] && case "$t" in *"Gate 0 is not recorded"*) true ;; *) false ;; esac && ! grep -q 'place.ps1' "$STUBLOG" && [ ! -s "$drec2" ] \
-    && ok "${m%% *} refuses without out/gate0-accepted (no place.ps1 call, nothing recorded)" || bad "${m%% *} without Gate 0: rc=$rc '$t'"
+  [ "$rc" != 0 ] && case "$t" in *"test ESP switch is off"*) true ;; *) false ;; esac && ! grep -q 'place.ps1' "$STUBLOG" && [ ! -s "$drec2" ] \
+    && ok "${m%% *} refuses without out/gate0-accepted (no place.ps1 call, nothing recorded)" || bad "${m%% *} with the switch off: rc=$rc '$t'"
 done
-echo 'owner decision 7 accepted on 2026-10-02: "offline test"' > "$g0"
+echo 'test ESP accepted on 2026-10-02: "offline test"' > "$g0"
 for m in "--esp $gd/SkythonTest.esp" "--test-pex $gd/Skython.pex"; do
   # shellcheck disable=SC2086
   t="$(gdep EXISTS $m)"; rc=$?
@@ -358,14 +358,14 @@ P_="$B/box_plugins.sh"; pd="$(mktemp -d)"; export SKYTHON_STATE="$pd/state"
 printf 'a.esp\r\n*B.esp\r\n' > "$pd/bak1"; printf 'a.esp\r\n*B.esp\r\n*SkythonTest.esp\r\n' > "$pd/want1"
 printf 'a.esp\r\n*B.esp' > "$pd/bak2"; printf 'a.esp\r\n*B.esp\r\n*SkythonTest.esp\r\n' > "$pd/want2"
 : > "$pd/bak3"; printf '*SkythonTest.esp\n' > "$pd/want3"
-# R64: an LF-only backup (the box's real plugins.txt; the game rewrites it with LF at launch) gets an LF line
+# An LF-only backup (the box's real plugins.txt; the game rewrites it with LF at launch) gets an LF line
 printf 'a.esp\nB.esp\n' > "$pd/bak4"; printf 'a.esp\nB.esp\n*SkythonTest.esp\n' > "$pd/want4"
 printf 'a.esp\nB.esp' > "$pd/bak5"; printf 'a.esp\nB.esp\n*SkythonTest.esp\n' > "$pd/want5"
 for i in 1 2 3 4 5; do
   "$P_" compose "$pd/bak$i" > "$pd/got$i" 2>&1 && cmp -s "$pd/got$i" "$pd/want$i" && ok "compose case $i: backup + [EOL] + *SkythonTest.esp EOL (the backup's line ending)" || bad "compose case $i: $(od -c "$pd/got$i" | head -3)"
 done
 t="$("$P_" classify "$pd/want4" "$pd/bak4" 2>&1)"; [ "$t" = ADDED ] && ok "classify: LF backup + LF line -> ADDED" || bad "classify LF: '$t'"
-# R71: the game appends an inactive "SkythonTest.esp" line (no "*") when the ESP is in Data but not enabled
+# The game appends an inactive "SkythonTest.esp" line (no "*") when the ESP is in Data but not enabled
 printf 'a.esp\nB.esp\nSkythonTest.esp\n' > "$pd/inactive4"
 t="$("$P_" classify "$pd/inactive4" "$pd/bak4" 2>&1)"; [ "$t" = INACTIVE ] && ok "classify: backup + the game's inactive line -> INACTIVE" || bad "classify inactive: '$t'"
 grep -qF "(Sha \$c) -ne (Sha (Compose \$b ''))" "$B/win/plugins.ps1" && ok "plugins.ps1 restore accepts the inactive line" || bad "plugins.ps1 restore inactive"
@@ -408,7 +408,7 @@ PSTUBEOF
 chmod +x "$pst"
 readf() { printf 'CUR %s %s\nBAK %s %s\nGAME %s\n' "$(sha256sum "$1" | cut -d' ' -f1)" "$(base64 -w0 < "$1")" \
           "$(sha256sum "$2" | cut -d' ' -f1)" "$(base64 -w0 < "$2")" "$3" > "$pd/read.txt"; }
-echo 'owner decision 7 accepted on 2026-10-02: "offline test"' > "$pd/gate0"
+echo 'test ESP accepted on 2026-10-02: "offline test"' > "$pd/gate0"
 sbox() { : > "$PSTUBLOG"; PSTUB_READ="$pd/read.txt" PSTUB_BAKSHA="$(sha256sum "$pd/bak1" | cut -d' ' -f1)" \
          PSTUB_NEWSHA="$(sha256sum "$pd/want1" | cut -d' ' -f1)" BOX_GATE0_FILE="$pd/gate0" BOX_SSH_STUB="$pst" "$@" 2>&1; }
 mkdir -p "$SKYTHON_STATE"; echo "restored 2026-10-02T00:00:00" > "$SKYTHON_STATE/box-plugins.state"
@@ -421,8 +421,8 @@ t="$(sbox "$B/box_quit.sh")"; rc=$?
   && [ "$(cut -d' ' -f1 "$SKYTHON_STATE/box-plugins.state")" = restored ] && ok "box_quit.sh after EXITED restores the backup (state -> restored)" || bad "box_quit.sh restore: rc=$rc '$t'"
 echo "added x" > "$SKYTHON_STATE/box-plugins.state"; readf "$pd/reordered" "$pd/bak1" IDLE
 t="$(sbox "$B/box_quit.sh")"; rc=$?
-[ "$rc" = 3 ] && ! grep -q 'plugins.ps1 -Mode restore' "$PSTUBLOG" && case "$t" in *STOP*) true ;; *) false ;; esac \
-  && ok "box_quit.sh: plugins.txt neither backup nor backup + line -> STOP (exit 3), nothing written" || bad "box_quit.sh other: rc=$rc '$t'"
+[ "$rc" = 3 ] && ! grep -q 'plugins.ps1 -Mode restore' "$PSTUBLOG" && case "$t" in *"Nothing was written"*) true ;; *) false ;; esac \
+  && ok "box_quit.sh: plugins.txt neither backup nor backup + line -> refused (exit 3), nothing written" || bad "box_quit.sh other: rc=$rc '$t'"
 echo "added x" > "$SKYTHON_STATE/box-plugins.state"; readf "$pd/want1" "$pd/bak1" IDLE
 t="$(sbox "$B/box_stop.sh")"; rc=$?
 [ "$rc" = 0 ] && grep -q 'plugins.ps1 -Mode restore' "$PSTUBLOG" && ok "box_stop.sh restores after the game is gone" || bad "box_stop.sh restore: rc=$rc '$t'"
@@ -435,12 +435,12 @@ t="$(sbox "$P_" add)"; rc=$?
 [ "$rc" != 0 ] && ! grep -q 'plugins.ps1 -Mode add' "$PSTUBLOG" && ok "add refuses while the game runs" || bad "add while running: rc=$rc '$t'"
 readf "$pd/extra" "$pd/bak1" IDLE
 t="$(sbox "$P_" add)"; rc=$?
-[ "$rc" = 3 ] && ! grep -q 'plugins.ps1 -Mode add' "$PSTUBLOG" && ok "add: plugins.txt differs from the backup -> STOP, nothing written" || bad "add other: rc=$rc '$t'"
+[ "$rc" = 3 ] && ! grep -q 'plugins.ps1 -Mode add' "$PSTUBLOG" && ok "add: plugins.txt differs from the backup -> refused, nothing written" || bad "add other: rc=$rc '$t'"
 readf "$pd/bak1" "$pd/bak1" IDLE
 for m in backup add; do
   : > "$PSTUBLOG"; t="$(PSTUB_READ="$pd/read.txt" BOX_GATE0_FILE="$pd/no-gate0" BOX_SSH_STUB="$pst" "$P_" "$m" 2>&1)"; rc=$?
-  [ "$rc" != 0 ] && case "$t" in *"Gate 0 is not recorded"*) true ;; *) false ;; esac && ! grep -q plugins.ps1 "$PSTUBLOG" \
-    && ok "box_plugins.sh $m refuses without out/gate0-accepted (no plugins.ps1 call)" || bad "box_plugins.sh $m without Gate 0: rc=$rc '$t'"
+  [ "$rc" != 0 ] && case "$t" in *"test ESP switch is off"*) true ;; *) false ;; esac && ! grep -q plugins.ps1 "$PSTUBLOG" \
+    && ok "box_plugins.sh $m refuses without out/gate0-accepted (no plugins.ps1 call)" || bad "box_plugins.sh $m with the switch off: rc=$rc '$t'"
 done
 unset SKYTHON_STATE
 

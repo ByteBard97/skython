@@ -7,7 +7,7 @@
 #         session.json (the token stays only in box_session.sh's file). The live tests' box mode
 #         (SKYTHON_BOX=1, livetest/support.py) calls this before every log read.
 #   put-control: copies LOCAL_FILE to the box's SKSE\Skython\livetest_control.json, the only file Linux writes
-#         there (livetest/smoke.py's command channel, Task 31).
+#         there (livetest/smoke.py's command channel).
 #   BOX_FILES_PRINT=1 validates and prints the local targets (pull) and exits before any ssh (offline test).
 set -euo pipefail
 source "$(dirname "$0")/box_env.sh"

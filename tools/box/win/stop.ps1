@@ -2,7 +2,7 @@
 #   1. Stop-Process -Name SkyrimSE,skse64_loader -Force                     -> "GONE via Stop-Process"
 #   2. if either is still alive: CIM Win32_Process.Terminate, matched by the exact image names
 #      SkyrimSE.exe and skse64_loader.exe                                   -> "GONE via CIM Terminate"
-#   otherwise "STILL_RUNNING" (exit 1): STOP and ask the owner.
+#   otherwise "STILL_RUNNING" (exit 1): the game has to be ended by hand on the box.
 # Stage 2 exists because on 2026-10-01 a game hung at exit (one thread in a kernel wait) survived Stop-Process and
 # taskkill /F, and Win32_Process.Terminate ended it.
 function Alive { Get-Process -Name SkyrimSE,skse64_loader -ErrorAction SilentlyContinue }
@@ -21,4 +21,4 @@ Get-CimInstance Win32_Process -Filter "Name='SkyrimSE.exe'" | Invoke-CimMethod -
 Get-CimInstance Win32_Process -Filter "Name='skse64_loader.exe'" | Invoke-CimMethod -MethodName Terminate | ForEach-Object { "CIM Terminate skse64_loader.exe returned $($_.ReturnValue)" }
 if (WaitGone 20) { "GONE via CIM Terminate"; exit 0 }
 "STILL_RUNNING after Stop-Process and CIM Terminate: " + (((Alive) | ForEach-Object { "$($_.Name) $($_.Id)" }) -join ', ')
-"STOP and ask the owner."; exit 1
+"End the game by hand on the box (Task Manager); nothing else was tried."; exit 1

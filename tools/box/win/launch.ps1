@@ -10,9 +10,9 @@
 # 3. apply launch.env (box_launch.sh --env; only SKYTHON_TEST_* lines) to this process's environment, which
 #    skse64_loader.exe and the game inherit, then empty the file so it is used by one launch only;
 # 4. start skse64_loader.exe from the game folder; if no SkyrimSE process 20 s later (never started, or exited),
-#    retry once (attempt 2 is the only retry). The box's Steam and the owner's Linux Steam share one account: when
-#    Linux Steam logs in, the box's Steam is logged off ("Logged In Elsewhere") and shuts down, and a launch at that
-#    moment can exit silently (S8, ruling A7). If a LoggedOff line was written during attempt 1, log a warning,
+#    retry once (attempt 2 is the only retry). If the box's Steam account is also used on another machine, a login
+#    there logs the box's Steam off ("Logged In Elsewhere") and shuts it down, and a launch at that moment can exit
+#    silently (seen in spike S8). If a LoggedOff line was written during attempt 1, log a warning,
 #    re-ensure Steam as in step 2 (bounded, 90 s) and then retry. Steam is only ever started -silent, never stopped.
 # Every step goes to launch.log; the outcome goes to launch.result as "<launch stamp> ok|fail ...".
 $ErrorActionPreference = 'Continue'

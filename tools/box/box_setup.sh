@@ -15,7 +15,7 @@ config_text() {
   for k in "${BOX_GAMES[@]}"; do printf 'game\t%s\t%s\n' "$k" "$(box_game_dir "$k")"; done
 }
 if [ "${BOX_SETUP_PRINT_CONFIG:-0}" = 1 ]; then config_text; exit 0; fi
-psv="$(bssh 'Write-Output "PSV=$($PSVersionTable.PSVersion.Major)"' | tr -d '\r')" || box_die "cannot ssh to $BOX (STOP and ask the owner)"
+psv="$(bssh 'Write-Output "PSV=$($PSVersionTable.PSVersion.Major)"' | tr -d '\r')" || box_die "cannot ssh to $BOX (check that the box is on and that ssh $BOX works)"
 case "$psv" in *PSV=5*) ;; *) box_die "the box's ssh shell is not Windows PowerShell 5 (answered '$psv')" ;; esac
 bssh "New-Item -ItemType Directory -Force '$BOX_DIR\\incoming','$BOX_DIR\\stage' | Out-Null" || box_die "could not create $BOX_DIR"
 bscp "$BOX_ROOT"/tools/box/win/*.ps1 "$BOX:$BOX_DIR_FWD/incoming/" || box_die "scp of the scripts failed"

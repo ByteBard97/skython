@@ -7,7 +7,7 @@
 #        snapshot's (snapshot_lib.ps1); only an untouched file reads as UNCHANGED.
 #   session: the same for Skython\session.json alone (box_session.sh; it holds the bridge token, so only that
 #        script reads it, and only into out/box-session.json).
-#   put: writes exactly one file, Skython\livetest_control.json (livetest/smoke.py's command channel; Task 31),
+#   put: writes exactly one file, Skython\livetest_control.json (livetest/smoke.py's command channel),
 #        through a temp file and an atomic replace. Any other name is refused. Nothing is ever deleted.
 param([string]$Mode, [string]$NamesB64 = '', [string]$NameB64 = '', [string]$DataB64 = '')
 $ErrorActionPreference = 'Stop'
@@ -44,7 +44,7 @@ switch ($Mode) {
     $tmp = $dest + '.linux-tmp'
     [IO.File]::WriteAllBytes($tmp, [Convert]::FromBase64String($DataB64))
     # The in-game script may be reading the file at that moment: a few short retries. No backup file: PowerShell 5.1
-    # turns a plain $null into "" for a string parameter ("The path is not of a legal form", Task 31), so pass
+    # turns a plain $null into "" for a string parameter ("The path is not of a legal form"), so pass
     # [NullString]::Value.
     for ($i = 1; $i -le 10; $i++) {
       try {

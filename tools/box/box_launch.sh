@@ -10,7 +10,7 @@
 #   ae1170, 1.7.104.0 for ae17104). BOX_LAUNCH_PRINT_GAME=1 prints "<key> <version> <folder>" and exits before any
 #   ssh (offline test).
 #   --env: launch.ps1 sets these in its own environment before it starts skse64_loader.exe, so the game inherits
-#   them (Task 25's SKYTHON_TEST_UNVERIFIED_RUNTIME, Task 26's SKYTHON_TEST_PRELOAD). Only
+#   them (for example SKYTHON_TEST_UNVERIFIED_RUNTIME, SKYTHON_TEST_PRELOAD). Only
 #   SKYTHON_TEST_* names. C:\dev\skyrim-python-box\launch.env is rewritten on every launch (empty without
 #   --env), so a variable never leaks into a later launch; launch.ps1 also empties it after reading it.
 #   BOX_LAUNCH_PRINT_ENV=1 prints launch.env's content and exits before any ssh (offline test).

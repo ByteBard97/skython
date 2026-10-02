@@ -18,4 +18,4 @@ Get-ChildItem (Join-Path $my 'SKSE') -Force -ErrorAction SilentlyContinue | Wher
 "== throwaway saves (spikebase, spytest, s4test, skypy_r38_savecall) =="
 Get-ChildItem (Join-Path $my 'Saves') -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(spikebase|spytest|s4test|skypy_r38_savecall)' } | ForEach-Object { Show $_.FullName }
 ''
-'Nothing was removed. Show this list to the owner; remove only what the owner signs off on, item by item.'
+'Nothing was removed. Review this list and remove by hand only the items you are sure of, one at a time.'

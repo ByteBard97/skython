@@ -12,17 +12,17 @@
 #   tools/box/box_deploy.sh --package                        -> Plugins\Skython\lib\skython\ (python/src/skython)
 #   tools/box/box_deploy.sh --scripts DIR                    -> Plugins\Skython\scripts\<entries>
 #   tools/box/box_deploy.sh --file LOCAL REL                 -> Plugins\Skython\REL (one file: s10_check.py, markers)
-#   tools/box/box_deploy.sh --pex path/to/SkyrimPython.pex   -> exactly Data\Scripts\SkyrimPython.pex (Task 7: the spike's
+#   tools/box/box_deploy.sh --pex path/to/SkyrimPython.pex   -> exactly Data\Scripts\SkyrimPython.pex (the spike's
 #                                                               own script, which keeps its name; the only
 #                                                               target outside Plugins; placed only if absent or ours)
-#   tools/box/box_deploy.sh --esp path/to/SkythonTest.esp    -> exactly Data\SkythonTest.esp (owner decision 7, Gate 0;
-#                                                               Task 45). Placed only if absent or ours.
-#   tools/box/box_deploy.sh --test-pex FILE.pex...           -> Data\Scripts\<name> for names on the Gate 0 list only:
+#   tools/box/box_deploy.sh --esp path/to/SkythonTest.esp    -> exactly Data\SkythonTest.esp (needs the test ESP
+#                                                               switch, see box_env.sh). Placed only if absent or ours.
+#   tools/box/box_deploy.sh --test-pex FILE.pex...           -> Data\Scripts\<name> for names on the test ESP list only:
 #                                                               Skython.pex, SkythonTestQuestBase.pex, SkythonTestQuest.pex,
 #                                                               SkythonTestAlias.pex, SkythonTestLocationAlias.pex,
 #                                                               QF_SkythonTestQuest_01000800.pex
-#   tools/box/box_deploy.sh --move REL NEWREL                -> moves Plugins\REL to Plugins\NEWREL (Task 26's startup
-#                                                               variants; Task 25 moves the spike DLL aside). REL must be
+#   tools/box/box_deploy.sh --move REL NEWREL                -> moves Plugins\REL to Plugins\NEWREL (startup variants,
+#                                                               or moving the spike DLL aside). REL must be
 #                                                               a recorded target or inside one; NEWREL must be absent.
 #                                                               Move-Item, never a delete. Each move is appended to
 #                                                               out/box-moves.txt and NEWREL is recorded.
@@ -50,7 +50,7 @@ check_target() {  # refuse a target that exists on the box and was not deployed 
   local r; r="$(bps 60 place.ps1 -Mode exists -DestB64 "$(b64 "$1")" -Game "$BOX_GAME" | tr -d '\r')"
   case "$r" in
     ABSENT) return 0 ;;
-    EXISTS) box_die "$1 exists on the box but is not in out/box-deployed.txt; not overwriting it. Ask the owner." ;;
+    EXISTS) box_die "$1 exists on the box but is not in out/box-deployed.txt; not overwriting it. Remove it on the box yourself, or add it to out/box-deployed.txt if this tool put it there." ;;
     *) box_die "could not check $1: $r" ;;
   esac
 }
@@ -99,7 +99,7 @@ owned() {  # owned <windows path>: recorded, or inside a recorded folder
   done < "$BOX_DEPLOYED"
   return 1
 }
-# Owner decision 7 (Gate 0): the only Papyrus scripts --test-pex places. These six names are the whole list.
+# The test ESP list: the only Papyrus scripts --test-pex places. These six names are the whole list.
 TEST_PEX_NAMES=(Skython.pex SkythonTestQuestBase.pex SkythonTestQuest.pex SkythonTestAlias.pex SkythonTestLocationAlias.pex QF_SkythonTestQuest_01000800.pex)
 test_pex_ok() { local n; for n in "${TEST_PEX_NAMES[@]}"; do [ "$1" = "$n" ] && return 0; done; return 1; }
 plugins_rel() {  # plugins_rel <REL>: the Windows path under Plugins, or die
@@ -155,7 +155,7 @@ elif [ "${1#-}" = "$1" ]; then
   fi
 fi
 st="$(bssh 'if (Get-Process -Name SkyrimSE,skse64_loader -ErrorAction SilentlyContinue) { "RUNNING" } else { "IDLE" }' | tr -d '\r')" \
-  || box_die "cannot ssh to $BOX (STOP and ask the owner)"
+  || box_die "cannot ssh to $BOX (check that the box is on and that ssh $BOX works)"
 [ "$st" = IDLE ] || box_die "the game is running on the box; quit it first (tools/box/box_quit.sh)"
 
 case "$1" in
@@ -170,7 +170,7 @@ case "$1" in
     SP="${2:?usage: box_deploy.sh --site-packages DIR}"; [ -d "$SP" ] || box_die "no such directory: $SP"
     have="$(bps 60 place.ps1 -Mode list -DestB64 "$(b64 "$BOX_OWN\\site-packages")" -Game "$BOX_GAME" | tr -d '\r' | sort)"
     stale="$(comm -23 <(echo "$have" | sed '/^$/d') <(ls -A "$SP" | sort))"
-    [ -z "$stale" ] || { echo "$stale" >&2; box_die "the box's site-packages holds the entries above that $SP lacks; ask the owner (nothing is deleted)"; }
+    [ -z "$stale" ] || { echo "$stale" >&2; box_die "the box's site-packages holds the entries above that $SP lacks; remove them on the box by hand if they should go (this tool never deletes)"; }
     put_entries "$SP" "$BOX_OWN\\site-packages"
     ;;
   --package)
