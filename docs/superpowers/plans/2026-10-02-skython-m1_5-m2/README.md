@@ -308,10 +308,10 @@ struct EventHubOptions {
     std::function<std::uint32_t()> epoch;   // life::Epoch in the plugin; a counter in tests
     std::function<bool()> loading;          // life::SaveLoadInProgress in the plugin (R60); a switch in tests
     std::size_t max_queued_bytes_per_consumer = kMaxQueuedEventBytesPerConsumer;  // R61; tests lower it
-    // Task 44 adds, only if its probe PASSes, one optional last member (initializers that set it use designated
-    // initializers: .epoch = ..., .loading = ..., .on_wanted = ...):
-    // std::function<void(std::string_view event, bool wanted)> on_wanted;  // called outside the hub's lock when an
-    //                                                                      // event's subscriber count goes 0->1 or 1->0
+    // Task 44 (probe PASS, 4317647): optional last member; initializers that set it use designated initializers
+    // (.epoch = ..., .loading = ..., .on_wanted = ...):
+    std::function<void(std::string_view event, bool wanted)> on_wanted{};  // called outside the hub's locks when an
+                                                                           // event's subscriber count goes 0->1 or 1->0
 };
 class EventHub {
  public:
@@ -509,7 +509,7 @@ EndFunction
 - **Owner decision 8 (acceptance framing; see Owner decisions).** The test ESP's quest function `SetupScenario(...)` and channel `skython_test` (Task 48) and the generic acceptance task (Task 55) assume the owner accepts decision 8. If decision 8 is still open when Task 48 would author the quest script, STOP before authoring and ask; if it is rejected, take the owner's names and framing, and Task 55 is re-planned before it starts.
 - **Task 47's spike channel.** The spike uses the proposed channel `skython_test` (and its `QF_` name) as throwaway test data; it is not gated on decision 8, and Task 48's build replaces the spike plugin.
 - **Owner decision 5 (licence; see Owner decisions).** No task in this plan distributes a DLL or chooses a licence option; a step that would is a STOP.
-- **Sink detach (Task 44)** is implemented only if its probe (1000 register/unregister cycles inside SKSE tasks mid-game, events still delivered, no crash) passes; otherwise sinks keep skip-only behaviour and the result is recorded. This is not a STOP.
+- **Sink detach (Task 44)** is implemented only if its probe (1000 register/unregister cycles inside SKSE tasks mid-game, events still delivered, no crash) passes; otherwise sinks keep skip-only behaviour and the result is recorded. This is not a STOP. **Result (2026-10-02): PASS, Part 2 in** (sinks attach on demand, 4317647; RESULTS Task 44). Task 57 copies the attach-window protocol fact from RESULTS into PROTOCOL.md and README.
 
 **STOP and ask the owner (do not improvise) when:** an owner decision in the Owner decisions table (5, 7 or 8) is needed and not answered; the ESP spike fails; the game does not launch within 10 minutes; the Windows build box does not answer; the game runs on any runtime other than AE 1.6.1170; a downloaded file's SHA-256 differs from `docs/PINS.md`; a rebuilt `SkythonTest.esp` differs from its recorded SHA-256, or a rebuilt `.pex` differs from its recorded stable hash (`papyrus_compile.sh --stable-hash`, built on the same machine and account; a `.pex` built elsewhere is never compared by raw SHA-256), without a source change that explains it; a save name a test wants already exists; `plugins.txt` differs from its backup in any line other than ours, or `box_plugins.sh show` reports `state: OTHER` after a launch (the game rewrote it: never restore by hand); a step would place a box file not on the decision-7 list; a dotnet restore would need the network; or a step would delete, overwrite or `git push` anything not itemised in this plan.
 
