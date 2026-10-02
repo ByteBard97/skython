@@ -1,4 +1,4 @@
-"""The in-process transport, and the fake `_skyrim` it runs against in these tests (Tasks 23 and 24 rely on
+"""The in-process transport, and the fake `_skython` it runs against in these tests (Tasks 23 and 24 rely on
 the fake behaving like core's Dispatcher, so its rules are pinned here too)."""
 import json
 import threading
@@ -6,11 +6,11 @@ import time
 
 import pytest
 
-from fake_skyrim import FakeRemoteError, FakeSkyrim
+from fake_skython import FakeRemoteError, FakeSkython
 from support import wait_until
-from skyrim import _protocol_generated as g
-from skyrim import errors
-from skyrim.inprocess import InProcessTransport, connect_in_process
+from skython import _protocol_generated as g
+from skython import errors
+from skython.inprocess import InProcessTransport, connect_in_process
 
 
 def req(op="papyrus.call_static", req_id=1, **args):
@@ -24,7 +24,7 @@ def fake_call(function, *a, req_id=1, **extra):
 # -- the transport ---------------------------------------------------------------------------------------
 def test_the_welcome_is_built_from_config_and_state(fake):
     fake.epoch = 4
-    t = InProcessTransport()  # imports _skyrim, which the fixture installed
+    t = InProcessTransport()  # imports _skython, which the fixture installed
     assert t.welcome["protocol"] == [1, 0] and t.welcome["epoch"] == 4
     assert (t.welcome["plugin_version"], t.welcome["game_version"], t.welcome["runtime"]) == ("0.0.0-fake", "0.0.0", "fake")
     assert t.welcome["capabilities"] == list(g.OPS) and t.welcome["backend"] == "fake"
@@ -124,7 +124,7 @@ def test_a_batch_timeout_reports_its_progress(fake):
 
 
 def test_busy_at_the_in_flight_cap(tmp_path):
-    fake = FakeSkyrim(root=tmp_path, max_inflight_total=2)
+    fake = FakeSkython(root=tmp_path, max_inflight_total=2)
     try:
         held = [fake.submit(fake_call("Never", req_id=i)) for i in (1, 2)]
         assert json.loads(fake.call(fake_call("Echo", 3, req_id=3), 1.0))["error"]["code"] == "busy"

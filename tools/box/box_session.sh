@@ -2,16 +2,16 @@
 # The dev bridge from Linux while the game runs on the box (Tasks 25-32).
 # Usage: tools/box/box_session.sh up | env | down | status | probe [PORT] | rewrite IN|- OUT LOCAL_PORT|same
 #   up:      after each box launch, once the core log shows "python host: running". Reads the box's
-#            SKSE\SkyrimPython\session.json written since the last launch stamp (a file left by an earlier launch is
+#            SKSE\Skython\session.json written since the last launch stamp (a file left by an earlier launch is
 #            refused), writes out/box-session.json (mode 600; the bridge token lives only there, never printed) with
 #            "port" set to the tunnel's local end (BOX_SESSION_LOCAL_PORT, default the box's port, 45977 with the dev
 #            ini) and "host", if present, to 127.0.0.1; then brings up, or keeps, one ssh tunnel
-#            Linux 127.0.0.1:LOCAL -> box 127.0.0.1:PORT (control socket $SKYRIM_PYTHON_STATE/box-session.sock).
+#            Linux 127.0.0.1:LOCAL -> box 127.0.0.1:PORT (control socket $SKYTHON_STATE/box-session.sock).
 #            Loopback on both ends. An inactive session file ("active": false) is written as is (the live tests'
 #            load_session reports its reason) and no tunnel is needed. Prints the session file's path last.
-#   env:     writes out/box-live.env (also done by up). `source out/box-live.env` sets SKYRIM_PYTHON_SESSION to
-#            out/box-session.json, SKSE_LOG_DIR and SKYRIM_PYTHON_LOG to the log mirror out/box-skse (box_files.sh
-#            pull) and SKYRIM_PYTHON_BOX=1 (livetest/support.py's box mode). No token in it.
+#   env:     writes out/box-live.env (also done by up). `source out/box-live.env` sets SKYTHON_SESSION to
+#            out/box-session.json, SKSE_LOG_DIR and SKYTHON_LOG to the log mirror out/box-skse (box_files.sh
+#            pull) and SKYTHON_BOX=1 (livetest/support.py's box mode). No token in it.
 #   down / status: the session tunnel.
 #   probe [PORT]: on the box, "LISTEN pid <n>" (exit 0) or "NO_LISTENER" (exit 1) for 127.0.0.1:PORT (default
 #            45977). Through the tunnel a missing listener does not look refused, so the live tests ask the box.
@@ -21,7 +21,7 @@ set -euo pipefail
 source "$(dirname "$0")/box_env.sh"
 SESSION_OUT="$BOX_ROOT/out/box-session.json"
 ENV_OUT="$BOX_ROOT/out/box-live.env"
-FWD_STATE="$SKYRIM_PYTHON_STATE/box-session.fwd"
+FWD_STATE="$SKYTHON_STATE/box-session.fwd"
 
 # The rewrite program (python3 -c, so stdin stays free for the session JSON).
 REWRITE_PY="$(cat <<'PY'
@@ -58,10 +58,10 @@ write_env() {
   mkdir -p "$BOX_ROOT/out"
   cat > "$ENV_OUT" <<ENV
 # Written by tools/box/box_session.sh: the live tests against the game on the box. No token here.
-export SKYRIM_PYTHON_SESSION="$SESSION_OUT"
+export SKYTHON_SESSION="$SESSION_OUT"
 export SKSE_LOG_DIR="$BOX_ROOT/out/box-skse"
-export SKYRIM_PYTHON_LOG="$BOX_ROOT/out/box-skse/SkyrimPython/python.log"
-export SKYRIM_PYTHON_BOX=1
+export SKYTHON_LOG="$BOX_ROOT/out/box-skse/Skython/python.log"
+export SKYTHON_BOX=1
 ENV
   echo "env: source $ENV_OUT"
 }
@@ -71,11 +71,11 @@ case "${1:-}" in
   env) write_env ;;
   up)
     write_env
-    mkdir -p "$SKYRIM_PYTHON_STATE"
+    mkdir -p "$SKYTHON_STATE"
     st="$(bps 60 files.ps1 -Mode session | tr -d '\r')" || box_die "could not read the box's session.json: ${st%% *}"
     case "$st" in
       "NEW "*) ;;
-      UNCHANGED) box_die "session.json was not written in this launch (wait for 'python host: running' in SkyrimPython.log)" ;;
+      UNCHANGED) box_die "session.json was not written in this launch (wait for 'python host: running' in Skython.log)" ;;
       ABSENT) box_die "no session.json on the box (python host not running yet, or disabled)" ;;
       *) box_die "session.json: ${st%% *}" ;;
     esac

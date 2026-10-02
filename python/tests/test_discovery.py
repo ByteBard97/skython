@@ -3,9 +3,9 @@ import os
 
 import pytest
 
-from skyrim import _protocol_generated as g
-from skyrim.discovery import Session, find_session, write_inactive_session_file, write_session_file
-from skyrim.errors import NotRunning
+from skython import _protocol_generated as g
+from skython.discovery import Session, find_session, write_inactive_session_file, write_session_file
+from skython.errors import NotRunning
 
 TOK = "00112233445566778899aabbccddeeff"
 
@@ -17,7 +17,7 @@ def write_session(path, port=45977, token=TOK):
 
 def test_the_session_file_fields_are_the_tables(tmp_path):
     assert set(json.loads(write_session(tmp_path / "s.json").read_text())) == set(g.SESSION_FILE_FIELDS)
-    assert (g.ENV_SESSION, g.ENV_PORT, g.ENV_TOKEN) == ("SKYRIM_PYTHON_SESSION", "SKYRIM_PYTHON_PORT", "SKYRIM_PYTHON_TOKEN")
+    assert (g.ENV_SESSION, g.ENV_PORT, g.ENV_TOKEN) == ("SKYTHON_SESSION", "SKYTHON_PORT", "SKYTHON_TOKEN")
 
 
 def test_explicit_port_and_token_win(tmp_path):
@@ -32,8 +32,8 @@ def test_explicit_session_path(tmp_path):
 
 def test_env_session_then_env_port(tmp_path):
     p = write_session(tmp_path / "s.json", port=3)
-    assert find_session(env={"SKYRIM_PYTHON_SESSION": str(p)}).port == 3
-    assert find_session(env={"SKYRIM_PYTHON_PORT": "4", "SKYRIM_PYTHON_TOKEN": TOK}).port == 4
+    assert find_session(env={"SKYTHON_SESSION": str(p)}).port == 3
+    assert find_session(env={"SKYTHON_PORT": "4", "SKYTHON_TOKEN": TOK}).port == 4
 
 
 def test_missing_session_file_is_not_running(tmp_path):
@@ -42,7 +42,7 @@ def test_missing_session_file_is_not_running(tmp_path):
 
 
 def test_nothing_configured_is_not_running():
-    with pytest.raises(NotRunning, match="SKYRIM_PYTHON_SESSION"):
+    with pytest.raises(NotRunning, match="SKYTHON_SESSION"):
         find_session(env={})
 
 
@@ -55,15 +55,15 @@ def test_corrupt_session_file_is_not_running(tmp_path):
 
 @pytest.mark.parametrize("bad", ["abc", "4x", "0", "65536", "-1", "1.5"])
 def test_bad_env_port_is_not_running_not_value_error(bad):
-    with pytest.raises(NotRunning, match="SKYRIM_PYTHON_PORT is not a port number"):
-        find_session(env={"SKYRIM_PYTHON_PORT": bad, "SKYRIM_PYTHON_TOKEN": TOK})
+    with pytest.raises(NotRunning, match="SKYTHON_PORT is not a port number"):
+        find_session(env={"SKYTHON_PORT": bad, "SKYTHON_TOKEN": TOK})
 
 
 def test_only_half_of_a_pair_is_a_clear_error():
-    with pytest.raises(NotRunning, match="SKYRIM_PYTHON_PORT is set but SKYRIM_PYTHON_TOKEN is not"):
-        find_session(env={"SKYRIM_PYTHON_PORT": "4"})
-    with pytest.raises(NotRunning, match="SKYRIM_PYTHON_TOKEN is set but SKYRIM_PYTHON_PORT is not"):
-        find_session(env={"SKYRIM_PYTHON_TOKEN": TOK})
+    with pytest.raises(NotRunning, match="SKYTHON_PORT is set but SKYTHON_TOKEN is not"):
+        find_session(env={"SKYTHON_PORT": "4"})
+    with pytest.raises(NotRunning, match="SKYTHON_TOKEN is set but SKYTHON_PORT is not"):
+        find_session(env={"SKYTHON_TOKEN": TOK})
     with pytest.raises(NotRunning, match="together.*only port"):
         find_session(port=5, env={})
     with pytest.raises(NotRunning, match="together.*only token"):
@@ -72,7 +72,7 @@ def test_only_half_of_a_pair_is_a_clear_error():
 
 def test_a_session_source_beats_a_lone_env_variable(tmp_path):
     p = write_session(tmp_path / "s.json", port=3)
-    assert find_session(env={"SKYRIM_PYTHON_SESSION": str(p), "SKYRIM_PYTHON_PORT": "9"}).port == 3
+    assert find_session(env={"SKYTHON_SESSION": str(p), "SKYTHON_PORT": "9"}).port == 3
 
 
 @pytest.mark.parametrize("port", ["abc", 0, 70000, None, True])

@@ -1,9 +1,9 @@
 import pytest
 
 from support import load_fixture
-from skyrim import errors
-from skyrim.refs import format_form_key, parse_form_key
-from skyrim.values import MAX_ARRAY_ITEMS, PArray, from_wire, to_wire
+from skython import errors
+from skython.refs import format_form_key, parse_form_key
+from skython.values import MAX_ARRAY_ITEMS, PArray, from_wire, to_wire
 
 VALUES = load_fixture("values.json")
 KEYS = load_fixture("form_keys.json")

@@ -40,7 +40,7 @@ class RemoteTransport:
         self._send_lock = threading.Lock()
         self._send_timeout = send_timeout
         sock.settimeout(send_timeout)  # bounds sendall; the reader treats it as a wake-up tick only
-        self._reader = threading.Thread(target=self._read_loop, name="skyrim-remote-reader", daemon=True)
+        self._reader = threading.Thread(target=self._read_loop, name="skython-remote-reader", daemon=True)
         self._reader.start()
 
     def _read_loop(self):

@@ -2,7 +2,7 @@
 
 Adapted from: branch `plan-out-of-process`, task 19 (`task-19-robustness-and-throughput-baseline.md`). The robustness tests and the throughput curve are kept and now run through the dev bridge. New here: an in-process smoke script that makes the same calls from inside the game (the shipping mode) and records which transport it used and how the host loaded every script (including Task 26's deliberately broken `livetest_broken`), and throughput with and without a CPU-spinning Python thread inside the game (GIL hand-off cost, Review Focus 6). Added by ruling R38 (`.superpowers/sdd/README/skyrimplatform-comparison.md`, Tops 2 and 6): a live test that saves and loads while a latent call is in flight (Task 27's VM callback returns false from `CanSave()`, as the base class already does at the pin), and a burst of `max_inflight_total` requests at once with the longest time our queued tasks held the main thread in one frame.
 
-> Part of the [skyrim-python v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), sections 4.5, 4.10, 8. Steps use checkbox (`- [ ]`) syntax.
+> Part of the [Skython v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), sections 4.5, 4.10, 8. Steps use checkbox (`- [ ]`) syntax.
 
 > **Gate:** start only after Task 30 is done.
 >
@@ -19,9 +19,9 @@ Adapted from: branch `plan-out-of-process`, task 19 (`task-19-robustness-and-thr
 - Modify: `plugin/src/GameBackend.cpp` (Task 27's file: a passive drain meter around each queued task body and two more `diagnostics` keys, Step 3b)
 
 **Interfaces:**
-- Consumes: the live plugin from Task 30; `skyrim` (Tasks 20-22: `Game`, `errors`, `values.Form`, `values.Fingerprint`); `_skyrim.config()["log_dir"]` and `_skyrim.log(level, msg)` (Task 19 contract); `skyrim._host` loads each package in `scripts/` and calls `setup(game)` on the host thread, `teardown()` on reload (Task 24); `tools/box/box_deploy.sh --scripts DIR` (Task 1b); `livetest/support.py` (`raw_connect`, `rpc`, `read_frame`, `send_request`, `fresh`, and the box mode `BOX`, `REPO`, `box_pull`) and fixtures `session`, `game` (Tasks 26-27); `out/box-live.env` (Task 1c) sets `SKYRIM_PYTHON_LOG` to the local mirror of the box's `python.log` (the smoke files live in the same folder on the box: index Fixed paths); `tools/box/box_files.sh pull`/`put-control` and `tools/box/box_saves.sh count` (Task 1b); `skyrim._host.status()["scripts"]` (Task 24); Task 27's `GameBackend.cpp` and its VM callback (`CanSave()` false); `tools/box/box_console.sh` and `box_quit.sh` (Task 1b: DevBench `save`/`load`, crash-log check).
+- Consumes: the live plugin from Task 30; `skython` (Tasks 20-22: `Game`, `errors`, `values.Form`, `values.Fingerprint`); `_skython.config()["log_dir"]` and `_skython.log(level, msg)` (Task 19 contract); `skython._host` loads each package in `scripts/` and calls `setup(game)` on the host thread, `teardown()` on reload (Task 24); `tools/box/box_deploy.sh --scripts DIR` (Task 1b); `livetest/support.py` (`raw_connect`, `rpc`, `read_frame`, `send_request`, `fresh`, and the box mode `BOX`, `REPO`, `box_pull`) and fixtures `session`, `game` (Tasks 26-27); `out/box-live.env` (Task 1c) sets `SKYTHON_LOG` to the local mirror of the box's `python.log` (the smoke files live in the same folder on the box: index Fixed paths); `tools/box/box_files.sh pull`/`put-control` and `tools/box/box_saves.sh count` (Task 1b); `skython._host.status()["scripts"]` (Task 24); Task 27's `GameBackend.cpp` and its VM callback (`CanSave()` false); `tools/box/box_console.sh` and `box_quit.sh` (Task 1b: DevBench `save`/`load`, crash-log check).
 - Produces:
-  - In the game's Python log folder (`.../SKSE/SkyrimPython/`): `livetest_smoke.json` (`{status: "pass"|"fail", checks: [{name, ok, error?}], backend, transport, scripts, thread, switch_interval_s, time}`; `backend` is `_skyrim.BACKEND`, `transport` the class name of the script's `game.transport`, `scripts` the host's `status()["scripts"]` for this run), and the control pair `livetest_control.json` (`{seq, cmd, ...}`, written by Linux; `seq` is `time.time_ns()`, so it grows across launches) / `livetest_reply.json` (`{seq, result}`, written by the script). Commands: `spin_on`, `spin_off` (reply carries `spin_loops`), `bench` (`calls`; reply `{calls, seconds, per_s, p50_ms, p99_ms, spinning}`).
+  - In the game's Python log folder (`.../SKSE/Skython/`): `livetest_smoke.json` (`{status: "pass"|"fail", checks: [{name, ok, error?}], backend, transport, scripts, thread, switch_interval_s, time}`; `backend` is `_skython.BACKEND`, `transport` the class name of the script's `game.transport`, `scripts` the host's `status()["scripts"]` for this run), and the control pair `livetest_control.json` (`{seq, cmd, ...}`, written by Linux; `seq` is `time.time_ns()`, so it grows across launches) / `livetest_reply.json` (`{seq, result}`, written by the script). Commands: `spin_on`, `spin_off` (reply carries `spin_loops`), `bench` (`calls`; reply `{calls, seconds, per_s, p50_ms, p99_ms, spinning}`).
   - `livetest/results/throughput.json`: `date`, `game_version`, `runtime`, `sequential_calls`, `sequential_seconds`, `sequential_per_s`, `p50_ms`, `p99_ms`, `curve` of `{depth, calls, seconds, per_s, busy}` for depths 1, 8, 32, 128, 256, plus `spin`: `{switch_interval_s, calls, remote: {no_spin: {per_s, p50_ms, p99_ms}, spin: {...}}, inprocess: {no_spin: {...}, spin: {...}}, spin_loops, fps_observed_spin}` (both `no_spin`/`spin` pairs use the same number of calls, measured back to back). The throughput test does not measure frame time (frame stalls under a spinning thread are pinned by spike S9, Task 5); the burst test does, for our own tasks.
   - `game.state` `diagnostics` gains `max_task_drain_ms` (float) and `max_task_drain_count` (int): since launch, the longest run of our queued task bodies within one frame and the most bodies in one run (Step 3b). Task 27's `late_results_dropped` and `in_flight` are unchanged.
   - `livetest/results/burst.json`: `date`, `requested`, `per_connection`, `connections`, `ok`, `busy`, `seconds`, `max_task_drain_ms`, `max_task_drain_count`, `max_task_drain_ms_before`, `s9_frame_ms`, `worst_frame_ms_estimate` (= `s9_frame_ms` + `max_task_drain_ms`), `per_task_drain_ms` (= `max_task_drain_ms` / `max_task_drain_count`), and, when `max_task_drain_count` is below `requested` (the cap), `drain_ms_at_cap_extrapolated` (= `per_task_drain_ms` × `requested`) and `worst_frame_ms_estimate_at_cap` (= `s9_frame_ms` + that); `unmeasured` names the object-conversion `AddTask` (Task 27) that the meter does not wrap.
@@ -30,7 +30,7 @@ Adapted from: branch `plan-out-of-process`, task 19 (`task-19-robustness-and-thr
 
 `livetest/scripts/livetest_smoke/__init__.py`:
 ```python
-"""In-process smoke test and benchmark (Task 31). Deployed to Data/SKSE/Plugins/SkyrimPython/scripts/ by
+"""In-process smoke test and benchmark (Task 31). Deployed to Data/SKSE/Plugins/Skython/scripts/ by
 `tools/box/box_deploy.sh --scripts livetest/scripts`. Development only: never ship it to players.
 
 setup() starts one thread and returns at once. That thread waits for a loaded save, runs the same calls the
@@ -45,8 +45,8 @@ import sys
 import threading
 import time
 
-import _skyrim
-from skyrim import _host, errors
+import _skython
+from skython import _host, errors
 
 log = logging.getLogger("livetest_smoke")
 PLAYER_ID = 0x14
@@ -59,7 +59,7 @@ _spin_loops = 0
 
 
 def _dir() -> pathlib.Path:
-    return pathlib.Path(json.loads(_skyrim.config())["log_dir"])
+    return pathlib.Path(json.loads(_skython.config())["log_dir"])
 
 
 def _read(name: str):
@@ -207,12 +207,12 @@ def _main(game) -> None:
         checks = run_smoke(game)
         ok = all(c["ok"] for c in checks)
         _write("livetest_smoke.json", {"status": "pass" if ok else "fail", "checks": checks,
-                                       # Evidence of the shipping mode: the game's _skyrim and the in-process transport.
-                                       "backend": _skyrim.BACKEND, "transport": type(game.transport).__name__,
+                                       # Evidence of the shipping mode: the game's _skython and the in-process transport.
+                                       "backend": _skython.BACKEND, "transport": type(game.transport).__name__,
                                        "scripts": _host.status()["scripts"],  # how the host loaded every script, this run
                                        "thread": threading.current_thread().name,
                                        "switch_interval_s": sys.getswitchinterval(), "time": time.time()})
-        _skyrim.log("info" if ok else "error",
+        _skython.log("info" if ok else "error",
                     f"livetest_smoke: {'PASS' if ok else 'FAIL'} ({sum(c['ok'] for c in checks)}/{len(checks)} checks)")
         _control_loop(game)
     except Exception:
@@ -231,8 +231,8 @@ def teardown() -> None:
 
 `livetest/smoke.py`:
 ```python
-"""Linux side of livetest_smoke: its files live next to python.log (SKYRIM_PYTHON_LOG). With the game on the box
-(SKYRIM_PYTHON_BOX=1, out/box-live.env) that is the local mirror out/box-skse/SkyrimPython: each read pulls the
+"""Linux side of livetest_smoke: its files live next to python.log (SKYTHON_LOG). With the game on the box
+(SKYTHON_BOX=1, out/box-live.env) that is the local mirror out/box-skse/Skython: each read pulls the
 file's text written since the launch stamp, and a command is pushed with tools/box/box_files.sh put-control."""
 import json
 import os
@@ -244,12 +244,12 @@ from support import BOX, REPO, box_pull, fresh
 
 
 def py_dir() -> pathlib.Path:
-    return pathlib.Path(os.environ["SKYRIM_PYTHON_LOG"]).parent
+    return pathlib.Path(os.environ["SKYTHON_LOG"]).parent
 
 
 def _read(name: str):
     if BOX:
-        box_pull(f"SkyrimPython/{name}")
+        box_pull(f"Skython/{name}")
     try:
         return json.loads((py_dir() / name).read_text())
     except (OSError, ValueError):
@@ -312,8 +312,8 @@ import time
 
 import pytest
 
-from skyrim import errors
-from skyrim.values import Fingerprint, Form
+from skython import errors
+from skython.values import Fingerprint, Form
 from smoke import wait_smoke
 from support import diagnostics, raw_connect, read_frame, rpc, send_request
 
@@ -338,7 +338,7 @@ def test_in_process_smoke_script_passed():
     data = wait_smoke()  # written in this run (support.fresh)
     failed = [c for c in data["checks"] if not c["ok"]]
     assert data["status"] == "pass" and not failed, failed
-    # The shipping mode really ran: the game's _skyrim and the in-process transport, not a bridge-backed Game.
+    # The shipping mode really ran: the game's _skython and the in-process transport, not a bridge-backed Game.
     assert data["backend"] == "game" and data["transport"] == "InProcessTransport", data
     # The host loaded every script in this run: the broken one failed (Task 26's livetest_broken), the smoke one ran.
     scripts = data["scripts"]
@@ -500,7 +500,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from skyrim import errors
+from skython import errors
 from smoke import command, wait_smoke
 from support import diagnostics, raw_connect, read_frame, send_request
 
@@ -717,31 +717,31 @@ Task 27's `test_state_shape_is_stable` checks only the two keys it knows, so it 
 The game runs on the Windows box ([Task 1c](task-01c-part-c-on-the-box.md)); the save is loaded through DevBench; every wait is bounded and counts only this launch's log text.
 ```bash
 mkdir -p livetest/results && touch livetest/results/.gitkeep
-tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll  # Step 3b changed the core
-tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/remote_build.sh plugin Skython.dll && tools/remote_build.sh plugin SkythonCore.dll  # Step 3b changed the core
+tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini
 tools/box/box_deploy.sh --python
 tools/box/box_deploy.sh --package
 tools/box/box_deploy.sh --scripts livetest/scripts
 tools/box/box_launch.sh
-tools/box/box_wait_log.sh SkyrimPython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
+tools/box/box_wait_log.sh Skython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
 tools/box/box_session.sh up && source out/box-live.env
-tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
+tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
 tools/box/box_console.sh "load spikebase"     # stands in for Continue; then Task 1b block B6
-tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: interactive = true" 300
-SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_robustness.py livetest/test_m1_throughput.py -q -s -rs
-tools/box/box_files.sh pull SkyrimPython.log >/dev/null
-grep '\[error\]' "$SKSE_LOG_DIR/SkyrimPython.log" | grep -v livetest_broken || echo "no unexpected errors"
+tools/box/box_wait_log.sh Skython.log "lifecycle: interactive = true" 300
+SKYTHON_LIVE=1 uv run --project python pytest livetest/test_m1_robustness.py livetest/test_m1_throughput.py -q -s -rs
+tools/box/box_files.sh pull Skython.log >/dev/null
+grep '\[error\]' "$SKSE_LOG_DIR/Skython.log" | grep -v livetest_broken || echo "no unexpected errors"
 # The save-during-a-call test (DevBench answering, a save loaded):
-SKYRIM_LIVE=1 SPY_BOX=1 uv run --project python pytest livetest/test_m1_robustness.py -q -s -rs -k save_during_a_latent_call
+SKYTHON_LIVE=1 SPY_BOX=1 uv run --project python pytest livetest/test_m1_robustness.py -q -s -rs -k save_during_a_latent_call
 # The two manual tests: answer each prompt after acting from a second shell through DevBench (Task 1c), e.g.
 #   tools/box/box_console.sh --tool menu '{"action":"open","name":"InventoryMenu"}'   (then "close")
 #   tools/box/box_console.sh "load spikebase"
-SKYRIM_LIVE=1 SPY_MANUAL=1 uv run --project python pytest livetest/test_m1_robustness.py -q -s -rs -k "paused or save_starts_loading"
+SKYTHON_LIVE=1 SPY_MANUAL=1 uv run --project python pytest livetest/test_m1_robustness.py -q -s -rs -k "paused or save_starts_loading"
 tools/box/box_quit.sh   # must print NO_NEW_CRASH_LOG; NOT_CLEAN without a crash log is the box's exit hang (Task 1b): box_stop.sh
 ```
 (`--scripts livetest/scripts` deploys both `livetest_smoke` and Task 26's `livetest_broken`; `tools/box/box_teardown_list.sh` lists them for removal later, with the owner's approval.)
 
-Expected: all pass; the two manual tests and the box test are skipped in the first run. `livetest/results/burst.json` is written (record `max_task_drain_ms`, `worst_frame_ms_estimate`, `per_task_drain_ms` and, when present, `drain_ms_at_cap_extrapolated` / `worst_frame_ms_estimate_at_cap` marked as extrapolated, plus the `unmeasured` note, in the report). With `SPY_BOX=1` the save-during-a-call test passes and `box_quit.sh` prints `NO_NEW_CRASH_LOG`; a crash, or a hang during the test, is a STOP (`NOT_CLEAN` at exit with no crash log is the box's known exit hang, Task 1b). Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. The `grep` prints `no unexpected errors` (only the deliberate `livetest_broken` failure may log at error level; refused handshakes, bad frames and dropped connections are warnings or info). The game is still responsive afterwards. The manual run passes when the operator opens a pausing menu, closes it, and loads a save as prompted (through DevBench, Task 1c; record "driven through DevBench, no player input").
+Expected: all pass; the two manual tests and the box test are skipped in the first run. `livetest/results/burst.json` is written (record `max_task_drain_ms`, `worst_frame_ms_estimate`, `per_task_drain_ms` and, when present, `drain_ms_at_cap_extrapolated` / `worst_frame_ms_estimate_at_cap` marked as extrapolated, plus the `unmeasured` note, in the report). With `SPY_BOX=1` the save-during-a-call test passes and `box_quit.sh` prints `NO_NEW_CRASH_LOG`; a crash, or a hang during the test, is a STOP (`NOT_CLEAN` at exit with no crash log is the box's known exit hang, Task 1b). Any skip whose reason is `live test: set SKYTHON_LIVE=1` is a failure. The `grep` prints `no unexpected errors` (only the deliberate `livetest_broken` failure may log at error level; refused handshakes, bad frames and dropped connections are warnings or info). The game is still responsive afterwards. The manual run passes when the operator opens a pausing menu, closes it, and loads a save as prompted (through DevBench, Task 1c; record "driven through DevBench, no player input").
 
 - [ ] **Step 5: Commit**
 

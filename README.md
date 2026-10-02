@@ -2,7 +2,7 @@
 
 Write Skyrim mods in real Python. Skython is a Skyrim SE/AE mod (an SKSE C++ plugin) that embeds CPython and gives Python scripts a native-feeling API into the game, in the way KiCad exposes scripting for PCB design. Scripts run inside the game and `import skython`.
 
-Status: in development, not released. The Linux-side code (core, dispatcher, Python package, dev bridge) is built and tested; the spikes that test the riskiest premises are running on a Windows test machine; the plugin itself (the game-side DLLs) is next. Code, file names and the repo folder still say `skyrim-python` / `SkyrimPython`; they are renamed to Skython before the plugin is built.
+Status: in development, not released. The Linux-side code (core, dispatcher, Python package, dev bridge) is built and tested; the spikes that test the riskiest premises are running on a Windows test machine; the plugin itself (the game-side DLLs) is next.
 
 ## Examples
 

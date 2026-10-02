@@ -2,7 +2,7 @@
 
 Adapted from: branch `plan-out-of-process`, task 17b (`task-17b-papyrus-value-conversion-and-signatures.md`). The C++ is the branch's (it compiled and linked on the build box at the pinned CommonLibSSE-NG, with the `API-VERIFICATION.md` fixes applied) plus plan review F's fixes: a typed None via `Variable(t)`, `type_mismatch` for an array argument over 128, core's float encoder, and `FindProperty` returning the whole `PropertyTypeInfo`. The live tests now go through the dev bridge.
 
-> Part of the [skyrim-python v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), section 4.4. Steps use checkbox (`- [ ]`) syntax.
+> Part of the [Skython v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), section 4.4. Steps use checkbox (`- [ ]`) syntax.
 
 > **Gate:** start only after Task 27 is done **and spike S7 has passed** (Task 9; `spikes/RESULTS.md` has an S7 PASS row recording the exact `FindBoundObject`, `PackHandle`, `GetParam` and `ObjectTypeInfo` calls that work on the pinned checkout). **If S4 (Task 6) is FAIL, STOP and ask the owner** before going on to Task 29.
 >
@@ -32,7 +32,7 @@ Rules this task implements:
 
 - [ ] **Step 1: Write the live tests first**
 
-In `livetest/test_m1_calls.py`, delete `test_object_results_are_unsupported_until_task_28`, add `from skyrim.values import Form` to the imports, and append:
+In `livetest/test_m1_calls.py`, delete `test_object_results_are_unsupported_until_task_28`, add `from skython.values import Form` to the imports, and append:
 ```python
 def test_static_call_returns_form(game):
     p = game.call("Game", "GetPlayer")
@@ -424,21 +424,21 @@ json FromVariable(const Variable& v)
 
 The game runs on the Windows box ([Task 1c](task-01c-part-c-on-the-box.md)); waits count only this launch's log text.
 ```bash
-tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
-tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/remote_build.sh plugin Skython.dll && tools/remote_build.sh plugin SkythonCore.dll
+tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini
 tools/box/box_deploy.sh --package
 tools/box/box_launch.sh
-tools/box/box_wait_log.sh SkyrimPython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
+tools/box/box_wait_log.sh Skython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
 tools/box/box_session.sh up && source out/box-live.env
-tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
-SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_mainmenu.py -q -rs
+tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
+SKYTHON_LIVE=1 uv run --project python pytest livetest/test_m1_mainmenu.py -q -rs
 tools/box/box_console.sh "load spikebase"     # stands in for Continue; then Task 1b block B6
-tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: interactive = true" 300
-SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_calls.py -q -rs
+tools/box/box_wait_log.sh Skython.log "lifecycle: interactive = true" 300
+SKYTHON_LIVE=1 uv run --project python pytest livetest/test_m1_calls.py -q -rs
 tools/box/box_quit.sh     # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh (Task 1b Known issue)
 ```
 
-Expected: `test_m1_mainmenu.py` passes (3); `test_m1_calls.py` passes in full. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. `test_form_argument_round_trip` shows a form argument is accepted for a native `Form` parameter, and `test_form_of_the_wrong_class_is_rejected_before_dispatch` that `BindObject` refuses the wrong class; the proof that the form itself arrives (not a None) is Task 29's `GetItemCount` round trip, which carries the STOP for the form-argument route. If any form-argument test fails with `vm_error` or the game crashes, STOP: the `PackHandle` route S7 recorded differs from the code here. If a `None` test crashes the game or fails with `vm_error`, STOP: the typed None (`Variable(t)`) is not what the VM accepts; record what happened. If `test_primitive_arrays_round_trip` fails on `CreateFloatArray`, check `Utility.psc` and substitute.
+Expected: `test_m1_mainmenu.py` passes (3); `test_m1_calls.py` passes in full. Any skip whose reason is `live test: set SKYTHON_LIVE=1` is a failure. `test_form_argument_round_trip` shows a form argument is accepted for a native `Form` parameter, and `test_form_of_the_wrong_class_is_rejected_before_dispatch` that `BindObject` refuses the wrong class; the proof that the form itself arrives (not a None) is Task 29's `GetItemCount` round trip, which carries the STOP for the form-argument route. If any form-argument test fails with `vm_error` or the game crashes, STOP: the `PackHandle` route S7 recorded differs from the code here. If a `None` test crashes the game or fails with `vm_error`, STOP: the typed None (`Variable(t)`) is not what the VM accepts; record what happened. If `test_primitive_arrays_round_trip` fails on `CreateFloatArray`, check `Utility.psc` and substitute.
 
 - [ ] **Step 5: Commit**
 

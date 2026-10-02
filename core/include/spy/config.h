@@ -11,11 +11,11 @@ namespace spy {
 struct Config
 {
     bool python_enabled = config_defaults::kPythonEnabled;    // false: the plugin never initialises CPython
-    bool scripts_enabled = config_defaults::kScriptsEnabled;  // false: skyrim._host loads no player scripts
+    bool scripts_enabled = config_defaults::kScriptsEnabled;  // false: skython._host loads no player scripts
     bool bridge_enabled = config_defaults::kBridgeEnabled;    // the dev bridge; false in the shipped ini
     std::uint16_t port = config_defaults::kPort;              // dev bridge port; 0 = pick a free port
     std::string fixed_token{config_defaults::kFixedToken};    // empty: a random token per start
-    std::string session_file{config_defaults::kSessionFile};  // empty: <SKSE log dir>/SkyrimPython/session.json
+    std::string session_file{config_defaults::kSessionFile};  // empty: <SKSE log dir>/Skython/session.json
     std::uint32_t default_timeout_ms = config_defaults::kDefaultTimeoutMs;  // kMinTimeoutMs .. kMaxTimeoutMs
     std::uint32_t max_inflight_per_connection = config_defaults::kMaxInflightPerConnection;  // dev bridge; at least 1
     std::uint32_t max_inflight_total = config_defaults::kMaxInflightTotal;  // dispatcher; at least 1
@@ -33,6 +33,6 @@ struct Config
 //  - Every bad value throws std::invalid_argument, including numbers too large for 64 bits.
 Config parse_config(std::string_view text);
 
-// Every Config field under its ini key name, plus "ignored_keys" (an array). _skyrim.config() (Task 19) starts from this.
+// Every Config field under its ini key name, plus "ignored_keys" (an array). _skython.config() (Task 19) starts from this.
 json config_to_json(const Config& c);
 }

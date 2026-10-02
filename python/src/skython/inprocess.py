@@ -1,6 +1,6 @@
-"""The in-process transport: the Game API inside the game, over the built-in _skyrim module.
+"""The in-process transport: the Game API inside the game, over the built-in _skython module.
 
-Requests and responses are the same JSON text as on the dev bridge (protocol/PROTOCOL.md). _skyrim.call
+Requests and responses are the same JSON text as on the dev bridge (protocol/PROTOCOL.md). _skython.call
 releases the GIL while it waits, so any number of Python threads may call at once; the game's own threads
 never run Python."""
 import itertools
@@ -24,18 +24,18 @@ def _object(text, what: str) -> dict:
 
 
 class InProcessTransport:
-    """A Transport over `module` (the _skyrim module; imported when not given)."""
+    """A Transport over `module` (the _skython module; imported when not given)."""
 
     def __init__(self, module=None):
         if module is None:
-            import _skyrim as module  # built into SkyrimPythonCore.dll; a fake in tests
+            import _skython as module  # built into SkythonCore.dll; a fake in tests
         self._m = module
         proto = tuple(module.PROTOCOL)
         if len(proto) != 2 or proto[0] != _g.PROTOCOL_MAJOR:
-            raise errors.ProtocolMismatch(_g.CODE_PROTOCOL_MISMATCH, f"_skyrim speaks protocol {'.'.join(map(str, proto))}, "
+            raise errors.ProtocolMismatch(_g.CODE_PROTOCOL_MISMATCH, f"_skython speaks protocol {'.'.join(map(str, proto))}, "
                                           f"this package speaks {_g.PROTOCOL_MAJOR}.{_g.PROTOCOL_MINOR}")
-        cfg = _object(module.config(), "_skyrim.config()")
-        state = _object(module.state(), "_skyrim.state()")
+        cfg = _object(module.config(), "_skython.config()")
+        state = _object(module.state(), "_skython.state()")
         self.welcome = {"type": "welcome", "protocol": list(proto), "plugin_version": cfg.get("plugin_version"),
                         "game_version": cfg.get("game_version"), "runtime": cfg.get("runtime"),
                         "epoch": state.get("epoch", 0), "capabilities": list(_g.OPS), "backend": module.BACKEND}
@@ -60,5 +60,5 @@ class InProcessTransport:
 
 def connect_in_process(*, module=None, call_timeout: float = _g.CALL_TIMEOUT_S,
                        retry_not_ready: bool | float = False) -> Game:
-    """A Game over _skyrim. skyrim.connect() calls this inside the game (Task 22)."""
+    """A Game over _skython. skython.connect() calls this inside the game (Task 22)."""
     return Game(InProcessTransport(module), call_timeout=call_timeout, retry_not_ready=retry_not_ready)

@@ -86,7 +86,7 @@ public:
     std::optional<std::string> CancelOrTake(Ticket ticket);
     void Tick();  // deadlines, world resets, abandoned results; the reaper calls it, tests call it directly
     void StartReaper(std::chrono::milliseconds period = std::chrono::milliseconds(50));  // a second call is a no-op
-    json BaseState();            // the backend's BaseState(): _skyrim.state() and late_cancel replies use it
+    json BaseState();            // the backend's BaseState(): _skython.state() and late_cancel replies use it
     std::size_t InFlight() const;
     std::uint64_t LateResults() const;  // backend results that arrived after their ticket ended
     std::uint64_t Abandoned() const;    // finished results nobody collected within abandon_after_ms

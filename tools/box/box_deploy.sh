@@ -2,15 +2,16 @@
 # Deploy into the box's game (C:\ChronicleDev\Stock Game\Data\SKSE\Plugins), the box twin of tools/deploy.sh.
 # Usage:
 #   tools/box/box_deploy.sh out/<Dll>.dll [path/to/ini]      -> Plugins\<Dll>.dll [+ Plugins\<Dll>.ini]
-#                                                               (SkyrimPython.dll also deploys out/SkyrimPythonCore.dll
-#                                                                to Plugins\SkyrimPython\, which must not be older)
-#   tools/box/box_deploy.sh --python [out/<Core>.dll]        -> Plugins\SkyrimPython\python\ (third_party/cpython/embed)
-#                                                               [+ the core DLL into Plugins\SkyrimPython\]
-#   tools/box/box_deploy.sh --site-packages DIR              -> Plugins\SkyrimPython\site-packages\<entries>
-#   tools/box/box_deploy.sh --package                        -> Plugins\SkyrimPython\lib\skyrim\ (python/src/skyrim)
-#   tools/box/box_deploy.sh --scripts DIR                    -> Plugins\SkyrimPython\scripts\<entries>
-#   tools/box/box_deploy.sh --file LOCAL REL                 -> Plugins\SkyrimPython\REL (one file: s10_check.py, markers)
-#   tools/box/box_deploy.sh --pex path/to/SkyrimPython.pex   -> exactly Data\Scripts\SkyrimPython.pex (Task 7; the only
+#                                                               (Skython.dll also deploys out/SkythonCore.dll
+#                                                                to Plugins\Skython\, which must not be older)
+#   tools/box/box_deploy.sh --python [out/<Core>.dll]        -> Plugins\Skython\python\ (third_party/cpython/embed)
+#                                                               [+ the core DLL into Plugins\Skython\]
+#   tools/box/box_deploy.sh --site-packages DIR              -> Plugins\Skython\site-packages\<entries>
+#   tools/box/box_deploy.sh --package                        -> Plugins\Skython\lib\skython\ (python/src/skython)
+#   tools/box/box_deploy.sh --scripts DIR                    -> Plugins\Skython\scripts\<entries>
+#   tools/box/box_deploy.sh --file LOCAL REL                 -> Plugins\Skython\REL (one file: s10_check.py, markers)
+#   tools/box/box_deploy.sh --pex path/to/SkyrimPython.pex   -> exactly Data\Scripts\SkyrimPython.pex (Task 7: the spike's
+#                                                               own script, which keeps its name; the only
 #                                                               target outside Plugins; placed only if absent or ours)
 #   tools/box/box_deploy.sh --move REL NEWREL                -> moves Plugins\REL to Plugins\NEWREL (Task 26's startup
 #                                                               variants; Task 25 moves the spike DLL aside). REL must be
@@ -104,15 +105,15 @@ elif [ "$1" = --move ]; then
 elif [ "${1#-}" = "$1" ]; then
   DLL="$1"; [ -f "$DLL" ] || box_die "no such file: $DLL"; spike_ok "$DLL"
   base="$(basename "$DLL")"
-  if [ "$base" = SkyrimPython.dll ]; then
-    CORE="$(dirname "$DLL")/SkyrimPythonCore.dll"
-    [ -f "$CORE" ] || box_die "$CORE missing: run tools/remote_build.sh plugin SkyrimPythonCore.dll"
+  if [ "$base" = Skython.dll ]; then
+    CORE="$(dirname "$DLL")/SkythonCore.dll"
+    [ -f "$CORE" ] || box_die "$CORE missing: run tools/remote_build.sh plugin SkythonCore.dll"
     [ "$DLL" -nt "$CORE" ] && box_die "$CORE is older than $DLL: rebuild it"
   fi
   [ $# -ge 2 ] && { [ -f "$2" ] || box_die "no such file: $2"; }
   if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ]; then
     echo "$BOX_PLUGINS\\$base"
-    [ "$base" = SkyrimPython.dll ] && echo "$BOX_OWN\\SkyrimPythonCore.dll"
+    [ "$base" = Skython.dll ] && echo "$BOX_OWN\\SkythonCore.dll"
     [ $# -ge 2 ] && echo "$BOX_PLUGINS\\${base%.dll}.ini"
     exit 0
   fi
@@ -137,8 +138,8 @@ case "$1" in
     put_entries "$SP" "$BOX_OWN\\site-packages"
     ;;
   --package)
-    [ -f "$BOX_ROOT/python/src/skyrim/__init__.py" ] || box_die "python/src/skyrim is missing"
-    put_tree "$BOX_ROOT/python/src/skyrim" "$BOX_OWN\\lib\\skyrim"
+    [ -f "$BOX_ROOT/python/src/skython/__init__.py" ] || box_die "python/src/skython is missing"
+    put_tree "$BOX_ROOT/python/src/skython" "$BOX_OWN\\lib\\skython"
     ;;
   --scripts)
     put_entries "${2:?usage: box_deploy.sh --scripts DIR}" "$BOX_OWN\\scripts"
@@ -161,7 +162,7 @@ case "$1" in
   *)
     # DLL, base and CORE were checked before the ssh (above)
     put_file "$DLL" "$BOX_PLUGINS\\$base"
-    [ "$base" = SkyrimPython.dll ] && put_file "$CORE" "$BOX_OWN\\SkyrimPythonCore.dll"
+    [ "$base" = Skython.dll ] && put_file "$CORE" "$BOX_OWN\\SkythonCore.dll"
     [ $# -ge 2 ] && put_file "$2" "$BOX_PLUGINS\\${base%.dll}.ini"
     ;;
 esac

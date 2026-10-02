@@ -1,4 +1,4 @@
-"""A pure-Python stand-in for the built-in `_skyrim` module (plan index, Contracts), for tests.
+"""A pure-Python stand-in for the built-in `_skython` module (plan index, Contracts), for tests.
 
 It speaks the same text as the real module: a request is the JSON text {"type": "request", "id", "op", "args"}
 and a response is the JSON text {"type": "response", "id", "ok", "result" | "error"}. It behaves like core's
@@ -18,8 +18,8 @@ Dispatcher (Task 18) over FakeBackend:
   timeout with detail.late_cancel = true, plus paused and menus.
 Handlers run on their own daemon threads, so blocking handlers behave like slow game calls.
 
-Use the `fake` fixture in conftest.py: it installs an instance as sys.modules["_skyrim"] and closes it
-afterwards. Tasks 23 (bridge) and 24 (skyrim._host) reuse it.
+Use the `fake` fixture in conftest.py: it installs an instance as sys.modules["_skython"] and closes it
+afterwards. Tasks 23 (bridge) and 24 (skython._host) reuse it.
 """
 import itertools
 import json
@@ -28,7 +28,7 @@ import tempfile
 import threading
 import time
 
-from skyrim import _protocol_generated as _g
+from skython import _protocol_generated as _g
 
 BACKEND = "fake"
 _U64_MAX = 2**64 - 1
@@ -45,7 +45,7 @@ class FakeRemoteError(Exception):
 class Ctx:
     """What a handler gets besides op and args."""
 
-    def __init__(self, fake: "FakeSkyrim", entry: "_Entry"):
+    def __init__(self, fake: "FakeSkython", entry: "_Entry"):
         self.fake = fake
         self._entry = entry
 
@@ -121,8 +121,8 @@ def fake_handler(op: str, args: dict, ctx: Ctx):
     raise FakeRemoteError(_g.CODE_UNSUPPORTED, f"the fake backend has no {op} {args.get('script')}.{args.get('function')}")
 
 
-class FakeSkyrim:
-    """Module-like: put an instance in sys.modules["_skyrim"] and `import _skyrim` returns it."""
+class FakeSkython:
+    """Module-like: put an instance in sys.modules["_skython"] and `import _skython` returns it."""
 
     BACKEND = BACKEND
     PROTOCOL = _g.PROTOCOL_VERSION
@@ -131,7 +131,7 @@ class FakeSkyrim:
                  default_timeout_ms: int = _g.CONFIG_KEYS["default_timeout_ms"]["default"],
                  max_inflight_total: int = _g.CONFIG_KEYS["max_inflight_total"]["default"]):
         self.handler = handler or fake_handler
-        self.root = pathlib.Path(root) if root is not None else pathlib.Path(tempfile.gettempdir()) / "skyrim-fake"
+        self.root = pathlib.Path(root) if root is not None else pathlib.Path(tempfile.gettempdir()) / "skython-fake"
         self.config_overrides = dict(config or {})
         self.default_timeout_ms = default_timeout_ms
         self.max_inflight_total = max_inflight_total
@@ -157,7 +157,7 @@ class FakeSkyrim:
     def epoch(self, value: int) -> None:
         self._epoch_base = value - self._loads
 
-    # -- the _skyrim API ------------------------------------------------------------------------
+    # -- the _skython API ------------------------------------------------------------------------
     def submit(self, request: str) -> int:
         ticket = next(self._tickets)
         try:
@@ -289,7 +289,7 @@ class FakeSkyrim:
             return f"unknown op {obj.get('op')!r}"
         if not isinstance(obj.get("args"), dict):
             return "args must be an object"
-        return FakeSkyrim._op_problem(obj["op"], obj["args"])
+        return FakeSkython._op_problem(obj["op"], obj["args"])
 
     @staticmethod
     def _op_problem(op: str, args: dict) -> str | None:
@@ -319,7 +319,7 @@ class FakeSkyrim:
                 step_args = step.get("args", {})
                 if not isinstance(step_args, dict):
                     return "args must be an object"
-                problem = FakeSkyrim._op_problem(step["op"], step_args)
+                problem = FakeSkython._op_problem(step["op"], step_args)
                 if problem is not None:
                     return problem
             if "stop_on_error" in args and type(args["stop_on_error"]) is not bool:

@@ -2,28 +2,28 @@
 
 Adapted from: branch `plan-out-of-process`, task 14 (`task-14-python-discovery-and-the-synchronous-client.md`): its `Game` and `Batch` classes, their timeout rules and their tests. The socket client, discovery and the fake socket server from that task are Task 22's.
 
-> Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.2, 4.5 and 4.7). Steps use checkbox (`- [ ]`) syntax for tracking.
+> Part of the [Skython v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.2, 4.5 and 4.7). Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Depends on:** Task 20. Contract-wise also on Task 19 (the `_skyrim` API), but no code from it: the tests run against `python/tests/fake_skyrim.py`, a pure-Python stand-in with the same API, so this task needs neither the C++ build nor the game. Tasks 22 (remote transport), 23 (bridge) and 24 (`skyrim._host`) build on it and reuse `fake_skyrim.py` and the `fake` fixture.
+> **Depends on:** Task 20. Contract-wise also on Task 19 (the `_skython` API), but no code from it: the tests run against `python/tests/fake_skython.py`, a pure-Python stand-in with the same API, so this task needs neither the C++ build nor the game. Tasks 22 (remote transport), 23 (bridge) and 24 (`skython._host`) build on it and reuse `fake_skython.py` and the `fake` fixture.
 
-**What changed from the out-of-process plan.** The old `Game` owned a socket. Now `Game` (`skyrim/game.py`) owns no I/O: it builds request `args`, validates timeouts, retries `NotReady`, interprets `ok` and decodes values, and hands each request to a **Transport** (`request(op, args, wait_s) -> response dict`, `close()`, `welcome`, `closed`). The same `Game` therefore runs in the game over `InProcessTransport` (this task: JSON text through `_skyrim.call`, which releases the GIL while it waits) and on Linux over Task 22's `RemoteTransport`. Two behaviours differ by transport and are pinned here for the in-process side: a call whose Python-side wait runs out is `Timeout` with `detail.late_cancel = true` (the Contract for `_skyrim.call`), where the remote transport raises `CallTimeout`; and `retry_not_ready` moved from `connect()` into `Game`.
+**What changed from the out-of-process plan.** The old `Game` owned a socket. Now `Game` (`skython/game.py`) owns no I/O: it builds request `args`, validates timeouts, retries `NotReady`, interprets `ok` and decodes values, and hands each request to a **Transport** (`request(op, args, wait_s) -> response dict`, `close()`, `welcome`, `closed`). The same `Game` therefore runs in the game over `InProcessTransport` (this task: JSON text through `_skython.call`, which releases the GIL while it waits) and on Linux over Task 22's `RemoteTransport`. Two behaviours differ by transport and are pinned here for the in-process side: a call whose Python-side wait runs out is `Timeout` with `detail.late_cancel = true` (the Contract for `_skython.call`), where the remote transport raises `CallTimeout`; and `retry_not_ready` moved from `connect()` into `Game`.
 
 **Files:**
-- Create: `python/src/skyrim/game.py`, `python/src/skyrim/inprocess.py`
-- Modify: `python/src/skyrim/__init__.py` (full replacement below), `python/tests/support.py` (full replacement below: adds `wait_until`)
-- Create: `python/tests/fake_skyrim.py`, `python/tests/conftest.py`, `python/tests/test_inprocess.py`, `python/tests/test_game.py`
+- Create: `python/src/skython/game.py`, `python/src/skython/inprocess.py`
+- Modify: `python/src/skython/__init__.py` (full replacement below), `python/tests/support.py` (full replacement below: adds `wait_until`)
+- Create: `python/tests/fake_skython.py`, `python/tests/conftest.py`, `python/tests/test_inprocess.py`, `python/tests/test_game.py`
 
 **Interfaces:**
-- Consumes: Task 20 (`_framing.dumps`, `errors`, `values`), `skyrim._protocol_generated` (Task 12: `OP_*`, `OPS`, `BATCHABLE_OPS`, `PROTOCOL_MAJOR/MINOR`, `PROTOCOL_VERSION`, `MIN_TIMEOUT_MS`, `MAX_TIMEOUT_MS`, `CONFIG_KEYS`, `CODE_*`, `DEFAULT_ALIAS_TYPE`, and the client defaults `CALL_TIMEOUT_S`, `RETRY_NOT_READY_S`, `READY_TIMEOUT_S`, `GRACE_S`), the golden `requests.json` (Task 11), and the `_skyrim` API from the index Contracts (`BACKEND`, `PROTOCOL`, `call`, `config`, `state`; the fake implements all of it).
+- Consumes: Task 20 (`_framing.dumps`, `errors`, `values`), `skython._protocol_generated` (Task 12: `OP_*`, `OPS`, `BATCHABLE_OPS`, `PROTOCOL_MAJOR/MINOR`, `PROTOCOL_VERSION`, `MIN_TIMEOUT_MS`, `MAX_TIMEOUT_MS`, `CONFIG_KEYS`, `CODE_*`, `DEFAULT_ALIAS_TYPE`, and the client defaults `CALL_TIMEOUT_S`, `RETRY_NOT_READY_S`, `READY_TIMEOUT_S`, `GRACE_S`), the golden `requests.json` (Task 11), and the `_skython` API from the index Contracts (`BACKEND`, `PROTOCOL`, `call`, `config`, `state`; the fake implements all of it).
 - Produces:
-  - `skyrim.game`: `class Transport(Protocol)` with `welcome: dict`, `closed: bool`, `request(op: str, args: dict, wait_s: float) -> dict` (sends `{"type": "request", "id", "op", "args"}` with an id the transport chooses; returns the decoded response object; raises `EncodeError` with nothing sent, `ConnectionLost`, `CallTimeout` or `ProtocolViolation`; never interprets `ok`), `close() -> None`. `class Game(transport, *, call_timeout=CALL_TIMEOUT_S, retry_not_ready: bool | float = False)` with `call(script, function, *args, timeout=None, require_unpaused=False)`, `call_method(obj, script, function, *args, timeout=None, require_unpaused=False)`, `get_property(obj, script, prop)`, `set_property(obj, script, prop, value)`, `batch() -> Batch`, `resolve(*, form_key=None, form_id=None, editor_id=None) -> Form`, `form(form_key) -> Form`, `alias(quest, alias_id, alias_type="ReferenceAlias") -> Alias`, `state() -> dict` (decodes `player`), `wait_ready(timeout=READY_TIMEOUT_S) -> dict` (polls `state()`; when `timeout` passes first it raises `NotReady` with `detail` = the last state plus `reason: "wait_ready timed out"`, in both modes, never `CallTimeout`), `close()`; attributes `transport`, `welcome`, `epoch` (from the welcome, fixed), property `closed` (the transport's); context manager. `retry_not_ready=True` means `RETRY_NOT_READY_S`; a `NotReady` whose `detail.dispatched` is true (a world reset ended the call after it reached the game, so its effect may have happened) is raised at once, never resubmitted. `call_timeout` must be a positive finite number (`ValueError`). `Batch` with `call`, `call_method`, `get_property`, `set_property` (each returns the batch and takes `timeout=`) and `run(stop_on_error=True, timeout=None) -> list`. Timeout rules (unchanged from branch task 14): a call's `timeout` is seconds, positive and finite, sent as whole milliseconds rounded up (`0.0004` is `1`) and at most `MAX_TIMEOUT_MS`, else `ValueError` before anything is sent; the Game waits `timeout + GRACE_S` for a call with a timeout and `call_timeout` for one without; a batch always sends `timeout_ms`: the explicit `run(timeout=)` (over `MAX_TIMEOUT_MS` is `ValueError`), else the sum of its step timeouts (the plugin's 5 s default for a step with none) capped at `MAX_TIMEOUT_MS`, and waits that plus `GRACE_S`.
-  - `skyrim.inprocess`: `class InProcessTransport(module=None)` (imports `_skyrim` when `module` is not given; `ProtocolMismatch` when `module.PROTOCOL`'s major differs; `welcome = {"type": "welcome", "protocol", "plugin_version", "game_version", "runtime"}` from `_skyrim.config()`, `"epoch"` from `_skyrim.state()`, `"capabilities"` = the op names in `OPS`, `"backend"` = `_skyrim.BACKEND`; request ids from a lock-protected counter starting at 1; a response that is not a JSON object or carries another id is `ProtocolViolation`; after `close()` every request is `ConnectionLost`); `connect_in_process(*, module=None, call_timeout=CALL_TIMEOUT_S, retry_not_ready=False) -> Game`. Task 22's `skyrim.connect()` calls `connect_in_process` when `_skyrim.BACKEND == "game"`.
-  - `skyrim` (package): exports `Game`, `Batch`, `Transport`, `InProcessTransport`, `connect_in_process`, the errors and the value types.
-  - `python/tests/fake_skyrim.py` (for Tasks 21-24): `class FakeSkyrim(handler=None, *, root=None, config=None, default_timeout_ms=5000, max_inflight_total=1024)`, a module-like object with the Contract's `_skyrim` API: `BACKEND = "fake"`, `PROTOCOL`, `submit`, `wait`, `wait_any`, `cancel`, `call`, `state`, `config` (the generated ini defaults plus `python_dir`, `scripts_dir`, `site_packages_dir`, `log_dir`, `session_file` under `root`, `plugin_version "0.0.0-fake"`, `game_version "0.0.0"`, `runtime "fake"`, then `config` overrides), `log`, `in_flight`, `_fake_set_not_ready`, `_fake_bump_loads`, `_fake_set_paused`; plus for tests `requests` (every well-formed request object), `logs` (`(level, message)` pairs), `handler_calls`, `late_results`, `epoch`, `menus`, `base_state()`, `close()` (stops every waiting handler). Dispatcher rules it follows: bad request text → `bad_request` at once (id peeked, else 0); a `needs_game` op while not ready, or with `require_unpaused` while paused → `not_ready` at once with `detail {reason, paused, menus}`; more than `max_inflight_total` in flight → `busy`; `timeout_ms` and `require_unpaused` are read only when the op's `OPS[op]["args"]` lists them; deadline `args.timeout_ms` (valid range) else `default_timeout_ms` → `timeout` with `detail {paused, menus}` (a batch's detail also carries `completed` and `results` from the last `ctx.progress`); `_fake_bump_loads()` (a world reset) → every in-flight `needs_game` request `not_ready` with `detail {reason, paused, menus, dispatched: true}`, reason the current not-ready reason, else `loading`; a handler exception → `internal`; `cancel` erases the ticket (a later `wait` returns `None` at once) and the late result is counted in `late_results`; `call` that outlives its wait cancels (returning the response instead if it has just arrived) and answers `timeout` with `detail {paused, menus, late_cancel: true}`. A handler is `handler(op, args, ctx) -> result` run on its own daemon thread; it raises `FakeRemoteError(code, message="", detail=None)` to answer an error; `ctx.cancelled()`, `ctx.wait(seconds | None) -> bool` (True when stopped early), `ctx.progress(results)`, `ctx.fake`. The default handler `fake_handler` serves `game.state` (`base_state()` plus `"backend": "fake"`), `papyrus.batch` (runs its steps through itself, honouring `stop_on_error`) and `papyrus.call_static` on script `Fake`: `Echo(x)`, `Sleep(ms)`, `Fail(code, message)`, `Throw()`, `Never()`, `Count()`, the same functions as core's `FakeBackend` (Task 18); another `Fake` function is `unknown_function` and any other op or script is `unsupported`, as in `FakeBackend`.
-  - `python/tests/conftest.py`: fixture `fake` (a `FakeSkyrim(root=tmp_path)` installed as `sys.modules["_skyrim"]`, closed afterwards) and fixture `game` (`connect_in_process()` over it). Task 22 appends its socket fixtures to this file.
+  - `skython.game`: `class Transport(Protocol)` with `welcome: dict`, `closed: bool`, `request(op: str, args: dict, wait_s: float) -> dict` (sends `{"type": "request", "id", "op", "args"}` with an id the transport chooses; returns the decoded response object; raises `EncodeError` with nothing sent, `ConnectionLost`, `CallTimeout` or `ProtocolViolation`; never interprets `ok`), `close() -> None`. `class Game(transport, *, call_timeout=CALL_TIMEOUT_S, retry_not_ready: bool | float = False)` with `call(script, function, *args, timeout=None, require_unpaused=False)`, `call_method(obj, script, function, *args, timeout=None, require_unpaused=False)`, `get_property(obj, script, prop)`, `set_property(obj, script, prop, value)`, `batch() -> Batch`, `resolve(*, form_key=None, form_id=None, editor_id=None) -> Form`, `form(form_key) -> Form`, `alias(quest, alias_id, alias_type="ReferenceAlias") -> Alias`, `state() -> dict` (decodes `player`), `wait_ready(timeout=READY_TIMEOUT_S) -> dict` (polls `state()`; when `timeout` passes first it raises `NotReady` with `detail` = the last state plus `reason: "wait_ready timed out"`, in both modes, never `CallTimeout`), `close()`; attributes `transport`, `welcome`, `epoch` (from the welcome, fixed), property `closed` (the transport's); context manager. `retry_not_ready=True` means `RETRY_NOT_READY_S`; a `NotReady` whose `detail.dispatched` is true (a world reset ended the call after it reached the game, so its effect may have happened) is raised at once, never resubmitted. `call_timeout` must be a positive finite number (`ValueError`). `Batch` with `call`, `call_method`, `get_property`, `set_property` (each returns the batch and takes `timeout=`) and `run(stop_on_error=True, timeout=None) -> list`. Timeout rules (unchanged from branch task 14): a call's `timeout` is seconds, positive and finite, sent as whole milliseconds rounded up (`0.0004` is `1`) and at most `MAX_TIMEOUT_MS`, else `ValueError` before anything is sent; the Game waits `timeout + GRACE_S` for a call with a timeout and `call_timeout` for one without; a batch always sends `timeout_ms`: the explicit `run(timeout=)` (over `MAX_TIMEOUT_MS` is `ValueError`), else the sum of its step timeouts (the plugin's 5 s default for a step with none) capped at `MAX_TIMEOUT_MS`, and waits that plus `GRACE_S`.
+  - `skython.inprocess`: `class InProcessTransport(module=None)` (imports `_skython` when `module` is not given; `ProtocolMismatch` when `module.PROTOCOL`'s major differs; `welcome = {"type": "welcome", "protocol", "plugin_version", "game_version", "runtime"}` from `_skython.config()`, `"epoch"` from `_skython.state()`, `"capabilities"` = the op names in `OPS`, `"backend"` = `_skython.BACKEND`; request ids from a lock-protected counter starting at 1; a response that is not a JSON object or carries another id is `ProtocolViolation`; after `close()` every request is `ConnectionLost`); `connect_in_process(*, module=None, call_timeout=CALL_TIMEOUT_S, retry_not_ready=False) -> Game`. Task 22's `skython.connect()` calls `connect_in_process` when `_skython.BACKEND == "game"`.
+  - `skython` (package): exports `Game`, `Batch`, `Transport`, `InProcessTransport`, `connect_in_process`, the errors and the value types.
+  - `python/tests/fake_skython.py` (for Tasks 21-24): `class FakeSkython(handler=None, *, root=None, config=None, default_timeout_ms=5000, max_inflight_total=1024)`, a module-like object with the Contract's `_skython` API: `BACKEND = "fake"`, `PROTOCOL`, `submit`, `wait`, `wait_any`, `cancel`, `call`, `state`, `config` (the generated ini defaults plus `python_dir`, `scripts_dir`, `site_packages_dir`, `log_dir`, `session_file` under `root`, `plugin_version "0.0.0-fake"`, `game_version "0.0.0"`, `runtime "fake"`, then `config` overrides), `log`, `in_flight`, `_fake_set_not_ready`, `_fake_bump_loads`, `_fake_set_paused`; plus for tests `requests` (every well-formed request object), `logs` (`(level, message)` pairs), `handler_calls`, `late_results`, `epoch`, `menus`, `base_state()`, `close()` (stops every waiting handler). Dispatcher rules it follows: bad request text → `bad_request` at once (id peeked, else 0); a `needs_game` op while not ready, or with `require_unpaused` while paused → `not_ready` at once with `detail {reason, paused, menus}`; more than `max_inflight_total` in flight → `busy`; `timeout_ms` and `require_unpaused` are read only when the op's `OPS[op]["args"]` lists them; deadline `args.timeout_ms` (valid range) else `default_timeout_ms` → `timeout` with `detail {paused, menus}` (a batch's detail also carries `completed` and `results` from the last `ctx.progress`); `_fake_bump_loads()` (a world reset) → every in-flight `needs_game` request `not_ready` with `detail {reason, paused, menus, dispatched: true}`, reason the current not-ready reason, else `loading`; a handler exception → `internal`; `cancel` erases the ticket (a later `wait` returns `None` at once) and the late result is counted in `late_results`; `call` that outlives its wait cancels (returning the response instead if it has just arrived) and answers `timeout` with `detail {paused, menus, late_cancel: true}`. A handler is `handler(op, args, ctx) -> result` run on its own daemon thread; it raises `FakeRemoteError(code, message="", detail=None)` to answer an error; `ctx.cancelled()`, `ctx.wait(seconds | None) -> bool` (True when stopped early), `ctx.progress(results)`, `ctx.fake`. The default handler `fake_handler` serves `game.state` (`base_state()` plus `"backend": "fake"`), `papyrus.batch` (runs its steps through itself, honouring `stop_on_error`) and `papyrus.call_static` on script `Fake`: `Echo(x)`, `Sleep(ms)`, `Fail(code, message)`, `Throw()`, `Never()`, `Count()`, the same functions as core's `FakeBackend` (Task 18); another `Fake` function is `unknown_function` and any other op or script is `unsupported`, as in `FakeBackend`.
+  - `python/tests/conftest.py`: fixture `fake` (a `FakeSkython(root=tmp_path)` installed as `sys.modules["_skython"]`, closed afterwards) and fixture `game` (`connect_in_process()` over it). Task 22 appends its socket fixtures to this file.
   - `python/tests/support.py`: adds `wait_until(predicate, timeout=5.0, what="the condition")` (polls with a deadline, raises `AssertionError`).
 
-- [ ] **Step 1: Test helpers and the fake `_skyrim`**
+- [ ] **Step 1: Test helpers and the fake `_skython`**
 
 Replace the test helpers with:
 `python/tests/support.py`:
@@ -48,10 +48,10 @@ def wait_until(predicate, timeout=5.0, what="the condition"):
         time.sleep(0.01)
 ```
 
-The fake `_skyrim`. It mirrors core's `Dispatcher` rules (Task 18) closely enough that the bridge (Task 23) and `skyrim._host` (Task 24) can be tested on it; `test_inprocess.py` pins those rules.
-`python/tests/fake_skyrim.py`:
+The fake `_skython`. It mirrors core's `Dispatcher` rules (Task 18) closely enough that the bridge (Task 23) and `skython._host` (Task 24) can be tested on it; `test_inprocess.py` pins those rules.
+`python/tests/fake_skython.py`:
 ```python
-"""A pure-Python stand-in for the built-in `_skyrim` module (plan index, Contracts), for tests.
+"""A pure-Python stand-in for the built-in `_skython` module (plan index, Contracts), for tests.
 
 It speaks the same text as the real module: a request is the JSON text {"type": "request", "id", "op", "args"}
 and a response is the JSON text {"type": "response", "id", "ok", "result" | "error"}. It behaves like core's
@@ -71,8 +71,8 @@ Dispatcher (Task 18) over FakeBackend:
   timeout with detail.late_cancel = true, plus paused and menus.
 Handlers run on their own daemon threads, so blocking handlers behave like slow game calls.
 
-Use the `fake` fixture in conftest.py: it installs an instance as sys.modules["_skyrim"] and closes it
-afterwards. Tasks 23 (bridge) and 24 (skyrim._host) reuse it.
+Use the `fake` fixture in conftest.py: it installs an instance as sys.modules["_skython"] and closes it
+afterwards. Tasks 23 (bridge) and 24 (skython._host) reuse it.
 """
 import itertools
 import json
@@ -81,7 +81,7 @@ import tempfile
 import threading
 import time
 
-from skyrim import _protocol_generated as _g
+from skython import _protocol_generated as _g
 
 BACKEND = "fake"
 _U64_MAX = 2**64 - 1
@@ -98,7 +98,7 @@ class FakeRemoteError(Exception):
 class Ctx:
     """What a handler gets besides op and args."""
 
-    def __init__(self, fake: "FakeSkyrim", entry: "_Entry"):
+    def __init__(self, fake: "FakeSkython", entry: "_Entry"):
         self.fake = fake
         self._entry = entry
 
@@ -174,8 +174,8 @@ def fake_handler(op: str, args: dict, ctx: Ctx):
     raise FakeRemoteError(_g.CODE_UNSUPPORTED, f"the fake backend has no {op} {args.get('script')}.{args.get('function')}")
 
 
-class FakeSkyrim:
-    """Module-like: put an instance in sys.modules["_skyrim"] and `import _skyrim` returns it."""
+class FakeSkython:
+    """Module-like: put an instance in sys.modules["_skython"] and `import _skython` returns it."""
 
     BACKEND = BACKEND
     PROTOCOL = _g.PROTOCOL_VERSION
@@ -184,7 +184,7 @@ class FakeSkyrim:
                  default_timeout_ms: int = _g.CONFIG_KEYS["default_timeout_ms"]["default"],
                  max_inflight_total: int = _g.CONFIG_KEYS["max_inflight_total"]["default"]):
         self.handler = handler or fake_handler
-        self.root = pathlib.Path(root) if root is not None else pathlib.Path(tempfile.gettempdir()) / "skyrim-fake"
+        self.root = pathlib.Path(root) if root is not None else pathlib.Path(tempfile.gettempdir()) / "skython-fake"
         self.config_overrides = dict(config or {})
         self.default_timeout_ms = default_timeout_ms
         self.max_inflight_total = max_inflight_total
@@ -210,7 +210,7 @@ class FakeSkyrim:
     def epoch(self, value: int) -> None:
         self._epoch_base = value - self._loads
 
-    # -- the _skyrim API ------------------------------------------------------------------------
+    # -- the _skython API ------------------------------------------------------------------------
     def submit(self, request: str) -> int:
         ticket = next(self._tickets)
         try:
@@ -342,7 +342,7 @@ class FakeSkyrim:
             return f"unknown op {obj.get('op')!r}"
         if not isinstance(obj.get("args"), dict):
             return "args must be an object"
-        return FakeSkyrim._op_problem(obj["op"], obj["args"])
+        return FakeSkython._op_problem(obj["op"], obj["args"])
 
     @staticmethod
     def _op_problem(op: str, args: dict) -> str | None:
@@ -372,7 +372,7 @@ class FakeSkyrim:
                 step_args = step.get("args", {})
                 if not isinstance(step_args, dict):
                     return "args must be an object"
-                problem = FakeSkyrim._op_problem(step["op"], step_args)
+                problem = FakeSkython._op_problem(step["op"], step_args)
                 if problem is not None:
                     return problem
             if "stop_on_error" in args and type(args["stop_on_error"]) is not bool:
@@ -459,14 +459,14 @@ import sys
 
 import pytest
 
-from fake_skyrim import FakeSkyrim
+from fake_skython import FakeSkython
 
 
 @pytest.fixture
 def fake(tmp_path, monkeypatch):
-    """A FakeSkyrim installed as the `_skyrim` module; its directories live under tmp_path."""
-    f = FakeSkyrim(root=tmp_path)
-    monkeypatch.setitem(sys.modules, "_skyrim", f)
+    """A FakeSkython installed as the `_skython` module; its directories live under tmp_path."""
+    f = FakeSkython(root=tmp_path)
+    monkeypatch.setitem(sys.modules, "_skython", f)
     yield f
     f.close()
 
@@ -474,7 +474,7 @@ def fake(tmp_path, monkeypatch):
 @pytest.fixture
 def game(fake):
     """A Game over the in-process transport, talking to `fake`."""
-    from skyrim.inprocess import connect_in_process
+    from skython.inprocess import connect_in_process
     with connect_in_process() as g:
         yield g
 ```
@@ -484,7 +484,7 @@ def game(fake):
 The transport, and the fake's own rules:
 `python/tests/test_inprocess.py`:
 ```python
-"""The in-process transport, and the fake `_skyrim` it runs against in these tests (Tasks 23 and 24 rely on
+"""The in-process transport, and the fake `_skython` it runs against in these tests (Tasks 23 and 24 rely on
 the fake behaving like core's Dispatcher, so its rules are pinned here too)."""
 import json
 import threading
@@ -492,11 +492,11 @@ import time
 
 import pytest
 
-from fake_skyrim import FakeRemoteError, FakeSkyrim
+from fake_skython import FakeRemoteError, FakeSkython
 from support import wait_until
-from skyrim import _protocol_generated as g
-from skyrim import errors
-from skyrim.inprocess import InProcessTransport, connect_in_process
+from skython import _protocol_generated as g
+from skython import errors
+from skython.inprocess import InProcessTransport, connect_in_process
 
 
 def req(op="papyrus.call_static", req_id=1, **args):
@@ -510,7 +510,7 @@ def fake_call(function, *a, req_id=1, **extra):
 # -- the transport ---------------------------------------------------------------------------------------
 def test_the_welcome_is_built_from_config_and_state(fake):
     fake.epoch = 4
-    t = InProcessTransport()  # imports _skyrim, which the fixture installed
+    t = InProcessTransport()  # imports _skython, which the fixture installed
     assert t.welcome["protocol"] == [1, 0] and t.welcome["epoch"] == 4
     assert (t.welcome["plugin_version"], t.welcome["game_version"], t.welcome["runtime"]) == ("0.0.0-fake", "0.0.0", "fake")
     assert t.welcome["capabilities"] == list(g.OPS) and t.welcome["backend"] == "fake"
@@ -610,7 +610,7 @@ def test_a_batch_timeout_reports_its_progress(fake):
 
 
 def test_busy_at_the_in_flight_cap(tmp_path):
-    fake = FakeSkyrim(root=tmp_path, max_inflight_total=2)
+    fake = FakeSkython(root=tmp_path, max_inflight_total=2)
     try:
         held = [fake.submit(fake_call("Never", req_id=i)) for i in (1, 2)]
         assert json.loads(fake.call(fake_call("Echo", 3, req_id=3), 1.0))["error"]["code"] == "busy"
@@ -777,7 +777,7 @@ def test_base_state_follows_the_loads_like_fake_backend(fake):
 The `Game` API, over the in-process transport and the fake. The request-shape checks replay the golden `requests.json`, so every op in the generated table must have a `Game` method that produces its fixture:
 `python/tests/test_game.py`:
 ```python
-"""The Game API (both modes share it), exercised over the in-process transport and the fake `_skyrim`.
+"""The Game API (both modes share it), exercised over the in-process transport and the fake `_skython`.
 The requests the Game builds are checked against the golden fixtures; transport-specific behaviour
 (sockets, handshake) is Task 22's."""
 import contextlib
@@ -788,13 +788,13 @@ import time
 
 import pytest
 
-from fake_skyrim import FakeRemoteError
+from fake_skython import FakeRemoteError
 from support import load_fixture, wait_until
-from skyrim import _protocol_generated as g
-from skyrim import errors
-from skyrim.game import Game
-from skyrim.inprocess import connect_in_process
-from skyrim.values import INT_MAX, INT_MIN, Form, from_wire
+from skython import _protocol_generated as g
+from skython import errors
+from skython.game import Game
+from skython.inprocess import connect_in_process
+from skython.values import INT_MAX, INT_MIN, Form, from_wire
 
 REQUESTS = load_fixture("requests.json")
 
@@ -1209,15 +1209,15 @@ def test_good_retry_not_ready_is_accepted(fake, ok):
 - [ ] **Step 3: Run to verify they fail**
 
 Run: `cd python && uv run --python 3.14 pytest -q tests/test_game.py tests/test_inprocess.py`
-Expected: FAIL with `2 errors during collection`: `tests/test_game.py` raises `ModuleNotFoundError: No module named 'skyrim.game'` and `tests/test_inprocess.py` raises `ModuleNotFoundError: No module named 'skyrim.inprocess'`.
+Expected: FAIL with `2 errors during collection`: `tests/test_game.py` raises `ModuleNotFoundError: No module named 'skython.game'` and `tests/test_inprocess.py` raises `ModuleNotFoundError: No module named 'skython.inprocess'`.
 
 - [ ] **Step 4: Implement**
 
-`python/src/skyrim/game.py`:
+`python/src/skython/game.py`:
 ```python
 """The Game API, the same in both modes. A Game talks to the game through a Transport:
-skyrim.inprocess.InProcessTransport inside the game (over the built-in _skyrim module), or
-skyrim.remote.RemoteTransport from another process (over the dev bridge, Task 22)."""
+skython.inprocess.InProcessTransport inside the game (over the built-in _skython module), or
+skython.remote.RemoteTransport from another process (over the dev bridge, Task 22)."""
 import math
 import time
 from typing import Any, Protocol
@@ -1435,11 +1435,11 @@ class Batch:
                 for r in results]
 ```
 
-`python/src/skyrim/inprocess.py`:
+`python/src/skython/inprocess.py`:
 ```python
-"""The in-process transport: the Game API inside the game, over the built-in _skyrim module.
+"""The in-process transport: the Game API inside the game, over the built-in _skython module.
 
-Requests and responses are the same JSON text as on the dev bridge (protocol/PROTOCOL.md). _skyrim.call
+Requests and responses are the same JSON text as on the dev bridge (protocol/PROTOCOL.md). _skython.call
 releases the GIL while it waits, so any number of Python threads may call at once; the game's own threads
 never run Python."""
 import itertools
@@ -1463,18 +1463,18 @@ def _object(text, what: str) -> dict:
 
 
 class InProcessTransport:
-    """A Transport over `module` (the _skyrim module; imported when not given)."""
+    """A Transport over `module` (the _skython module; imported when not given)."""
 
     def __init__(self, module=None):
         if module is None:
-            import _skyrim as module  # built into SkyrimPythonCore.dll; a fake in tests
+            import _skython as module  # built into SkythonCore.dll; a fake in tests
         self._m = module
         proto = tuple(module.PROTOCOL)
         if len(proto) != 2 or proto[0] != _g.PROTOCOL_MAJOR:
-            raise errors.ProtocolMismatch(_g.CODE_PROTOCOL_MISMATCH, f"_skyrim speaks protocol {'.'.join(map(str, proto))}, "
+            raise errors.ProtocolMismatch(_g.CODE_PROTOCOL_MISMATCH, f"_skython speaks protocol {'.'.join(map(str, proto))}, "
                                           f"this package speaks {_g.PROTOCOL_MAJOR}.{_g.PROTOCOL_MINOR}")
-        cfg = _object(module.config(), "_skyrim.config()")
-        state = _object(module.state(), "_skyrim.state()")
+        cfg = _object(module.config(), "_skython.config()")
+        state = _object(module.state(), "_skython.state()")
         self.welcome = {"type": "welcome", "protocol": list(proto), "plugin_version": cfg.get("plugin_version"),
                         "game_version": cfg.get("game_version"), "runtime": cfg.get("runtime"),
                         "epoch": state.get("epoch", 0), "capabilities": list(_g.OPS), "backend": module.BACKEND}
@@ -1499,12 +1499,12 @@ class InProcessTransport:
 
 def connect_in_process(*, module=None, call_timeout: float = _g.CALL_TIMEOUT_S,
                        retry_not_ready: bool | float = False) -> Game:
-    """A Game over _skyrim. skyrim.connect() calls this inside the game (Task 22)."""
+    """A Game over _skython. skython.connect() calls this inside the game (Task 22)."""
     return Game(InProcessTransport(module), call_timeout=call_timeout, retry_not_ready=retry_not_ready)
 ```
 
 Replace the package's `__init__.py` with:
-`python/src/skyrim/__init__.py`:
+`python/src/skython/__init__.py`:
 ```python
 """Call Papyrus in a running Skyrim from Python."""
 from .errors import *  # noqa: F401,F403
@@ -1520,16 +1520,16 @@ __version__ = "0.1.0"
 Run: `cd python && uv run --python 3.12 pytest -q && uv run --python 3.14 pytest -q`
 Expected: `253 passed` twice, each in about 5 s (Task 20's 151 plus this task's 102; the request-fixture replay adds one test per entry in `requests.json`). No test depends on wall-clock luck: every wait is bounded by a deadline, and the one call with a 1 ms timeout (`test_tiny_timeout_is_one_millisecond_not_zero`) checks only what was sent. To check for flakiness on a slow machine, run the two new files on one CPU a few times: `for i in 1 2 3; do taskset -c 0 uv run --python 3.14 pytest -q tests/test_game.py tests/test_inprocess.py; done` prints `102 passed` three times.
 
-Design notes the tests pin: `Game` owns no I/O and never sees request ids (the transport chooses them); an oversize or unencodable request is `EncodeError` before `_skyrim` sees anything (`_framing.dumps` runs first); `InProcessTransport.request` blocks in `_skyrim.call`, which in the real module releases the GIL, so 16 threads can wait at once (`test_sixteen_threads_calling_at_once_get_their_own_answers`); a call whose wait runs out leaves nothing in flight (`_skyrim.call` cancels its ticket).
+Design notes the tests pin: `Game` owns no I/O and never sees request ids (the transport chooses them); an oversize or unencodable request is `EncodeError` before `_skython` sees anything (`_framing.dumps` runs first); `InProcessTransport.request` blocks in `_skython.call`, which in the real module releases the GIL, so 16 threads can wait at once (`test_sixteen_threads_calling_at_once_get_their_own_answers`); a call whose wait runs out leaves nothing in flight (`_skython.call` cancels its ticket).
 
 - [ ] **Step 6: Run the drift check**
 
 Run: `python3 tools/gen_protocol.py --check`
-Expected: `gen_protocol: 3 generated files are up to date`. `game.py` and `inprocess.py` must not spell out an op name, an error code, a limit or a default timeout: they take them from `skyrim._protocol_generated`.
+Expected: `gen_protocol: 3 generated files are up to date`. `game.py` and `inprocess.py` must not spell out an op name, an error code, a limit or a default timeout: they take them from `skython._protocol_generated`.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add python/src python/tests
-git commit -m "feat(python): Game API over a transport, the in-process transport over _skyrim, and a fake _skyrim for tests"
+git commit -m "feat(python): Game API over a transport, the in-process transport over _skython, and a fake _skython for tests"
 ```

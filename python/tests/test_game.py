@@ -1,4 +1,4 @@
-"""The Game API (both modes share it), exercised over the in-process transport and the fake `_skyrim`.
+"""The Game API (both modes share it), exercised over the in-process transport and the fake `_skython`.
 The requests the Game builds are checked against the golden fixtures; transport-specific behaviour
 (sockets, handshake) is Task 22's."""
 import contextlib
@@ -9,13 +9,13 @@ import time
 
 import pytest
 
-from fake_skyrim import FakeRemoteError
+from fake_skython import FakeRemoteError
 from support import load_fixture, wait_until
-from skyrim import _protocol_generated as g
-from skyrim import errors
-from skyrim.game import Game
-from skyrim.inprocess import connect_in_process
-from skyrim.values import INT_MAX, INT_MIN, Form, from_wire
+from skython import _protocol_generated as g
+from skython import errors
+from skython.game import Game
+from skython.inprocess import connect_in_process
+from skython.values import INT_MAX, INT_MIN, Form, from_wire
 
 REQUESTS = load_fixture("requests.json")
 

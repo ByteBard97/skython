@@ -1,7 +1,7 @@
-"""The skyrim package against the REAL _skyrim (C++ Dispatcher + FakeBackend, Task 19), not fake_skyrim.
+"""The skython package against the REAL _skython (C++ Dispatcher + FakeBackend, Task 19), not fake_skython.
 
-Skipped unless SKYRIM_REAL_MODULE_DIR names the folder holding the built _skyrim*.so
-(pyglue/build after Task 19). It pins fake_skyrim's behaviour to the real Dispatcher's.
+Skipped unless SKYTHON_REAL_MODULE_DIR names the folder holding the built _skython*.so
+(pyglue/build after Task 19). It pins fake_skython's behaviour to the real Dispatcher's.
 """
 import importlib
 import json
@@ -14,25 +14,25 @@ import time
 import pytest
 
 from support import wait_until
-from skyrim import _framing, bridge, errors
-from skyrim.inprocess import connect_in_process
-from skyrim.remote import connect_remote
+from skython import _framing, bridge, errors
+from skython.inprocess import connect_in_process
+from skython.remote import connect_remote
 
-MODULE_DIR = os.environ.get("SKYRIM_REAL_MODULE_DIR")
-pytestmark = pytest.mark.skipif(not MODULE_DIR, reason="SKYRIM_REAL_MODULE_DIR not set")
+MODULE_DIR = os.environ.get("SKYTHON_REAL_MODULE_DIR")
+pytestmark = pytest.mark.skipif(not MODULE_DIR, reason="SKYTHON_REAL_MODULE_DIR not set")
 TOKEN = "ab" * 16
 
 
 @pytest.fixture(scope="module")
 def real(tmp_path_factory):
-    """The real module, imported for this file only: SKYRIM_FAKE_DIR and sys.modules["_skyrim"] are restored
+    """The real module, imported for this file only: SKYTHON_FAKE_DIR and sys.modules["_skython"] are restored
     afterwards, so later tests see the fake again."""
-    before = sys.modules.pop("_skyrim", None)
+    before = sys.modules.pop("_skython", None)
     with pytest.MonkeyPatch.context() as mp:
-        mp.setenv("SKYRIM_FAKE_DIR", str(tmp_path_factory.mktemp("real")))
+        mp.setenv("SKYTHON_FAKE_DIR", str(tmp_path_factory.mktemp("real")))
         sys.path.insert(0, MODULE_DIR)
         try:
-            mod = importlib.import_module("_skyrim")
+            mod = importlib.import_module("_skython")
         finally:
             sys.path.remove(MODULE_DIR)
         try:
@@ -40,9 +40,9 @@ def real(tmp_path_factory):
             yield mod
             mod._fake_set_not_ready(None)
         finally:
-            sys.modules.pop("_skyrim", None)
+            sys.modules.pop("_skython", None)
             if before is not None:
-                sys.modules["_skyrim"] = before
+                sys.modules["_skython"] = before
 
 
 @pytest.fixture
@@ -107,7 +107,7 @@ def test_a_load_fails_calls_in_flight(game, real):
 
 def test_the_gil_is_released_while_waiting(game, real):
     # The call runs on a worker. This thread can only see it in flight, and the spinner can only advance, while
-    # the worker is inside _skyrim.call if call released the GIL; before and after the call they always could.
+    # the worker is inside _skython.call if call released the GIL; before and after the call they always could.
     count, stop = [0], [False]
 
     def spin():

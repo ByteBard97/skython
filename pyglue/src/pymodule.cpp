@@ -20,7 +20,7 @@ ModuleHost& Host()
 
 Dispatcher& Disp()
 {
-    if (Host().dispatcher == nullptr) throw std::runtime_error("_skyrim: no dispatcher installed (InstallModuleHost was not called)");
+    if (Host().dispatcher == nullptr) throw std::runtime_error("_skython: no dispatcher installed (InstallModuleHost was not called)");
     return *Host().dispatcher;
 }
 
@@ -60,7 +60,7 @@ void InstallModuleHost(ModuleHost host)
 void DefineModule(py::module_& m)
 {
     const ModuleHost& h = Host();
-    m.doc() = "skyrim-python's boundary between Python and the game: request and response JSON text (spec 4.2).";
+    m.doc() = "Skython's boundary between Python and the game: request and response JSON text (spec 4.2).";
     m.attr("BACKEND") = std::string(h.backend != nullptr ? h.backend : "game");
     m.attr("PROTOCOL") = py::make_tuple(kProtocolMajor, kProtocolMinor);
 

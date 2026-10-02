@@ -9,7 +9,7 @@
 #include <vector>
 
 namespace spy {
-// One request format for both modes (spec 4.2): in-process the skyrim package hands this text to _skyrim; over the dev
+// One request format for both modes (spec 4.2): in-process the skython package hands this text to _skython; over the dev
 // bridge the Python bridge forwards the same text. Every request carries "type": "request".
 struct Request { std::uint64_t id = 0; std::string op; json args; };
 // Envelope + known op + op arguments. Throws only ProtocolError (bad_request or type_mismatch), never a json exception.

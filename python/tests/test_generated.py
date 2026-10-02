@@ -5,7 +5,7 @@ import inspect
 import pytest
 
 from support import load_fixture
-from skyrim import _framing, _protocol_generated as g, errors, refs, values
+from skython import _framing, _protocol_generated as g, errors, refs, values
 
 REQUESTS = load_fixture("requests.json")
 HELLO = load_fixture("hello.json")
@@ -35,7 +35,7 @@ def test_v1_wire_contract_is_pinned():
                                     "default_timeout_ms", "max_inflight_per_connection", "max_inflight_total", "enable_console")
     assert g.CONFIG_KEYS["port"]["default"] == 45977 and g.CONFIG_KEYS["bridge_enabled"]["default"] is False
     assert g.HOST == "127.0.0.1"
-    assert (g.ENV_SESSION, g.ENV_PORT, g.ENV_TOKEN) == ("SKYRIM_PYTHON_SESSION", "SKYRIM_PYTHON_PORT", "SKYRIM_PYTHON_TOKEN")
+    assert (g.ENV_SESSION, g.ENV_PORT, g.ENV_TOKEN) == ("SKYTHON_SESSION", "SKYTHON_PORT", "SKYTHON_TOKEN")
 
 
 def test_the_exception_registry_is_built_from_the_table():

@@ -1,8 +1,8 @@
-"""What the plugin runs inside the game. SkyrimPythonCore.dll (Task 26) imports this module on its host
+"""What the plugin runs inside the game. SkythonCore.dll (Task 26) imports this module on its host
 thread right after Py_InitializeFromConfig and calls main() once.
 
 main() sets up logging (python.log next to session.json, rotating 1 MiB x 3; WARNING and above also go to
-the plugin's own log through _skyrim.log), sends stdout, stderr and uncaught exceptions to that log, starts
+the plugin's own log through _skython.log), sends stdout, stderr and uncaught exceptions to that log, starts
 the dev bridge when bridge_enabled is set, loads the player scripts, and returns. It never raises: a failure
 is logged and the game goes on. Long-running work lives on threads the scripts start; the host thread
 itself releases the GIL once main() returns (Global Constraints).
@@ -36,7 +36,7 @@ import threading
 import time
 import traceback
 
-log = logging.getLogger("skyrim.host")
+log = logging.getLogger("skython.host")
 
 SETUP_WARN_S = 1.0
 SETUP_TIMEOUT_S = 10.0
@@ -63,7 +63,7 @@ _STATE.update(_fresh_state())
 
 # -- logging ---------------------------------------------------------------------------------------------
 class _PluginLogHandler(logging.Handler):
-    """WARNING and above also go to the plugin's own log (SkyrimPython.log) through _skyrim.log."""
+    """WARNING and above also go to the plugin's own log (Skython.log) through _skython.log."""
 
     def __init__(self, module):
         super().__init__(logging.WARNING)
@@ -119,7 +119,7 @@ class _StreamToLog(io.TextIOBase):
 def _setup_logging(module, log_dir) -> str:
     root = logging.getLogger()
     for h in list(root.handlers):
-        if getattr(h, "_skyrim_host", False):
+        if getattr(h, "_skython_host", False):
             root.removeHandler(h)
             h.close()
     os.makedirs(log_dir, exist_ok=True)
@@ -129,7 +129,7 @@ def _setup_logging(module, log_dir) -> str:
     ph = _PluginLogHandler(module)
     ph.setFormatter(logging.Formatter("python: %(name)s: %(message)s"))
     for h in (fh, ph):
-        h._skyrim_host = True
+        h._skython_host = True
         root.addHandler(h)
     root.setLevel(logging.INFO)
     return path
@@ -139,12 +139,12 @@ def _setup_plugin_log_only(module) -> None:
     """Fallback when python.log cannot be opened: WARNING and above still reach the plugin's own log."""
     root = logging.getLogger()
     for h in list(root.handlers):
-        if getattr(h, "_skyrim_host", False):
+        if getattr(h, "_skython_host", False):
             root.removeHandler(h)
             h.close()
     ph = _PluginLogHandler(module)
     ph.setFormatter(logging.Formatter("python: %(name)s: %(message)s"))
-    ph._skyrim_host = True
+    ph._skython_host = True
     root.addHandler(ph)
     root.setLevel(logging.INFO)
 
@@ -369,7 +369,7 @@ def _start_bridge(module, cfg: dict) -> None:
         with _LOCK:
             _STATE["bridge_status"] = "disabled"
         if session_file:
-            write_inactive_session_file(session_file, "bridge_enabled is false in SkyrimPython.ini",
+            write_inactive_session_file(session_file, "bridge_enabled is false in Skython.ini",
                                         pid=os.getpid(), plugin_version=cfg.get("plugin_version"))
         log.info("bridge: disabled (bridge_enabled = false)")
         return
@@ -405,23 +405,23 @@ def _write_startup_failure(cfg: dict, why: str) -> None:
     if not session_file:
         return
     try:
-        write_inactive_session_file(session_file, f"skyrim._host could not start: {why}",
+        write_inactive_session_file(session_file, f"skython._host could not start: {why}",
                                     pid=os.getpid(), plugin_version=cfg.get("plugin_version"))
     except Exception:  # noqa: BLE001
         log.exception("could not write the inactive session file")
 
 
 def _main() -> None:
-    import _skyrim
+    import _skython
 
     from .inprocess import connect_in_process
 
-    cfg = json.loads(_skyrim.config())
+    cfg = json.loads(_skython.config())
     log_file = None
     try:
-        log_file = _setup_logging(_skyrim, cfg["log_dir"])
+        log_file = _setup_logging(_skython, cfg["log_dir"])
     except Exception as e:  # noqa: BLE001 - no python.log: keep going with the plugin log only
-        _setup_plugin_log_only(_skyrim)
+        _setup_plugin_log_only(_skython)
         log.error("python.log could not be opened (%s); logging to the plugin log only", e)
     with _LOCK:
         _STATE["config"] = cfg
@@ -432,23 +432,23 @@ def _main() -> None:
         log.exception("could not route print and uncaught exceptions into the log; going on without")
     if SWITCH_INTERVAL_S is not None:
         sys.setswitchinterval(SWITCH_INTERVAL_S)
-    log.info("skyrim._host: Python %s, plugin %s, game %s (%s), switch interval %g s", sys.version.split()[0],
+    log.info("skython._host: Python %s, plugin %s, game %s (%s), switch interval %g s", sys.version.split()[0],
              cfg.get("plugin_version"), cfg.get("game_version"), cfg.get("runtime"), sys.getswitchinterval())
     try:
-        game = connect_in_process(module=_skyrim)
+        game = connect_in_process(module=_skython)
     except Exception as e:  # noqa: BLE001
         log.exception("could not connect in process")
         _write_startup_failure(cfg, str(e))
         return
     with _LOCK:
         _STATE["game"] = game
-    _start_bridge(_skyrim, cfg)  # before the scripts, so a slow script never delays the developer's tools
+    _start_bridge(_skython, cfg)  # before the scripts, so a slow script never delays the developer's tools
     if cfg.get("scripts_enabled", True):
         results = load_scripts(game, cfg["scripts_dir"])
-        log.info("skyrim._host: ready: %d of %d script(s) ok; bridge %s",
+        log.info("skython._host: ready: %d of %d script(s) ok; bridge %s",
                  sum(1 for s in results.values() if s == "ok"), len(results), _STATE["bridge_status"])
     else:
-        log.info("skyrim._host: ready: scripts disabled; bridge %s", _STATE["bridge_status"])
+        log.info("skython._host: ready: scripts disabled; bridge %s", _STATE["bridge_status"])
 
 
 def main() -> None:
@@ -456,13 +456,13 @@ def main() -> None:
     try:
         _main()
     except BaseException:  # noqa: BLE001 - nothing may propagate into the plugin's host thread
-        text = "skyrim._host.main failed:\n" + traceback.format_exc()
+        text = "skython._host.main failed:\n" + traceback.format_exc()
         if _STATE.get("log_file"):
             log.error(text)  # the plugin-log handler forwards it too
             return
         try:
-            import _skyrim
-            _skyrim.log("error", text)
+            import _skython
+            _skython.log("error", text)
         except Exception:  # noqa: BLE001
             pass
 
@@ -488,6 +488,6 @@ def _reset() -> None:
         bridge.close()
     root = logging.getLogger()
     for h in list(root.handlers):
-        if getattr(h, "_skyrim_host", False):
+        if getattr(h, "_skython_host", False):
             root.removeHandler(h)
             h.close()

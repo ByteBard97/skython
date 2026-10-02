@@ -14,15 +14,15 @@ _REMOTE_ONLY = ("host", "port", "token", "client_name", "connect_timeout", "send
 def connect(session=None, **kw) -> Game:
     """The running game, from anywhere.
 
-    Inside the game (the built-in `_skyrim` module reports BACKEND == "game") this is the in-process
+    Inside the game (the built-in `_skython` module reports BACKEND == "game") this is the in-process
     transport. Anywhere else, or when the caller names a bridge (session, host, port, token, ...), it is the
     dev bridge through connect_remote(); keyword arguments are connect_remote()'s. `call_timeout` and
     `retry_not_ready` apply in both modes."""
     if session is None and not any(k in kw for k in _REMOTE_ONLY):
         try:
-            import _skyrim
+            import _skython
         except ImportError:
-            _skyrim = None
-        if _skyrim is not None and getattr(_skyrim, "BACKEND", None) == "game":
-            return connect_in_process(module=_skyrim, **kw)
+            _skython = None
+        if _skython is not None and getattr(_skython, "BACKEND", None) == "game":
+            return connect_in_process(module=_skython, **kw)
     return connect_remote(session, **kw)

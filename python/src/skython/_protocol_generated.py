@@ -1,7 +1,7 @@
 # GENERATED FILE - DO NOT EDIT.
 # Source: protocol/protocol.json. Regenerate with: python3 tools/gen_protocol.py
 # The drift check (python3 tools/gen_protocol.py --check) fails if this file differs from what the generator writes.
-# Constants, error-code registry data and the op table for the skyrim package. Nothing here is logic.
+# Constants, error-code registry data and the op table for the skython package. Nothing here is logic.
 
 PROTOCOL_MAJOR = 1
 PROTOCOL_MINOR = 0
@@ -57,7 +57,7 @@ ERROR_CODES = (
     "unauthorized",
     "protocol_mismatch",
 )
-# wire code -> exception class name in skyrim.errors
+# wire code -> exception class name in skython.errors
 REMOTE_EXCEPTIONS = {
     "not_ready": "NotReady",
     "busy": "Busy",
@@ -179,15 +179,15 @@ CONFIG_KEYS = {
 
 # ---- discovery
 HOST = "127.0.0.1"
-SESSION_DIR_NAME = "SkyrimPython"
+SESSION_DIR_NAME = "Skython"
 SESSION_FILE_NAME = "session.json"
-ENV_SESSION = "SKYRIM_PYTHON_SESSION"
-ENV_PORT = "SKYRIM_PYTHON_PORT"
-ENV_TOKEN = "SKYRIM_PYTHON_TOKEN"
+ENV_SESSION = "SKYTHON_SESSION"
+ENV_PORT = "SKYTHON_PORT"
+ENV_TOKEN = "SKYTHON_TOKEN"
 SESSION_FILE_FIELDS = ("port", "token", "pid", "plugin_version", "protocol")
 
 # ---- client defaults
-CLIENT_NAME = "skyrim-python"
+CLIENT_NAME = "skython"
 CONNECT_TIMEOUT_S = 5.0
 CALL_TIMEOUT_S = 30.0
 SEND_TIMEOUT_S = 30.0

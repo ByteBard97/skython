@@ -2,22 +2,22 @@
 
 Adapted from: branch `plan-out-of-process`, task 14 (`task-14-python-discovery-and-the-synchronous-client.md`): its session discovery, its socket client internals (now `RemoteTransport`), its fake socket server and the transport-level hardening tests. Its `Game`, `Batch`, timeout arithmetic and request-fixture replay moved to Task 21 and are not repeated here.
 
-> Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.2 and 4.7). Steps use checkbox (`- [ ]`) syntax for tracking.
+> Part of the [Skython v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.2 and 4.7). Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Depends on:** Task 21 (`Game`, `Transport`, `connect_in_process`, `python/tests/conftest.py`, `fake_skyrim.py`, `support.wait_until`). Linux only; no game, no C++ build.
+> **Depends on:** Task 21 (`Game`, `Transport`, `connect_in_process`, `python/tests/conftest.py`, `fake_skython.py`, `support.wait_until`). Linux only; no game, no C++ build.
 
-**What changed from the out-of-process plan.** The old `client.Game` owned the socket. Now the socket lives in `RemoteTransport` (`skyrim/remote.py`), which implements Task 21's `Transport`; `connect_remote()` handshakes and wraps it in the shared `Game`. So `game._sock`, `game._pending` and `game.unmatched_responses` from the old tests are now `game.transport._sock`, `game.transport._pending` and `game.transport.unmatched_responses`. Two additions: the socket gets `TCP_NODELAY` (split writes otherwise stall about 40 ms on Linux loopback), and discovery learns the session files the Python bridge writes (Task 23): `write_session_file`, `write_inactive_session_file`, and `find_session` reporting the reason in an inactive file instead of failing on a missing port. `skyrim.connect()` is the one entry point for both modes: in-process inside the game, remote elsewhere. A call that the bridge itself never answers (within the call's wait) is `CallTimeout`; a call the game timed out is the Dispatcher's `Timeout`, as in-process.
+**What changed from the out-of-process plan.** The old `client.Game` owned the socket. Now the socket lives in `RemoteTransport` (`skython/remote.py`), which implements Task 21's `Transport`; `connect_remote()` handshakes and wraps it in the shared `Game`. So `game._sock`, `game._pending` and `game.unmatched_responses` from the old tests are now `game.transport._sock`, `game.transport._pending` and `game.transport.unmatched_responses`. Two additions: the socket gets `TCP_NODELAY` (split writes otherwise stall about 40 ms on Linux loopback), and discovery learns the session files the Python bridge writes (Task 23): `write_session_file`, `write_inactive_session_file`, and `find_session` reporting the reason in an inactive file instead of failing on a missing port. `skython.connect()` is the one entry point for both modes: in-process inside the game, remote elsewhere. A call that the bridge itself never answers (within the call's wait) is `CallTimeout`; a call the game timed out is the Dispatcher's `Timeout`, as in-process.
 
 **Files:**
-- Create: `python/src/skyrim/discovery.py`, `python/src/skyrim/remote.py`, `python/tests/test_discovery.py`, `python/tests/test_remote.py`
-- Modify: `python/src/skyrim/__init__.py` (full replacement below), `python/tests/support.py` (append), `python/tests/conftest.py` (append)
+- Create: `python/src/skython/discovery.py`, `python/src/skython/remote.py`, `python/tests/test_discovery.py`, `python/tests/test_remote.py`
+- Modify: `python/src/skython/__init__.py` (full replacement below), `python/tests/support.py` (append), `python/tests/conftest.py` (append)
 
 **Interfaces:**
-- Consumes: Task 21 (`skyrim.game.Game`, `skyrim.inprocess.connect_in_process`, the `fake` fixture, `fake_skyrim.FakeSkyrim`, `support.wait_until`, `support.load_fixture`), Task 20 (`_framing.encode`, `_framing.read_frame`, `errors`), `skyrim._protocol_generated` (Task 12: `PROTOCOL_VERSION`, `HOST`, `ENV_SESSION`, `ENV_PORT`, `ENV_TOKEN`, `SESSION_FILE_FIELDS`, `CONFIG_KEYS["port"]`, `CODE_PROTOCOL_MISMATCH`, `CLIENT_NAME`, `CONNECT_TIMEOUT_S`, `CALL_TIMEOUT_S`, `SEND_TIMEOUT_S`), the golden `hello.json` and `responses.json` (Task 11).
+- Consumes: Task 21 (`skython.game.Game`, `skython.inprocess.connect_in_process`, the `fake` fixture, `fake_skython.FakeSkython`, `support.wait_until`, `support.load_fixture`), Task 20 (`_framing.encode`, `_framing.read_frame`, `errors`), `skython._protocol_generated` (Task 12: `PROTOCOL_VERSION`, `HOST`, `ENV_SESSION`, `ENV_PORT`, `ENV_TOKEN`, `SESSION_FILE_FIELDS`, `CONFIG_KEYS["port"]`, `CODE_PROTOCOL_MISMATCH`, `CLIENT_NAME`, `CONNECT_TIMEOUT_S`, `CALL_TIMEOUT_S`, `SEND_TIMEOUT_S`), the golden `hello.json` and `responses.json` (Task 11).
 - Produces:
-  - `skyrim.discovery`: `Session(host, port, token, pid=None, plugin_version=None)` (frozen dataclass); `find_session(session=None, *, host=HOST, port=None, token=None, env=os.environ) -> Session` (precedence: explicit `port`+`token`, explicit `session` path, `SKYRIM_PYTHON_SESSION`, the `SKYRIM_PYTHON_PORT`+`SKYRIM_PYTHON_TOKEN` pair; `NotRunning` naming what it tried, for a bad port anywhere, for half a pair, and for an inactive session file, whose `reason` it quotes); `write_session_file(path, session: Session) -> None` (exactly `SESSION_FILE_FIELDS`, `protocol` from the generated version; atomic replace; creates the folder); `write_inactive_session_file(path, reason, *, pid=None, plugin_version=None) -> None` (`{"active": false, "reason", "pid", "plugin_version"}`, no port or token).
-  - `skyrim.remote`: `class RemoteTransport(sock, welcome, *, send_timeout=SEND_TIMEOUT_S)` implementing `Transport` (`welcome`, `closed`, `request(op, args, wait_s) -> dict`, `close()`), plus `unmatched_responses: int`; `connect_remote(session=None, *, host=HOST, port=None, token=None, client_name=CLIENT_NAME, connect_timeout=CONNECT_TIMEOUT_S, call_timeout=CALL_TIMEOUT_S, retry_not_ready=False, send_timeout=SEND_TIMEOUT_S) -> Game`. `connect_timeout` bounds the whole connect, hello and welcome exchange (one deadline); `send_timeout` bounds a stalled `sendall` (the connection is then closed, `ConnectionLost`); the three timeouts must be positive and finite (`ValueError`); the welcome's protocol major is checked (`ProtocolMismatch`; a missing or malformed `protocol` or a non-integer `epoch` is `ProtocolViolation`); a failed handshake closes the socket. Responses with a null, non-integer or unhashable id are ignored and counted in `unmatched_responses`; a late answer to an id the caller gave up on is dropped silently.
-  - `skyrim.connect(session=None, **kw) -> Game` (in `skyrim/__init__.py`): `connect_in_process(module=_skyrim, **kw)` when no bridge is named (no `session`, `host`, `port`, `token`, `client_name`, `connect_timeout` or `send_timeout`) and `_skyrim` imports with `BACKEND == "game"`; otherwise `connect_remote(session, **kw)`. The package also exports `Session`, `find_session`, `RemoteTransport`, `connect_remote`.
+  - `skython.discovery`: `Session(host, port, token, pid=None, plugin_version=None)` (frozen dataclass); `find_session(session=None, *, host=HOST, port=None, token=None, env=os.environ) -> Session` (precedence: explicit `port`+`token`, explicit `session` path, `SKYTHON_SESSION`, the `SKYTHON_PORT`+`SKYTHON_TOKEN` pair; `NotRunning` naming what it tried, for a bad port anywhere, for half a pair, and for an inactive session file, whose `reason` it quotes); `write_session_file(path, session: Session) -> None` (exactly `SESSION_FILE_FIELDS`, `protocol` from the generated version; atomic replace; creates the folder); `write_inactive_session_file(path, reason, *, pid=None, plugin_version=None) -> None` (`{"active": false, "reason", "pid", "plugin_version"}`, no port or token).
+  - `skython.remote`: `class RemoteTransport(sock, welcome, *, send_timeout=SEND_TIMEOUT_S)` implementing `Transport` (`welcome`, `closed`, `request(op, args, wait_s) -> dict`, `close()`), plus `unmatched_responses: int`; `connect_remote(session=None, *, host=HOST, port=None, token=None, client_name=CLIENT_NAME, connect_timeout=CONNECT_TIMEOUT_S, call_timeout=CALL_TIMEOUT_S, retry_not_ready=False, send_timeout=SEND_TIMEOUT_S) -> Game`. `connect_timeout` bounds the whole connect, hello and welcome exchange (one deadline); `send_timeout` bounds a stalled `sendall` (the connection is then closed, `ConnectionLost`); the three timeouts must be positive and finite (`ValueError`); the welcome's protocol major is checked (`ProtocolMismatch`; a missing or malformed `protocol` or a non-integer `epoch` is `ProtocolViolation`); a failed handshake closes the socket. Responses with a null, non-integer or unhashable id are ignored and counted in `unmatched_responses`; a late answer to an id the caller gave up on is dropped silently.
+  - `skython.connect(session=None, **kw) -> Game` (in `skython/__init__.py`): `connect_in_process(module=_skython, **kw)` when no bridge is named (no `session`, `host`, `port`, `token`, `client_name`, `connect_timeout` or `send_timeout`) and `_skython` imports with `BACKEND == "game"`; otherwise `connect_remote(session, **kw)`. The package also exports `Session`, `find_session`, `RemoteTransport`, `connect_remote`.
   - `python/tests/support.py` additions: `TOKEN`, `WELCOME`, `ok(id, result)`, `err(id, code, message="", detail=None)`, `echo_handler`, `hello_problems(hello) -> list[str]`, `FakeServer(handler=None, token=TOKEN, mode="normal", welcome=None, drip_interval=0.05)` with `.port`, `.requests`, `.hellos`, `.errors`, `.conns`, `.drop_all()`, `.close()`, `.check()`, context manager (modes `"normal"`, `"hang"`, `"mismatch"`, `"garbage"`, `"drip"`, `"partial"`, `"stall"`; handler signature `handler(request: dict, reply: Callable[[dict], None])`). `python/tests/conftest.py` additions: fixtures `server` (a `FakeServer`) and `sockets` (every client socket made through `socket.create_connection`, to assert it was closed).
 
 - [ ] **Step 1: Add the fake socket server and its fixtures**
@@ -30,8 +30,8 @@ import socket  # noqa: E402
 import threading  # noqa: E402
 import traceback  # noqa: E402
 
-from skyrim import _framing  # noqa: E402
-from skyrim.errors import ConnectionLost, ProtocolViolation  # noqa: E402
+from skython import _framing  # noqa: E402
+from skython.errors import ConnectionLost, ProtocolViolation  # noqa: E402
 
 TOKEN = "00112233445566778899aabbccddeeff"
 WELCOME = {"protocol": [1, 0], "plugin_version": "0.1.0", "game_version": "1.6.1170.0",
@@ -241,9 +241,9 @@ import os
 
 import pytest
 
-from skyrim import _protocol_generated as g
-from skyrim.discovery import Session, find_session, write_inactive_session_file, write_session_file
-from skyrim.errors import NotRunning
+from skython import _protocol_generated as g
+from skython.discovery import Session, find_session, write_inactive_session_file, write_session_file
+from skython.errors import NotRunning
 
 TOK = "00112233445566778899aabbccddeeff"
 
@@ -255,7 +255,7 @@ def write_session(path, port=45977, token=TOK):
 
 def test_the_session_file_fields_are_the_tables(tmp_path):
     assert set(json.loads(write_session(tmp_path / "s.json").read_text())) == set(g.SESSION_FILE_FIELDS)
-    assert (g.ENV_SESSION, g.ENV_PORT, g.ENV_TOKEN) == ("SKYRIM_PYTHON_SESSION", "SKYRIM_PYTHON_PORT", "SKYRIM_PYTHON_TOKEN")
+    assert (g.ENV_SESSION, g.ENV_PORT, g.ENV_TOKEN) == ("SKYTHON_SESSION", "SKYTHON_PORT", "SKYTHON_TOKEN")
 
 
 def test_explicit_port_and_token_win(tmp_path):
@@ -270,8 +270,8 @@ def test_explicit_session_path(tmp_path):
 
 def test_env_session_then_env_port(tmp_path):
     p = write_session(tmp_path / "s.json", port=3)
-    assert find_session(env={"SKYRIM_PYTHON_SESSION": str(p)}).port == 3
-    assert find_session(env={"SKYRIM_PYTHON_PORT": "4", "SKYRIM_PYTHON_TOKEN": TOK}).port == 4
+    assert find_session(env={"SKYTHON_SESSION": str(p)}).port == 3
+    assert find_session(env={"SKYTHON_PORT": "4", "SKYTHON_TOKEN": TOK}).port == 4
 
 
 def test_missing_session_file_is_not_running(tmp_path):
@@ -280,7 +280,7 @@ def test_missing_session_file_is_not_running(tmp_path):
 
 
 def test_nothing_configured_is_not_running():
-    with pytest.raises(NotRunning, match="SKYRIM_PYTHON_SESSION"):
+    with pytest.raises(NotRunning, match="SKYTHON_SESSION"):
         find_session(env={})
 
 
@@ -293,15 +293,15 @@ def test_corrupt_session_file_is_not_running(tmp_path):
 
 @pytest.mark.parametrize("bad", ["abc", "4x", "0", "65536", "-1", "1.5"])
 def test_bad_env_port_is_not_running_not_value_error(bad):
-    with pytest.raises(NotRunning, match="SKYRIM_PYTHON_PORT is not a port number"):
-        find_session(env={"SKYRIM_PYTHON_PORT": bad, "SKYRIM_PYTHON_TOKEN": TOK})
+    with pytest.raises(NotRunning, match="SKYTHON_PORT is not a port number"):
+        find_session(env={"SKYTHON_PORT": bad, "SKYTHON_TOKEN": TOK})
 
 
 def test_only_half_of_a_pair_is_a_clear_error():
-    with pytest.raises(NotRunning, match="SKYRIM_PYTHON_PORT is set but SKYRIM_PYTHON_TOKEN is not"):
-        find_session(env={"SKYRIM_PYTHON_PORT": "4"})
-    with pytest.raises(NotRunning, match="SKYRIM_PYTHON_TOKEN is set but SKYRIM_PYTHON_PORT is not"):
-        find_session(env={"SKYRIM_PYTHON_TOKEN": TOK})
+    with pytest.raises(NotRunning, match="SKYTHON_PORT is set but SKYTHON_TOKEN is not"):
+        find_session(env={"SKYTHON_PORT": "4"})
+    with pytest.raises(NotRunning, match="SKYTHON_TOKEN is set but SKYTHON_PORT is not"):
+        find_session(env={"SKYTHON_TOKEN": TOK})
     with pytest.raises(NotRunning, match="together.*only port"):
         find_session(port=5, env={})
     with pytest.raises(NotRunning, match="together.*only token"):
@@ -310,7 +310,7 @@ def test_only_half_of_a_pair_is_a_clear_error():
 
 def test_a_session_source_beats_a_lone_env_variable(tmp_path):
     p = write_session(tmp_path / "s.json", port=3)
-    assert find_session(env={"SKYRIM_PYTHON_SESSION": str(p), "SKYRIM_PYTHON_PORT": "9"}).port == 3
+    assert find_session(env={"SKYTHON_SESSION": str(p), "SKYTHON_PORT": "9"}).port == 3
 
 
 @pytest.mark.parametrize("port", ["abc", 0, 70000, None, True])
@@ -401,12 +401,12 @@ import time
 
 import pytest
 
-from fake_skyrim import FakeSkyrim
+from fake_skython import FakeSkython
 from support import TOKEN, FakeServer, err, load_fixture, ok, wait_until
-import skyrim
-from skyrim import _protocol_generated as g
-from skyrim import errors
-from skyrim.remote import RemoteTransport, connect_remote
+import skython
+from skython import _protocol_generated as g
+from skython import errors
+from skython.remote import RemoteTransport, connect_remote
 
 
 def connect(server, **kw):
@@ -498,7 +498,7 @@ def test_a_bad_retry_not_ready_leaves_no_socket_and_no_reader_thread(server, soc
     with pytest.raises(ValueError):
         connect(server, retry_not_ready=-1)
     assert sockets and all(s.fileno() == -1 for s in sockets)
-    wait_until(lambda: not [t for t in threading.enumerate() if t.name == "skyrim-remote-reader"],
+    wait_until(lambda: not [t for t in threading.enumerate() if t.name == "skython-remote-reader"],
                what="the reader thread to end")
 
 
@@ -683,30 +683,30 @@ def test_welcome_fixture_is_accepted():
 
 def test_connect_defaults_are_the_tables_and_the_v1_values():
     p = inspect.signature(connect_remote).parameters
-    assert (p["host"].default, p["client_name"].default) == (g.HOST, g.CLIENT_NAME) == ("127.0.0.1", "skyrim-python")
+    assert (p["host"].default, p["client_name"].default) == (g.HOST, g.CLIENT_NAME) == ("127.0.0.1", "skython")
     assert (p["connect_timeout"].default, p["call_timeout"].default, p["send_timeout"].default) == \
         (g.CONNECT_TIMEOUT_S, g.CALL_TIMEOUT_S, g.SEND_TIMEOUT_S) == (5.0, 30.0, 30.0)
 
 
-# -- skyrim.connect: one entry point for both modes --------------------------------------------------------
+# -- skython.connect: one entry point for both modes --------------------------------------------------------
 def test_connect_is_remote_without_a_game_module(server, monkeypatch):
-    monkeypatch.delitem(sys.modules, "_skyrim", raising=False)
-    with skyrim.connect(port=server.port, token=TOKEN) as game:
+    monkeypatch.delitem(sys.modules, "_skython", raising=False)
+    with skython.connect(port=server.port, token=TOKEN) as game:
         assert isinstance(game.transport, RemoteTransport)
 
 
 def test_connect_is_remote_next_to_the_fake_module(server, fake):
     assert fake.BACKEND == "fake"  # the Linux test build is not "the game"
-    with skyrim.connect(port=server.port, token=TOKEN) as game:
+    with skython.connect(port=server.port, token=TOKEN) as game:
         assert isinstance(game.transport, RemoteTransport)
 
 
 def test_connect_is_in_process_inside_the_game(tmp_path, monkeypatch):
-    f = FakeSkyrim(root=tmp_path)
-    f.BACKEND = "game"  # what the module built into SkyrimPythonCore.dll reports
-    monkeypatch.setitem(sys.modules, "_skyrim", f)
+    f = FakeSkython(root=tmp_path)
+    f.BACKEND = "game"  # what the module built into SkythonCore.dll reports
+    monkeypatch.setitem(sys.modules, "_skython", f)
     try:
-        with skyrim.connect() as game:
+        with skython.connect() as game:
             assert type(game.transport).__name__ == "InProcessTransport"
             assert game.call("Fake", "Echo", 5) == 5
     finally:
@@ -714,11 +714,11 @@ def test_connect_is_in_process_inside_the_game(tmp_path, monkeypatch):
 
 
 def test_connect_with_an_explicit_session_is_remote_even_inside_the_game(server, tmp_path, monkeypatch):
-    f = FakeSkyrim(root=tmp_path)
+    f = FakeSkython(root=tmp_path)
     f.BACKEND = "game"
-    monkeypatch.setitem(sys.modules, "_skyrim", f)
+    monkeypatch.setitem(sys.modules, "_skython", f)
     try:
-        with skyrim.connect(port=server.port, token=TOKEN) as game:
+        with skython.connect(port=server.port, token=TOKEN) as game:
             assert isinstance(game.transport, RemoteTransport)
     finally:
         f.close()
@@ -791,11 +791,11 @@ def test_a_send_that_timed_out_closes_the_stream_before_a_queued_sender_can_writ
 - [ ] **Step 3: Run to verify they fail**
 
 Run: `cd python && uv run --python 3.14 pytest -q tests/test_discovery.py tests/test_remote.py`
-Expected: FAIL with `2 errors during collection`: `tests/test_discovery.py` raises `ModuleNotFoundError: No module named 'skyrim.discovery'` and `tests/test_remote.py` raises `ModuleNotFoundError: No module named 'skyrim.remote'`.
+Expected: FAIL with `2 errors during collection`: `tests/test_discovery.py` raises `ModuleNotFoundError: No module named 'skython.discovery'` and `tests/test_remote.py` raises `ModuleNotFoundError: No module named 'skython.remote'`.
 
-- [ ] **Step 4: Implement discovery, the remote transport and `skyrim.connect`**
+- [ ] **Step 4: Implement discovery, the remote transport and `skython.connect`**
 
-`python/src/skyrim/discovery.py`:
+`python/src/skython/discovery.py`:
 ```python
 """Find the dev bridge: explicit port+token, a session file, or environment variables. The bridge (Task 23)
 writes the session file with write_session_file, or write_inactive_session_file when it is not serving."""
@@ -895,7 +895,7 @@ def write_inactive_session_file(path, reason: str, *, pid: int | None = None, pl
     _write_json(path, {"active": False, "reason": reason, "pid": pid, "plugin_version": plugin_version})
 ```
 
-`python/src/skyrim/remote.py`:
+`python/src/skython/remote.py`:
 ```python
 """The remote transport: the Game API from another process, over the dev bridge (Task 23).
 
@@ -939,7 +939,7 @@ class RemoteTransport:
         self._send_lock = threading.Lock()
         self._send_timeout = send_timeout
         sock.settimeout(send_timeout)  # bounds sendall; the reader treats it as a wake-up tick only
-        self._reader = threading.Thread(target=self._read_loop, name="skyrim-remote-reader", daemon=True)
+        self._reader = threading.Thread(target=self._read_loop, name="skython-remote-reader", daemon=True)
         self._reader.start()
 
     def _read_loop(self):
@@ -1084,7 +1084,7 @@ def connect_remote(session=None, *, host: str = _g.HOST, port: int | None = None
 ```
 
 Replace the package's `__init__.py` with:
-`python/src/skyrim/__init__.py`:
+`python/src/skython/__init__.py`:
 ```python
 """Call Papyrus in a running Skyrim from Python."""
 from .discovery import Session, find_session  # noqa: F401
@@ -1102,17 +1102,17 @@ _REMOTE_ONLY = ("host", "port", "token", "client_name", "connect_timeout", "send
 def connect(session=None, **kw) -> Game:
     """The running game, from anywhere.
 
-    Inside the game (the built-in `_skyrim` module reports BACKEND == "game") this is the in-process
+    Inside the game (the built-in `_skython` module reports BACKEND == "game") this is the in-process
     transport. Anywhere else, or when the caller names a bridge (session, host, port, token, ...), it is the
     dev bridge through connect_remote(); keyword arguments are connect_remote()'s. `call_timeout` and
     `retry_not_ready` apply in both modes."""
     if session is None and not any(k in kw for k in _REMOTE_ONLY):
         try:
-            import _skyrim
+            import _skython
         except ImportError:
-            _skyrim = None
-        if _skyrim is not None and getattr(_skyrim, "BACKEND", None) == "game":
-            return connect_in_process(module=_skyrim, **kw)
+            _skython = None
+        if _skython is not None and getattr(_skython, "BACKEND", None) == "game":
+            return connect_in_process(module=_skython, **kw)
     return connect_remote(session, **kw)
 ```
 
@@ -1126,11 +1126,11 @@ Design notes the tests pin (from the 2026-09-30 review, unchanged): the handshak
 - [ ] **Step 6: Run the drift check**
 
 Run: `python3 tools/gen_protocol.py --check`
-Expected: `gen_protocol: 3 generated files are up to date`. `discovery.py` and `remote.py` must not spell out an environment variable name, the default host, a port limit, an error code or a default timeout: they take them from `skyrim._protocol_generated`.
+Expected: `gen_protocol: 3 generated files are up to date`. `discovery.py` and `remote.py` must not spell out an environment variable name, the default host, a port limit, an error code or a default timeout: they take them from `skython._protocol_generated`.
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add python/src python/tests
-git commit -m "feat(python): session discovery, the remote transport over the dev bridge, and skyrim.connect for both modes"
+git commit -m "feat(python): session discovery, the remote transport over the dev bridge, and skython.connect for both modes"
 ```

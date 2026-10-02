@@ -94,29 +94,29 @@ if [ -f "$B/box_env.sh" ]; then
   [ "$(b64 'a"b c')" = "YSJiIGM=" ] && ok "b64 helper" || bad "b64 helper"
 fi
 
-# 6a. two-DLL layout: loader -> Plugins, core -> Plugins\SkyrimPython, ini -> Plugins\SkyrimPython.ini (no ssh)
+# 6a. two-DLL layout: loader -> Plugins, core -> Plugins\Skython, ini -> Plugins\Skython.ini (no ssh)
 P='C:\ChronicleDev\Stock Game\Data\SKSE\Plugins'
-d2="$(mktemp -d)"; : > "$d2/SkyrimPython.dll"; : > "$d2/dev.ini"; sleep 1; : > "$d2/SkyrimPythonCore.dll"
-t="$(BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" "$d2/SkyrimPython.dll" "$d2/dev.ini" 2>&1)"
-want="$(printf '%s\n' "$P\SkyrimPython.dll" "$P\SkyrimPython\SkyrimPythonCore.dll" "$P\SkyrimPython.ini")"
-[ "$t" = "$want" ] && ok "two-DLL targets: loader, core in SkyrimPython\\, ini" || { bad "two-DLL targets:"; echo "$t"; }
-touch -d '2000-01-01' "$d2/SkyrimPythonCore.dll"
-if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" "$d2/SkyrimPython.dll" >/dev/null 2>&1; then bad "accepted a core older than the loader"; else ok "refuses a core DLL older than the loader"; fi
-d3="$(mktemp -d)"; : > "$d3/SkyrimPython.dll"
-if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" "$d3/SkyrimPython.dll" >/dev/null 2>&1; then bad "accepted a loader without its core"; else ok "refuses the loader without SkyrimPythonCore.dll"; fi
+d2="$(mktemp -d)"; : > "$d2/Skython.dll"; : > "$d2/dev.ini"; sleep 1; : > "$d2/SkythonCore.dll"
+t="$(BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" "$d2/Skython.dll" "$d2/dev.ini" 2>&1)"
+want="$(printf '%s\n' "$P\Skython.dll" "$P\Skython\SkythonCore.dll" "$P\Skython.ini")"
+[ "$t" = "$want" ] && ok "two-DLL targets: loader, core in Skython\\, ini" || { bad "two-DLL targets:"; echo "$t"; }
+touch -d '2000-01-01' "$d2/SkythonCore.dll"
+if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" "$d2/Skython.dll" >/dev/null 2>&1; then bad "accepted a core older than the loader"; else ok "refuses a core DLL older than the loader"; fi
+d3="$(mktemp -d)"; : > "$d3/Skython.dll"
+if BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" "$d3/Skython.dll" >/dev/null 2>&1; then bad "accepted a loader without its core"; else ok "refuses the loader without SkythonCore.dll"; fi
 
 # 6b. --move: recorded moves inside Plugins, only of what box_deploy put there (no ssh in print mode)
-rec="$(mktemp)"; printf '%s\n' "$P\SkyrimPython\python" "$P\SkyrimPythonSpike.dll" > "$rec"
+rec="$(mktemp)"; printf '%s\n' "$P\Skython\python" "$P\SkyrimPythonSpike.dll" > "$rec"
 mv_t() { BOX_DEPLOYED="$rec" BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --move "$@" 2>&1; }
-t="$(mv_t SkyrimPython/python SkyrimPython/python.off)"
-[ "$t" = "MOVE $P\SkyrimPython\python -> $P\SkyrimPython\python.off" ] && ok "--move resolves under Plugins" || bad "--move target: '$t'"
-t="$(mv_t 'SkyrimPython\python\python314.zip' 'SkyrimPython\python\python314.zip.off')"
-[ "$t" = "MOVE $P\SkyrimPython\python\python314.zip -> $P\SkyrimPython\python\python314.zip.off" ] && ok "--move of a file inside a recorded folder" || bad "--move inside a recorded folder: '$t'"
-for args in "devbench.dll devbench.dll.off" "SkyrimPython/../../x SkyrimPython/y" "SkyrimPython/python C:/elsewhere" "SkyrimPython/python SkyrimPython/python" "SkyrimPython/python"; do
+t="$(mv_t Skython/python Skython/python.off)"
+[ "$t" = "MOVE $P\Skython\python -> $P\Skython\python.off" ] && ok "--move resolves under Plugins" || bad "--move target: '$t'"
+t="$(mv_t 'Skython\python\python314.zip' 'Skython\python\python314.zip.off')"
+[ "$t" = "MOVE $P\Skython\python\python314.zip -> $P\Skython\python\python314.zip.off" ] && ok "--move of a file inside a recorded folder" || bad "--move inside a recorded folder: '$t'"
+for args in "devbench.dll devbench.dll.off" "Skython/../../x Skython/y" "Skython/python C:/elsewhere" "Skython/python Skython/python" "Skython/python"; do
   # shellcheck disable=SC2086
   if mv_t $args >/dev/null; then bad "--move accepted: $args"; else ok "--move refuses: $args"; fi
 done
-t="$(BOX_DEPLOYED=/nonexistent/box-deployed.txt BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --move SkyrimPython/python SkyrimPython/python.off 2>&1)"
+t="$(BOX_DEPLOYED=/nonexistent/box-deployed.txt BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --move Skython/python Skython/python.off 2>&1)"
 case "$t" in *"no deploy record"*) ok "--move refuses clearly when the deploy record is missing" ;; *) bad "--move with no deploy record: '$t'" ;; esac
 [ -e /nonexistent/box-deployed.txt ] && bad "print mode created the deploy record" || true
 t="$(BOX_DEPLOYED=/tmp/elsewhere.txt bash -c 'source "$1/box_env.sh"; echo "$BOX_DEPLOYED"' _ "$B")"
@@ -126,12 +126,12 @@ if grep -hE 'Move-Item' "$B"/win/*.ps1 | grep -vE '^\s*#' | grep -q -- '-Force';
 grep -qF '"ERR destination exists' "$B/win/place.ps1" 2>/dev/null && ok "place.ps1 move refuses an existing destination" || bad "place.ps1 move does not refuse an existing destination"
 grep -qF 'box-moves.txt' "$B/box_deploy.sh" 2>/dev/null && ok "moves are recorded in out/box-moves.txt" || bad "moves are not recorded"
 
-# 6c. box_launch.sh --env: only SKYRIM_PYTHON_TEST_* names, written for every launch (no ssh in print mode)
-t="$(BOX_LAUNCH_PRINT_ENV=1 "$B/box_launch.sh" --env SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1 --env 'SKYRIM_PYTHON_TEST_PRELOAD=C:\a b\python314.dll' 2>&1)"
-[ "$t" = "$(printf '%s\n' SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1 'SKYRIM_PYTHON_TEST_PRELOAD=C:\a b\python314.dll')" ] && ok "--env writes the allow-listed names" || bad "--env content: '$t'"
+# 6c. box_launch.sh --env: only SKYTHON_TEST_* names, written for every launch (no ssh in print mode)
+t="$(BOX_LAUNCH_PRINT_ENV=1 "$B/box_launch.sh" --env SKYTHON_TEST_UNVERIFIED_RUNTIME=1 --env 'SKYTHON_TEST_PRELOAD=C:\a b\python314.dll' 2>&1)"
+[ "$t" = "$(printf '%s\n' SKYTHON_TEST_UNVERIFIED_RUNTIME=1 'SKYTHON_TEST_PRELOAD=C:\a b\python314.dll')" ] && ok "--env writes the allow-listed names" || bad "--env content: '$t'"
 t="$(BOX_LAUNCH_PRINT_ENV=1 "$B/box_launch.sh" 2>&1)"; [ -z "$t" ] && ok "no --env: launch.env is empty (nothing leaks into the next launch)" || bad "launch.env without --env: '$t'"
-if BOX_LAUNCH_PRINT_ENV=1 "$B/box_launch.sh" --env PATH=/x >/dev/null 2>&1; then bad "--env accepted PATH"; else ok "--env refuses a name outside SKYRIM_PYTHON_TEST_*"; fi
-grep -qF "'^(SKYRIM_PYTHON_TEST_[A-Z0-9_]+)=(.*)\$'" "$B/win/launch.ps1" 2>/dev/null && ok "launch.ps1 applies only SKYRIM_PYTHON_TEST_* lines" || bad "launch.ps1 does not filter launch.env"
+if BOX_LAUNCH_PRINT_ENV=1 "$B/box_launch.sh" --env PATH=/x >/dev/null 2>&1; then bad "--env accepted PATH"; else ok "--env refuses a name outside SKYTHON_TEST_*"; fi
+grep -qF "'^(SKYTHON_TEST_[A-Z0-9_]+)=(.*)\$'" "$B/win/launch.ps1" 2>/dev/null && ok "launch.ps1 applies only SKYTHON_TEST_* lines" || bad "launch.ps1 does not filter launch.env"
 # 6c2. launch.ps1 Steam logoff (ruling A7): detects LoggedOff / "Logged In Elsewhere", retries the loader at most
 #      once, re-ensures Steam only by starting it -silent, and names the reason in the RESULT line
 L="$B/win/launch.ps1"; lc="$(grep -vE '^\s*#' "$L" 2>/dev/null)"
@@ -163,16 +163,16 @@ printf '{"host": "0.0.0.0", "port": 45977, "token": "%s"}' "$tok" | "$B/box_sess
 printf '{"port": "x", "token": "%s"}' "$tok" | "$B/box_session.sh" rewrite - "$sd/bad.json" 45977 >/dev/null 2>&1 && bad "rewrite accepted a bad port" || ok "rewrite refuses a bad port"
 printf '{"active": false, "reason": "bridge_enabled is false"}' | "$B/box_session.sh" rewrite - "$sd/off.json" 45977 >/dev/null 2>&1
 [ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["active"])' "$sd/off.json" 2>&1)" = False ] && ok "rewrite keeps an inactive session file as it is" || bad "rewrite of an inactive session file"
-ign=1; for f in out/box-session.json out/box-live.env out/box-skse/SkyrimPython.log; do git -C "$ROOT" check-ignore -q "$f" || ign=0; done
+ign=1; for f in out/box-session.json out/box-live.env out/box-skse/Skython.log; do git -C "$ROOT" check-ignore -q "$f" || ign=0; done
 grep -qE '^out/$' "$ROOT/.gitignore" && [ "$ign" = 1 ] && ok "out/ (session file, env file, log mirror) is gitignored" || bad "out/box-session.json is not gitignored"
 
 # 6e. box_files.sh: pull never takes session.json; put writes only livetest_control.json (no ssh in print mode)
-for n in SkyrimPython/session.json ../x 'C:/x' /abs; do
+for n in Skython/session.json ../x 'C:/x' /abs; do
   if BOX_FILES_PRINT=1 "$B/box_files.sh" pull "$n" >/dev/null 2>&1; then bad "pull accepted '$n'"; else ok "pull refuses '$n'"; fi
 done
-t="$(BOX_FILES_PRINT=1 "$B/box_files.sh" pull SkyrimPython.log SkyrimPython/python.log 2>&1)"
-[ "$t" = "$(printf '%s\n' "$ROOT/out/box-skse/SkyrimPython.log" "$ROOT/out/box-skse/SkyrimPython/python.log")" ] && ok "pull mirrors into out/box-skse" || bad "pull targets: '$t'"
-grep -qF "\$PutAllowed = 'SkyrimPython\livetest_control.json'" "$B/win/files.ps1" 2>/dev/null && ok "files.ps1 put allow-list: livetest_control.json only" || bad "files.ps1 put allow-list"
+t="$(BOX_FILES_PRINT=1 "$B/box_files.sh" pull Skython.log Skython/python.log 2>&1)"
+[ "$t" = "$(printf '%s\n' "$ROOT/out/box-skse/Skython.log" "$ROOT/out/box-skse/Skython/python.log")" ] && ok "pull mirrors into out/box-skse" || bad "pull targets: '$t'"
+grep -qF "\$PutAllowed = 'Skython\livetest_control.json'" "$B/win/files.ps1" 2>/dev/null && ok "files.ps1 put allow-list: livetest_control.json only" || bad "files.ps1 put allow-list"
 grep -qF 'Get-NewText' "$B/win/files.ps1" 2>/dev/null && ok "files.ps1 pull uses the launch-stamp snapshot" || bad "files.ps1 does not use Get-NewText"
 
 # 6f. box_saves.sh: a save name is checked before any ssh
@@ -195,11 +195,11 @@ w="$(grep -E '\.Save\(|Set-Content' "$B/win/shot.ps1" 2>/dev/null | grep -vE '^\
 [ "$(echo "$w" | grep -c .)" = 2 ] && ! echo "$w" | grep -qvE "C:\\\\dev\\\\skyrim-python-box\\\\(shot\.png|windows\.txt)" \
   && ok "shot.ps1 writes only shot.png and windows.txt in C:\\dev\\skyrim-python-box" || { bad "shot.ps1 write targets:"; echo "$w"; }
 sst="$(mktemp -d)"
-t="$(SKYRIM_PYTHON_STATE="$sst" BOX_SHOT_PRINT=1 "$B/box_shot.sh" 2>&1)"
-[ "$t" = "$sst/box-shot.png" ] && ok "box_shot.sh default target \$SKYRIM_PYTHON_STATE/box-shot.png" || bad "box_shot.sh default target: '$t'"
-t="$(SKYRIM_PYTHON_STATE="$sst" BOX_SHOT_PRINT=1 "$B/box_shot.sh" "$sst/x/y.png" 2>&1)"
+t="$(SKYTHON_STATE="$sst" BOX_SHOT_PRINT=1 "$B/box_shot.sh" 2>&1)"
+[ "$t" = "$sst/box-shot.png" ] && ok "box_shot.sh default target \$SKYTHON_STATE/box-shot.png" || bad "box_shot.sh default target: '$t'"
+t="$(SKYTHON_STATE="$sst" BOX_SHOT_PRINT=1 "$B/box_shot.sh" "$sst/x/y.png" 2>&1)"
 [ "$t" = "$sst/x/y.png" ] && ok "box_shot.sh takes a target as \$1" || bad "box_shot.sh \$1 target: '$t'"
-t="$(SKYRIM_PYTHON_STATE="$sst" "$B/box_shot.sh" 2>&1)"; rc=$?
+t="$(SKYTHON_STATE="$sst" "$B/box_shot.sh" 2>&1)"; rc=$?
 [ "$rc" != 0 ] && case "$t" in *"BOX_OFFLINE: refusing"*) true ;; *) false ;; esac && [ -z "$(ls -A "$sst")" ] \
   && ok "box_shot.sh refuses under BOX_OFFLINE (rc=$rc), writes nothing" || bad "box_shot.sh offline: rc=$rc '$t'"
 

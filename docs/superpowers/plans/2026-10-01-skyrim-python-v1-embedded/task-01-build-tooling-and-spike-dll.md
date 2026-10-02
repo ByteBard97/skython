@@ -2,7 +2,7 @@
 
 Adapted from: branch `plan-out-of-process`, task 1 (`task-01-build-tooling-and-a-spike-dll-that.md`).
 
-> Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** (Fixed paths) and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4). Steps use checkbox (`- [ ]`) syntax for tracking.
+> Part of the [Skython v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** (Fixed paths) and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **M0 spike rules:** The spike DLLs are throwaway code. They are written for speed, not quality, and never linked into the real plugin. Every spike records PASS/FAIL with evidence in `spikes/RESULTS.md`. **S1 must pass before Task 3 starts** (Task 3's first step checks for the S1 PASS row). **S8 (Task 3) must pass before Tasks 18-32**; its fallback is the out-of-process plan on branch `plan-out-of-process`. S2, S9 and S4 (Tasks 4-6) gate the M1 plugin tasks (25-32); S7 (Task 9) gates Tasks 28-29; S5, S6 and S10 gate only the M2 plan and skyrim-dm's packaging. **On any FAIL of S1, S8, S2, S9 or S4, STOP and ask the owner.** Also STOP and ask the owner if: the game does not reach the plugin's log line within 10 minutes of launch, the Windows build box does not answer, or the game runtime is anything other than AE 1.6.1170.
 
@@ -14,7 +14,7 @@ Adapted from: branch `plan-out-of-process`, task 1 (`task-01-build-tooling-and-a
 
 **Interfaces:**
 - Consumes (Task 0): `plugin/extern/CommonLibSSE-NG` (pinned, with the nested openvr headers), `third_party/pybind11/`, and, once `tools/fetch_python.sh` has run, `third_party/cpython/nuget/tools/{include,libs}`.
-- Produces: `tools/remote_build.sh <cmake-source-dir-relative-to-repo> <dll-name>` → copies the built DLL to `out/<dll-name>`; it also syncs `third_party/pybind11` and `third_party/cpython/nuget/tools/{include,libs}` (the CPython headers and `python314.lib`, needed from Task 3 on) to `C:\dev\skyrim-python\third_party\...` on the box, and prints a note and syncs without them when they are absent; `ARCHIVE_ONLY=1` builds and lists the sync archive without touching the box; `tools/deploy.sh out/<dll-name> [ini-file]` (records every copied path in `out/deployed.txt`; a DLL whose name contains `Spike` needs `CONFIRM_THROWAWAY_SAVE=1`); `tools/launch_game.sh` (refuses a second launch; writes `~/.local/state/skyrim-python/launch.log` and touches `launch.stamp`); `tools/wait_for_log.sh <file> <regex> [seconds]` (bounded wait; exits 1 with the log tail on timeout; honours `SINCE=<file>` so a log from an earlier run cannot match); `tools/teardown_list.sh` (LISTS what was deployed; removes nothing); `source tools/env.sh` exports `SKYRIM_PYTHON_SESSION`, `SKYRIM_PYTHON_LOG` (the embedded interpreter's `python.log`), `SIMPLESKYRIM_DATA`, `SKSE_LOG_DIR`, `SKYRIM_PYTHON_STATE`. Task 3 extends `deploy.sh` with `--python`; Task 26 with `--package` and `--scripts DIR`.
+- Produces: `tools/remote_build.sh <cmake-source-dir-relative-to-repo> <dll-name>` → copies the built DLL to `out/<dll-name>`; it also syncs `third_party/pybind11` and `third_party/cpython/nuget/tools/{include,libs}` (the CPython headers and `python314.lib`, needed from Task 3 on) to `C:\dev\skyrim-python\third_party\...` on the box, and prints a note and syncs without them when they are absent; `ARCHIVE_ONLY=1` builds and lists the sync archive without touching the box; `tools/deploy.sh out/<dll-name> [ini-file]` (records every copied path in `out/deployed.txt`; a DLL whose name contains `Spike` needs `CONFIRM_THROWAWAY_SAVE=1`); `tools/launch_game.sh` (refuses a second launch; writes `~/.local/state/skython/launch.log` and touches `launch.stamp`); `tools/wait_for_log.sh <file> <regex> [seconds]` (bounded wait; exits 1 with the log tail on timeout; honours `SINCE=<file>` so a log from an earlier run cannot match); `tools/teardown_list.sh` (LISTS what was deployed; removes nothing); `source tools/env.sh` exports `SKYTHON_SESSION`, `SKYTHON_LOG` (the embedded interpreter's `python.log`), `SIMPLESKYRIM_DATA`, `SKSE_LOG_DIR`, `SKYTHON_STATE`. Task 3 extends `deploy.sh` with `--python`; Task 26 with `--package` and `--scripts DIR`.
 - Produces for Tasks 2-9, in `spikes/spike-dll/src/main.cpp`: the include block (already contains `<algorithm> <atomic> <chrono> <cstdint> <format> <functional> <future> <memory> <mutex> <sstream> <string> <thread> <vector>`, so later tasks add **no** includes inside `namespace spike`), `spike::Log`, `spike::ParseInt(str, fallback)` (use it, never a bare `std::stoi`), `spike::Handle(line)`.
 
 - [ ] **Step 1: Write the remote build script**
@@ -143,9 +143,9 @@ cat > tools/env.sh <<'EOF'
 export SIMPLESKYRIM_DATA="$HOME/Games/SimpleSkyrim/Stock Game/Data"
 PFX="$HOME/.local/share/Steam/steamapps/compatdata/4190904831/pfx"
 export SKSE_LOG_DIR="$PFX/drive_c/users/steamuser/Documents/My Games/Skyrim Special Edition/SKSE"
-export SKYRIM_PYTHON_SESSION="$SKSE_LOG_DIR/SkyrimPython/session.json"
-export SKYRIM_PYTHON_LOG="$SKSE_LOG_DIR/SkyrimPython/python.log"
-export SKYRIM_PYTHON_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/skyrim-python"
+export SKYTHON_SESSION="$SKSE_LOG_DIR/Skython/session.json"
+export SKYTHON_LOG="$SKSE_LOG_DIR/Skython/python.log"
+export SKYTHON_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/skython"
 EOF
 
 cat > tools/deploy.sh <<'EOF'
@@ -258,7 +258,7 @@ if [ "${LAUNCH_DRY_RUN:-0}" = 1 ]; then
 fi
 if [ "$action" = refuse ]; then echo "launch_game: $why" >&2; exit 1; fi
 
-mkdir -p "$SKYRIM_PYTHON_STATE"
+mkdir -p "$SKYTHON_STATE"
 if [ "$action" = kill_only ] || [ "$action" = kill_launch ]; then
   WINEPREFIX="$PFX_DIR" "$STEAM_ROOT/compatibilitytools.d/GE-Proton10-14/files/bin/wineserver" -k || true
   for _ in 1 2 3 4 5 6 7 8 9 10; do prefix_wineserver_alive || break; sleep 1; done
@@ -268,7 +268,7 @@ if [ "$action" = kill_only ] || [ "$action" = kill_launch ]; then
   fi
   echo "launch_game: stopped a leftover Wine session for this prefix" >&2
   if [ "$action" = kill_only ]; then
-    : > "$SKYRIM_PYTHON_STATE/launch.stamp"
+    : > "$SKYTHON_STATE/launch.stamp"
     echo "launch_game: the pending launch will now proceed; not starting a second one"
     exit 0
   fi
@@ -280,9 +280,9 @@ export DISPLAY="${DISPLAY:-:1}"
 export XAUTHORITY="${XAUTHORITY:-/run/user/1000/gdm/Xauthority}"
 PROTON="$STEAM_ROOT/compatibilitytools.d/GE-Proton10-14/proton"
 cd "$HOME/Games/SimpleSkyrim/Stock Game"
-: > "$SKYRIM_PYTHON_STATE/launch.stamp"   # logs older than this stamp belong to an earlier run
-nohup "$PROTON" waitforexitandrun "$(pwd)/skse64_loader.exe" > "$SKYRIM_PYTHON_STATE/launch.log" 2>&1 &
-echo "launched pid $! (log: $SKYRIM_PYTHON_STATE/launch.log)"
+: > "$SKYTHON_STATE/launch.stamp"   # logs older than this stamp belong to an earlier run
+nohup "$PROTON" waitforexitandrun "$(pwd)/skse64_loader.exe" > "$SKYTHON_STATE/launch.log" 2>&1 &
+echo "launched pid $! (log: $SKYTHON_STATE/launch.log)"
 EOF
 
 cat > tools/wait_for_log.sh <<'EOF'
@@ -313,7 +313,7 @@ source "$ROOT/tools/env.sh"
 echo "== copied into the game by tools/deploy.sh (out/deployed.txt) =="
 if [ -f "$ROOT/out/deployed.txt" ]; then sort -u "$ROOT/out/deployed.txt" | while read -r p; do [ -e "$p" ] && ls -ld "$p"; done; else echo "(none recorded)"; fi
 echo "== logs and session files written by the spikes and the plugin =="
-ls -ld "$SKSE_LOG_DIR"/SkyrimPythonSpike*.log "$SKSE_LOG_DIR"/SkyrimPython.log "$SKSE_LOG_DIR"/SkyrimPython 2>/dev/null || echo "(none)"
+ls -ld "$SKSE_LOG_DIR"/SkyrimPythonSpike*.log "$SKSE_LOG_DIR"/Skython.log "$SKSE_LOG_DIR"/Skython 2>/dev/null || echo "(none)"
 echo "== throwaway saves (names used by the spikes) =="
 SAVES="$(dirname "$SKSE_LOG_DIR")/Saves"
 ls -l "$SAVES"/spikebase* "$SAVES"/spytest* "$SAVES"/s4test* 2>/dev/null || echo "(none found under $SAVES; look where your Stock Game keeps saves)"
@@ -585,7 +585,7 @@ CONFIRM_THROWAWAY_SAVE=1 tools/deploy.sh out/SkyrimPythonSpike.dll
 tools/launch_game.sh
 source tools/env.sh
 # Bounded wait (10 minutes). The script prints the log tail and exits 1 on timeout.
-SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPythonSpike.log" "listening on 127.0.0.1:45978" 600
+SINCE="$SKYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPythonSpike.log" "listening on 127.0.0.1:45978" 600
 cat "$SKSE_LOG_DIR/SkyrimPythonSpike.log"
 ```
 Expected: `SkyrimPythonSpike loading on Skyrim 1.6.1170.0`, `spike: listening on 127.0.0.1:45978`. **If the wait times out, STOP and ask the owner** (do not relaunch in a loop). **If the logged version is not 1.6.1170, STOP and ask the owner.** If the build fails in CommonLibSSE-NG's configure step, the missing dependency is named in the CMake error: add it to `spikes/spike-dll/vcpkg.json` and rebuild.

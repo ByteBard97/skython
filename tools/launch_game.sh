@@ -80,7 +80,7 @@ if [ "${LAUNCH_DRY_RUN:-0}" = 1 ]; then
 fi
 if [ "$action" = refuse ]; then echo "launch_game: $why" >&2; exit 1; fi
 
-mkdir -p "$SKYRIM_PYTHON_STATE"
+mkdir -p "$SKYTHON_STATE"
 if [ "$action" = kill_only ] || [ "$action" = kill_launch ]; then
   WINEPREFIX="$PFX_DIR" "$STEAM_ROOT/compatibilitytools.d/GE-Proton10-14/files/bin/wineserver" -k || true
   for _ in 1 2 3 4 5 6 7 8 9 10; do prefix_wineserver_alive || break; sleep 1; done
@@ -90,7 +90,7 @@ if [ "$action" = kill_only ] || [ "$action" = kill_launch ]; then
   fi
   echo "launch_game: stopped a leftover Wine session for this prefix" >&2
   if [ "$action" = kill_only ]; then
-    : > "$SKYRIM_PYTHON_STATE/launch.stamp"
+    : > "$SKYTHON_STATE/launch.stamp"
     echo "launch_game: the pending launch will now proceed; not starting a second one"
     exit 0
   fi
@@ -102,6 +102,6 @@ export DISPLAY="${DISPLAY:-:1}"
 export XAUTHORITY="${XAUTHORITY:-/run/user/1000/gdm/Xauthority}"
 PROTON="$STEAM_ROOT/compatibilitytools.d/GE-Proton10-14/proton"
 cd "$HOME/Games/SimpleSkyrim/Stock Game"
-: > "$SKYRIM_PYTHON_STATE/launch.stamp"   # logs older than this stamp belong to an earlier run
-nohup "$PROTON" waitforexitandrun "$(pwd)/skse64_loader.exe" > "$SKYRIM_PYTHON_STATE/launch.log" 2>&1 &
-echo "launched pid $! (log: $SKYRIM_PYTHON_STATE/launch.log)"
+: > "$SKYTHON_STATE/launch.stamp"   # logs older than this stamp belong to an earlier run
+nohup "$PROTON" waitforexitandrun "$(pwd)/skse64_loader.exe" > "$SKYTHON_STATE/launch.log" 2>&1 &
+echo "launched pid $! (log: $SKYTHON_STATE/launch.log)"

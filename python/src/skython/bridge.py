@@ -1,7 +1,7 @@
 """The dev bridge: the same requests as in-process, from another process, over loopback TCP.
 
-It runs inside the game (skyrim._host starts it when bridge_enabled is set) and forwards each request text
-unchanged to `backend` (the _skyrim module; a fake in tests); the response text goes back unchanged in a frame.
+It runs inside the game (skython._host starts it when bridge_enabled is set) and forwards each request text
+unchanged to `backend` (the _skython module; a fake in tests); the response text goes back unchanged in a frame.
 Rules (protocol/PROTOCOL.md, "Dev bridge transport" and "Handshake"):
 - 127.0.0.1 only; a non-loopback peer is closed at accept; at most `max_connections` connections.
 - The first frame must be a valid hello within the hello timeout, and at most PRE_AUTH_FRAME_BYTES long.
@@ -34,7 +34,7 @@ import time
 from . import _protocol_generated as _g
 from .discovery import Session, write_inactive_session_file, write_session_file
 
-log = logging.getLogger("skyrim.bridge")
+log = logging.getLogger("skython.bridge")
 
 _U64_MAX = 2**64 - 1
 _POLL_S = 0.005  # how long the completion thread waits on its tickets per round (it releases the GIL meanwhile)
@@ -458,7 +458,7 @@ def serve(backend, *, host: str = _g.HOST, port: int = _g.CONFIG_KEYS["port"]["d
           max_inflight_per_connection: int = _g.CONFIG_KEYS["max_inflight_per_connection"]["default"],
           hello_timeout: float = _g.HELLO_TIMEOUT_MS / 1000,
           max_queued_bytes: int = _g.MAX_QUEUED_BYTES_PER_CONNECTION) -> BridgeServer:
-    """Start a dev bridge over `backend` (anything with submit, wait_any and cancel: the _skyrim module).
+    """Start a dev bridge over `backend` (anything with submit, wait_any and cancel: the _skython module).
 
     `welcome_info` is a dict, or a function returning one, with plugin_version, game_version, runtime and
     epoch (a function gives every client the current epoch). Port 0 picks a free port (see .port). The

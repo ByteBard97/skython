@@ -2,13 +2,13 @@
 
 Adapted from: branch `plan-out-of-process`, task 20 (`task-20-readme-and-milestone-tag.md`). The README now describes the embedded design: two DLLs, the deployed layout, player scripts, and the dev bridge workflow.
 
-> Part of the [skyrim-python v1 plan](README.md). Read the index's **Global Constraints** and **Fixed paths** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4). Steps use checkbox (`- [ ]`) syntax.
+> Part of the [Skython v1 plan](README.md). Read the index's **Global Constraints** and **Fixed paths** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4). Steps use checkbox (`- [ ]`) syntax.
 
 > **Gate:** start only after Task 31 is done and `spikes/RESULTS.md` has a recorded result (PASS or FAIL with evidence) for every spike S1, S2, S4-S10. M1 is not complete while S5, S6 or S10 is unrecorded (index, Gates).
 >
 > **Runs on:** Linux (the repository). Step 2 needs the game running on the Windows box with a save loaded ([Task 1c](task-01c-part-c-on-the-box.md)).
 >
-> **STOP and ask the owner (do not improvise) if:** the full run in Step 2 fails anywhere; the alias or property tests were skipped because the `SPY_S4_*` or `SPY_S7C_*` values are missing (a skip is not a pass); a live test was skipped for lack of `SKYRIM_LIVE=1`; a spike row is missing from `spikes/RESULTS.md`.
+> **STOP and ask the owner (do not improvise) if:** the full run in Step 2 fails anywhere; the alias or property tests were skipped because the `SPY_S4_*` or `SPY_S7C_*` values are missing (a skip is not a pass); a live test was skipped for lack of `SKYTHON_LIVE=1`; a spike row is missing from `spikes/RESULTS.md`.
 
 **Files:**
 - Modify: `README.md`
@@ -21,7 +21,7 @@ Adapted from: branch `plan-out-of-process`, task 20 (`task-20-readme-and-milesto
 
 Replace `README.md` with the text below. Fill the two bracketed figures from `livetest/results/throughput.json` (`p50_ms`, and `spin.remote.spin.p99_ms` against `spin.remote.no_spin.p99_ms`) and the S10 line from `spikes/RESULTS.md`; leave no bracket in the committed file.
 ````markdown
-# skyrim-python
+# Skython
 
 Python inside Skyrim (SE/AE): an SKSE plugin that embeds CPython 3.14 and lets Python code call any Papyrus function in the running game, with the same API from a separate process during development. Built as the foundation for [skyrim-dm].
 
@@ -29,22 +29,22 @@ Status: M1 (embedded dispatcher). Verified on Skyrim AE 1.6.1170 on Windows (the
 
 ## How it fits together
 
-- `Data/SKSE/Plugins/SkyrimPython.dll` is a small loader. SKSE loads it; it checks the runtime, loads `SkyrimPython/python/python314.dll` by full path (refusing to share one another mod loaded from elsewhere), then loads `SkyrimPython/SkyrimPythonCore.dll`. Any failure is logged and the game runs on without Python.
-- The core starts a host thread once the game's data is loaded. That thread initialises CPython (isolated: no environment variables, no signal handlers), then runs `skyrim._host`, which loads your scripts and, in dev builds, starts the dev bridge. The game's own threads never run Python.
-- Python calls reach the game through the built-in `_skyrim` module: each call becomes one task on the game's main thread, dispatched through the Papyrus VM. A blocking call releases the GIL while it waits.
+- `Data/SKSE/Plugins/Skython.dll` is a small loader. SKSE loads it; it checks the runtime, loads `Skython/python/python314.dll` by full path (refusing to share one another mod loaded from elsewhere), then loads `Skython/SkythonCore.dll`. Any failure is logged and the game runs on without Python.
+- The core starts a host thread once the game's data is loaded. That thread initialises CPython (isolated: no environment variables, no signal handlers), then runs `skython._host`, which loads your scripts and, in dev builds, starts the dev bridge. The game's own threads never run Python.
+- Python calls reach the game through the built-in `_skython` module: each call becomes one task on the game's main thread, dispatched through the Papyrus VM. A blocking call releases the GIL while it waits.
 
 Deployed layout:
 ```
-Data/SKSE/Plugins/SkyrimPython.dll          loader
-Data/SKSE/Plugins/SkyrimPython.ini          settings (bridge off in the shipped ini)
-Data/SKSE/Plugins/SkyrimPython/
-  SkyrimPythonCore.dll                      core (links CPython)
+Data/SKSE/Plugins/Skython.dll          loader
+Data/SKSE/Plugins/Skython.ini          settings (bridge off in the shipped ini)
+Data/SKSE/Plugins/Skython/
+  SkythonCore.dll                      core (links CPython)
   python/                                   official python-3.14.8-embed-amd64.zip, unmodified
   site-packages/                            vendored win_amd64 / cp314 wheels
-  lib/skyrim/                               the skyrim package
+  lib/skython/                               the skython package
   scripts/                                  your scripts
 ```
-Logs: `Documents/My Games/Skyrim Special Edition/SKSE/SkyrimPython.log` (C++) and `.../SKSE/SkyrimPython/python.log` (Python).
+Logs: `Documents/My Games/Skyrim Special Edition/SKSE/Skython.log` (C++) and `.../SKSE/Skython/python.log` (Python).
 
 ## Write a script
 
@@ -62,15 +62,15 @@ def run(game):
     sword = game.form("Skyrim.esm|0x012EB7")
     game.call_method(player, "ObjectReference", "AddItem", sword, 1, True)
 ```
-Every Papyrus argument must be passed (no default values until M3). Errors are typed: `skyrim.errors.NotReady`, `TypeMismatch`, `UnknownFunction`, `StaleReference`, `Timeout`, ... An exception in a script is logged with its traceback to `python.log`; other scripts and the game carry on. Third-party packages: vendored win_amd64 / cp314 wheels in `site-packages/` (S10 result: [what spikes/RESULTS.md recorded for httpx, jsonschema, mwparserfromhell]).
+Every Papyrus argument must be passed (no default values until M3). Errors are typed: `skython.errors.NotReady`, `TypeMismatch`, `UnknownFunction`, `StaleReference`, `Timeout`, ... An exception in a script is logged with its traceback to `python.log`; other scripts and the game carry on. Third-party packages: vendored win_amd64 / cp314 wheels in `site-packages/` (S10 result: [what spikes/RESULTS.md recorded for httpx, jsonschema, mwparserfromhell]).
 
 ## Develop from Linux (the dev bridge)
 
 With the dev ini (`bridge_enabled = true`), the same API works from any process on the machine, so you iterate on Python without restarting the game:
 ```python
-import skyrim
+import skython
 
-game = skyrim.connect()                  # finds the bridge through SKYRIM_PYTHON_SESSION (dev box: source out/box-live.env)
+game = skython.connect()                  # finds the bridge through SKYTHON_SESSION (dev box: source out/box-live.env)
 print(game.call("Utility", "RandomInt", 1, 6))
 ```
 The bridge listens on `127.0.0.1` only, checks a token on every connection, and is off in the shipped ini. Code that works through the bridge works unchanged as a script in `scripts/`; run it in-process now and then, because only there does it meet Windows CPython, its vendored wheels and the game's threads.
@@ -86,18 +86,18 @@ The bridge listens on `127.0.0.1` only, checks a token on every connection, and 
 - Alias references work as call targets and results; alias *arguments* have no live test until M1.5 (no vanilla function takes one).
 - A call in flight when the player saves is not written into the save: after loading that save the call ends `NotReady` or `Timeout`, never completes (the plugin's VM callback returns false from `CanSave()`).
 - A crash in native code inside the process (the plugin, or a compiled extension in a wheel) takes the game down; pure-Python exceptions do not.
-- Script reload (`skyrim._host.reload(name)`) is best effort: state held in C extensions survives it, and threads a script did not stop in `teardown()` keep running, but their `Game` is closed (calls raise `ConnectionLost`).
+- Script reload (`skython._host.reload(name)`) is best effort: state held in C extensions survives it, and threads a script did not stop in `teardown()` keep running, but their `Game` is closed (calls raise `ConnectionLost`).
 - Throughput: a call takes about [p50_ms] ms (2-3 frames); a CPU-bound Python thread raises a call's p99 latency from [no-spin p99] to [spin p99] ms. Full figures: `livetest/results/throughput.json`.
 
 ## Build and test
-- Core and `_skyrim` (Linux): `cmake -S core -B core/build && cmake --build core/build -j && ctest --test-dir core/build`; the `_skyrim` module and its tests per `pyglue/` (Task 19); the package: `cd python && uv run pytest`.
+- Core and `_skython` (Linux): `cmake -S core -B core/build && cmake --build core/build -j && ctest --test-dir core/build`; the `_skython` module and its tests per `pyglue/` (Task 19); the package: `cd python && uv run pytest`.
 - CPython runtime and headers: `tools/fetch_python.sh` (checks SHA-256s against `docs/PINS.md`).
-- Plugin (Windows box over ssh), two calls because the script fetches one DLL per call: `tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll`; the game runs on the Windows box: deploy with `tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini`, then `tools/box/box_deploy.sh --package` (and `--python`, `--scripts livetest/scripts` when the runtime or the scripts changed); launch with `tools/box/box_launch.sh`, quit with `tools/box/box_quit.sh` (plan Tasks 1b and 1c).
-- Live tests (game running on the box, save loaded): `tools/box/box_session.sh up && source out/box-live.env && SKYRIM_LIVE=1 uv run --project python pytest livetest -q -rs` (an ssh tunnel, loopback on both ends; the session file with the token stays in `out/`). Without `SKYRIM_LIVE=1` every live test is skipped.
+- Plugin (Windows box over ssh), two calls because the script fetches one DLL per call: `tools/remote_build.sh plugin Skython.dll && tools/remote_build.sh plugin SkythonCore.dll`; the game runs on the Windows box: deploy with `tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini`, then `tools/box/box_deploy.sh --package` (and `--python`, `--scripts livetest/scripts` when the runtime or the scripts changed); launch with `tools/box/box_launch.sh`, quit with `tools/box/box_quit.sh` (plan Tasks 1b and 1c).
+- Live tests (game running on the box, save loaded): `tools/box/box_session.sh up && source out/box-live.env && SKYTHON_LIVE=1 uv run --project python pytest livetest -q -rs` (an ssh tunnel, loopback on both ends; the session file with the token stays in `out/`). Without `SKYTHON_LIVE=1` every live test is skipped.
 - Protocol: `protocol/PROTOCOL.md`, fixtures in `protocol/v1/fixtures/`. Design: `docs/specs/2026-09-30-skyrim-python-design.md`. Spike results: `spikes/RESULTS.md`.
 
 ## Licence
-MIT. The embedded CPython runtime is under the PSF licence (`SkyrimPython/python/LICENSE.txt`).
+MIT. The embedded CPython runtime is under the PSF licence (`Skython/python/LICENSE.txt`).
 
 [skyrim-dm]: ../skyrim-dm
 ````
@@ -117,11 +117,11 @@ ctest --test-dir core/build --output-on-failure
 tools/box/box_session.sh up && source out/box-live.env
 export SPY_S4_QUEST=0x... SPY_S4_ALIAS=... SPY_S4_REF=0x...   # from spikes/RESULTS.md
 export SPY_S7C_QUEST=0x... SPY_S7C_SCRIPT=... SPY_S7C_PROPERTY=... SPY_S7C_KIND=...   # from spikes/RESULTS.md (Task 30)
-SKYRIM_LIVE=1 uv run --project python pytest livetest -q -rs --deselect livetest/test_m1_mainmenu.py --deselect livetest/test_m1_throughput.py
+SKYTHON_LIVE=1 uv run --project python pytest livetest -q -rs --deselect livetest/test_m1_mainmenu.py --deselect livetest/test_m1_throughput.py
 git status --short    # clean: nothing in the run rewrote a tracked file
 tools/box/box_quit.sh   # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh (Task 1b Known issue)
 ```
-(`test_m1_throughput.py` is deselected: Task 31 recorded the baseline that Step 1 copied into the README, and running it again would rewrite `livetest/results/throughput.json` with numbers that disagree with the README. The save loaded must be the one S7 ran on, for the property and alias tests.) Also run the `_skyrim` Linux suite the way Task 19 set it up. Expected: all pass. The skip report (`-rs`) lists only tests that need another setup: the startup-variant tests (Task 26), the low-cap test (run in Task 30 with its own ini) and the two `SPY_MANUAL` tests (run in Task 31). The main-menu tests ran in Tasks 27-29 before a save was loaded. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. Any skip about missing `SPY_S4_*` or `SPY_S7C_*` values means the alias or property tests did not run: set them and rerun.
+(`test_m1_throughput.py` is deselected: Task 31 recorded the baseline that Step 1 copied into the README, and running it again would rewrite `livetest/results/throughput.json` with numbers that disagree with the README. The save loaded must be the one S7 ran on, for the property and alias tests.) Also run the `_skython` Linux suite the way Task 19 set it up. Expected: all pass. The skip report (`-rs`) lists only tests that need another setup: the startup-variant tests (Task 26), the low-cap test (run in Task 30 with its own ini) and the two `SPY_MANUAL` tests (run in Task 31). The main-menu tests ran in Tasks 27-29 before a save was loaded. Any skip whose reason is `live test: set SKYTHON_LIVE=1` is a failure. Any skip about missing `SPY_S4_*` or `SPY_S7C_*` values means the alias or property tests did not run: set them and rerun.
 
 - [ ] **Step 2b: Run one example live**
 

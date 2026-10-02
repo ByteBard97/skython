@@ -92,7 +92,7 @@
     {"name": "fixed_token", "type": "token", "default": "",
      "doc": "Development only: a fixed 32-hex bridge token. Empty means a random token per start."},
     {"name": "session_file", "type": "path", "default": "",
-     "doc": "Where the bridge writes its session file. Empty means <SKSE log dir>/SkyrimPython/session.json."},
+     "doc": "Where the bridge writes its session file. Empty means <SKSE log dir>/Skython/session.json."},
     {"name": "default_timeout_ms", "type": "u32", "default": 5000, "min": 1, "max": 3600000,
      "doc": "Timeout applied to a call that sends none."},
     {"name": "max_inflight_per_connection", "type": "u32", "default": 256, "min": 1, "max": 4294967295,
@@ -104,15 +104,15 @@
   ],
   "discovery": {
     "host": "127.0.0.1",
-    "session_dir_name": "SkyrimPython",
+    "session_dir_name": "Skython",
     "session_file_name": "session.json",
     "session_file_fields": ["port", "token", "pid", "plugin_version", "protocol"],
-    "env_session": "SKYRIM_PYTHON_SESSION",
-    "env_port": "SKYRIM_PYTHON_PORT",
-    "env_token": "SKYRIM_PYTHON_TOKEN"
+    "env_session": "SKYTHON_SESSION",
+    "env_port": "SKYTHON_PORT",
+    "env_token": "SKYTHON_TOKEN"
   },
   "client": {
-    "name": "skyrim-python",
+    "name": "skython",
     "connect_timeout_s": 5.0,
     "call_timeout_s": 30.0,
     "send_timeout_s": 30.0,

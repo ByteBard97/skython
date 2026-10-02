@@ -2,7 +2,7 @@
 
 Adapted from: branch `plan-out-of-process`, task 15 (`task-15-plugin-skeleton-build-logging-settings-lifecycle.md`), Step 1 only (the Linux-testable lifecycle logic). The plugin side of that task (`Lifecycle.cpp`, SKSE messages, menu events) is Task 25.
 
-> Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.1 and 5). Steps use checkbox (`- [ ]`) syntax for tracking.
+> Part of the [Skython v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.1 and 5). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Depends on:** Task 14 (`spy/errors.h` for `spy::json`, which `base_state()` returns; Task 14 builds on 13). The test counts in Steps 4 and 5 assume Tasks 14-16 are done. Linux only; no game.
 

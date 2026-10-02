@@ -2,11 +2,11 @@
 
 Adapted from: branch `plan-out-of-process`, task 12 (`task-12-messages-op-argument-validation-config-outbox-in.md`), and the `JsonDepth.h` helper from task 16 (`task-16-loopback-server-io-thread-handshake-session-file.md`).
 
-> Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.2-4.4). Steps use checkbox (`- [ ]`) syntax for tracking.
+> Part of the [Skython v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.2-4.4). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Depends on:** Task 11 (the fixtures) and Task 15 (and through it Tasks 0, 12-14). Linux only; no game.
 
-**What changed from the out-of-process plan.** The C++ side no longer speaks the dev bridge: the handshake (`Hello`, `parse_hello`, `check_hello`, `WelcomeInfo`, `make_welcome`, `make_handshake_error`), the session file (`make_session_file`), framing (`frame_message`), the `Outbox` and the `InflightLimiter` are gone; the Python bridge (Task 23) owns them, and the dispatcher (Task 18) owns the in-flight cap. What stays is the request parser, the op-argument checks and the response builders, which now serve both modes: in-process, the `skyrim` package hands request **text** to `_skyrim`, so this task adds `parse_request_text` (depth check, then parse, then `parse_request`) and `peek_request_id` (the id for the error reply to text that could not be parsed). The raw-text depth scan from the old server task moves into core as `spy::nesting_within`. The header is renamed `messages.h` → `requests.h`. `Config` gets the new ini keys from the index (`python_enabled`, `scripts_enabled`, `bridge_enabled` instead of `allow_external_clients`) and a `config_to_json` for `_skyrim.config()` (Task 19).
+**What changed from the out-of-process plan.** The C++ side no longer speaks the dev bridge: the handshake (`Hello`, `parse_hello`, `check_hello`, `WelcomeInfo`, `make_welcome`, `make_handshake_error`), the session file (`make_session_file`), framing (`frame_message`), the `Outbox` and the `InflightLimiter` are gone; the Python bridge (Task 23) owns them, and the dispatcher (Task 18) owns the in-flight cap. What stays is the request parser, the op-argument checks and the response builders, which now serve both modes: in-process, the `skython` package hands request **text** to `_skython`, so this task adds `parse_request_text` (depth check, then parse, then `parse_request`) and `peek_request_id` (the id for the error reply to text that could not be parsed). The raw-text depth scan from the old server task moves into core as `spy::nesting_within`. The header is renamed `messages.h` → `requests.h`. `Config` gets the new ini keys from the index (`python_enabled`, `scripts_enabled`, `bridge_enabled` instead of `allow_external_clients`) and a `config_to_json` for `_skython.config()` (Task 19).
 
 **Files:**
 - Create: `core/include/spy/json_depth.h`, `core/src/json_depth.cpp`, `core/include/spy/requests.h`, `core/src/requests.cpp`, `core/include/spy/config.h`, `core/src/config.cpp`
@@ -555,7 +555,7 @@ TEST_CASE("the v1 wire contract is pinned: change these literals only together w
     CHECK(spy::config_defaults::kMaxInflightPerConnection == 256u);
     CHECK(spy::config_defaults::kMaxInflightTotal == 1024u);
     CHECK(spy::discovery::kHost == "127.0.0.1");
-    CHECK(spy::discovery::kEnvSession == "SKYRIM_PYTHON_SESSION");
+    CHECK(spy::discovery::kEnvSession == "SKYTHON_SESSION");
     CHECK(spy::discovery::kSessionFileName == "session.json");
 
     const std::vector<std::string> codes = {"not_ready", "busy", "bad_request", "unknown_function", "type_mismatch", "stale_reference",
@@ -827,7 +827,7 @@ bool nesting_within(std::string_view text, std::size_t max_depth)
 #include <vector>
 
 namespace spy {
-// One request format for both modes (spec 4.2): in-process the skyrim package hands this text to _skyrim; over the dev
+// One request format for both modes (spec 4.2): in-process the skython package hands this text to _skython; over the dev
 // bridge the Python bridge forwards the same text. Every request carries "type": "request".
 struct Request { std::uint64_t id = 0; std::string op; json args; };
 // Envelope + known op + op arguments. Throws only ProtocolError (bad_request or type_mismatch), never a json exception.
@@ -1056,11 +1056,11 @@ namespace spy {
 struct Config
 {
     bool python_enabled = config_defaults::kPythonEnabled;    // false: the plugin never initialises CPython
-    bool scripts_enabled = config_defaults::kScriptsEnabled;  // false: skyrim._host loads no player scripts
+    bool scripts_enabled = config_defaults::kScriptsEnabled;  // false: skython._host loads no player scripts
     bool bridge_enabled = config_defaults::kBridgeEnabled;    // the dev bridge; false in the shipped ini
     std::uint16_t port = config_defaults::kPort;              // dev bridge port; 0 = pick a free port
     std::string fixed_token{config_defaults::kFixedToken};    // empty: a random token per start
-    std::string session_file{config_defaults::kSessionFile};  // empty: <SKSE log dir>/SkyrimPython/session.json
+    std::string session_file{config_defaults::kSessionFile};  // empty: <SKSE log dir>/Skython/session.json
     std::uint32_t default_timeout_ms = config_defaults::kDefaultTimeoutMs;  // kMinTimeoutMs .. kMaxTimeoutMs
     std::uint32_t max_inflight_per_connection = config_defaults::kMaxInflightPerConnection;  // dev bridge; at least 1
     std::uint32_t max_inflight_total = config_defaults::kMaxInflightTotal;  // dispatcher; at least 1
@@ -1078,7 +1078,7 @@ struct Config
 //  - Every bad value throws std::invalid_argument, including numbers too large for 64 bits.
 Config parse_config(std::string_view text);
 
-// Every Config field under its ini key name, plus "ignored_keys" (an array). _skyrim.config() (Task 19) starts from this.
+// Every Config field under its ini key name, plus "ignored_keys" (an array). _skython.config() (Task 19) starts from this.
 json config_to_json(const Config& c);
 }
 ```

@@ -1,18 +1,18 @@
-"""The GIL is released while _skyrim waits, and many Python threads can call at once (Review Focus 6)."""
+"""The GIL is released while _skython waits, and many Python threads can call at once (Review Focus 6)."""
 import threading
 import time
 
 import pytest
 
-import _skyrim
+import _skython
 from conftest import request, response
 
 # The three functions that wait for the game. The bridge's completion thread sits in wait_any for the life of every
 # connection, so each one must release the GIL, not only call.
 WAITERS = {
-    "call": lambda text: _skyrim.call(text, 5.0),
-    "wait": lambda text: _skyrim.wait(_skyrim.submit(text), 5.0),
-    "wait_any": lambda text: _skyrim.wait_any([_skyrim.submit(text)], 5.0)[0][1],
+    "call": lambda text: _skython.call(text, 5.0),
+    "wait": lambda text: _skython.wait(_skython.submit(text), 5.0),
+    "wait_any": lambda text: _skython.wait_any([_skython.submit(text)], 5.0)[0][1],
 }
 
 
@@ -43,15 +43,15 @@ def test_other_python_threads_run_while_a_call_waits(waiter):
 
 def test_cancel_while_another_thread_waits_on_the_same_tickets():
     # The bridge's pattern: a completion thread polls wait_any while a disconnect cancels the same tickets.
-    before = _skyrim.in_flight()
-    tickets = [_skyrim.submit(request(100 + i, "Sleep", 100)) for i in range(50)]
+    before = _skython.in_flight()
+    tickets = [_skython.submit(request(100 + i, "Sleep", 100)) for i in range(50)]
     cancelled = threading.Event()
     problems = []
 
     def poller():
         try:
             while True:
-                got = _skyrim.wait_any(tickets, 0.05)
+                got = _skython.wait_any(tickets, 0.05)
                 if cancelled.is_set() and not got:
                     return
         except Exception as e:  # noqa: BLE001 - report everything from the thread
@@ -60,12 +60,12 @@ def test_cancel_while_another_thread_waits_on_the_same_tickets():
     t = threading.Thread(target=poller)
     t.start()
     for ticket in tickets:
-        _skyrim.cancel(ticket)
+        _skython.cancel(ticket)
     cancelled.set()
     t.join(1.0)
     assert not t.is_alive()
     assert problems == []
-    assert _skyrim.in_flight() == before
+    assert _skython.in_flight() == before
 
 
 def test_sixteen_threads_two_hundred_calls_each():
@@ -75,7 +75,7 @@ def test_sixteen_threads_two_hundred_calls_each():
         try:
             for k in range(200):
                 value = n * 1000 + k
-                r = response(_skyrim.call(request(value, "Echo", value), 10.0))
+                r = response(_skython.call(request(value, "Echo", value), 10.0))
                 if r["id"] != value or r["result"] != value:
                     errors.append((n, k, r))
         except Exception as e:  # noqa: BLE001 - report everything from the thread
@@ -88,4 +88,4 @@ def test_sixteen_threads_two_hundred_calls_each():
         t.join(60)
     assert not any(t.is_alive() for t in threads)
     assert errors == []
-    assert _skyrim.in_flight() == 0
+    assert _skython.in_flight() == 0

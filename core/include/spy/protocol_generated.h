@@ -244,11 +244,11 @@ inline constexpr bool kEnableConsole = false;
 // ---- discovery
 namespace discovery {
 inline constexpr std::string_view kHost = "127.0.0.1";
-inline constexpr std::string_view kSessionDirName = "SkyrimPython";
+inline constexpr std::string_view kSessionDirName = "Skython";
 inline constexpr std::string_view kSessionFileName = "session.json";
-inline constexpr std::string_view kEnvSession = "SKYRIM_PYTHON_SESSION";
-inline constexpr std::string_view kEnvPort = "SKYRIM_PYTHON_PORT";
-inline constexpr std::string_view kEnvToken = "SKYRIM_PYTHON_TOKEN";
+inline constexpr std::string_view kEnvSession = "SKYTHON_SESSION";
+inline constexpr std::string_view kEnvPort = "SKYTHON_PORT";
+inline constexpr std::string_view kEnvToken = "SKYTHON_TOKEN";
 // keys of the session file object
 inline constexpr std::array<std::string_view, 5> kSessionFileFields{{
     "port",

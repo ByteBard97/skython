@@ -4,7 +4,7 @@
 #    "[Logged On ...] RecvMsgClientLogOnResponse() : processing complete" line in connection_log.txt
 #    (if Steam already runs, its latest state line is "Logged On" and that logon is newer than the last
 #    LoggedOff / "Logged In Elsewhere" line, no wait; if Steam exits while we wait, start it -silent once);
-# 3. apply launch.env (box_launch.sh --env; only SKYRIM_PYTHON_TEST_* lines) to this process's environment, which
+# 3. apply launch.env (box_launch.sh --env; only SKYTHON_TEST_* lines) to this process's environment, which
 #    skse64_loader.exe and the game inherit, then empty the file so it is used by one launch only;
 # 4. start skse64_loader.exe from the game folder; if no SkyrimSE process 20 s later (never started, or exited),
 #    retry once (attempt 2 is the only retry). The box's Steam and the owner's Linux Steam share one account: when
@@ -79,7 +79,7 @@ if ($why) { Result "fail $why"; exit 4 }
 $envFile = Join-Path $box 'launch.env'
 if (Test-Path $envFile) {
   foreach ($line in (Get-Content -Encoding UTF8 $envFile)) {
-    if ($line -match '^(SKYRIM_PYTHON_TEST_[A-Z0-9_]+)=(.*)$') { Set-Item -Path ('Env:' + $Matches[1]) -Value $Matches[2]; Log "env $($Matches[1])=$($Matches[2])" }
+    if ($line -match '^(SKYTHON_TEST_[A-Z0-9_]+)=(.*)$') { Set-Item -Path ('Env:' + $Matches[1]) -Value $Matches[2]; Log "env $($Matches[1])=$($Matches[2])" }
     elseif ($line.Trim()) { Log "ignored launch.env line: $line" }
   }
   Set-Content -Encoding ASCII -NoNewline -Path $envFile -Value ''

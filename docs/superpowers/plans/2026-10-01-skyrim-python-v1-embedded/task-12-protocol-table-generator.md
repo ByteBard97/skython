@@ -2,9 +2,9 @@
 
 Adapted from: branch `plan-out-of-process`, task 7b (`task-07b-protocol-table-generator.md`).
 
-> Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.2-4.4). Steps use checkbox (`- [ ]`) syntax for tracking.
+> Part of the [Skython v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.2-4.4). Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Depends on:** Task 11 (the fixtures and `PROTOCOL.md`). **Tasks 13-24 depend on this task**: the C++ core, the `_skyrim` module and the Python package consume the files it generates, and none of them re-types a code, a limit or a default.
+> **Depends on:** Task 11 (the fixtures and `PROTOCOL.md`). **Tasks 13-24 depend on this task**: the C++ core, the `_skython` module and the Python package consume the files it generates, and none of them re-types a code, a limit or a default.
 
 **Why this task exists.** The protocol's facts are needed in C++ (the request parser, `ErrorCode`, the dispatcher's readiness rule, the ini parser) and in Python (exception classes, the bridge's handshake limits, the client's timeouts and op table). Written by hand in several places they drift (the out-of-process plan once had a client that allowed a `timeout_ms` the server refused). This task writes each fact once, in `protocol/protocol.json`, and generates the rest.
 
@@ -13,7 +13,7 @@ Adapted from: branch `plan-out-of-process`, task 7b (`task-07b-protocol-table-ge
 **Files:**
 - Create: `protocol/protocol.json`
 - Create: `tools/gen_protocol.py`, `tools/test_gen_protocol.py`
-- Generate and commit (never edit by hand): `core/include/spy/protocol_generated.h`, `python/src/skyrim/_protocol_generated.py`, `protocol/PROTOCOL.generated.md`
+- Generate and commit (never edit by hand): `core/include/spy/protocol_generated.h`, `python/src/skython/_protocol_generated.py`, `protocol/PROTOCOL.generated.md`
 
 **Interfaces:**
 - Produces `protocol/protocol.json`, format 1. Top-level sections: `protocol` (major, minor); `message_types`; `error_codes` (code, `context` of `response`, `handshake` or `both`, the Python `remote_exception` and `handshake_exception` class names, one-line meaning; **the list order is the C++ enum order**); `not_ready_reasons`; `limits` (name, value, C++ type, unit, meaning: max frame, pre-auth frame, name length, batch size, timeout range, error-message cap, client-name cap, connection cap, hello timeout, JSON depth, queued bytes per connection, token length, Papyrus Int and Float range, array items); `form_ids` (local-id ceilings, runtime and light prefixes, plugin extensions); `alias_types`, `default_alias_type`, `array_elem_types`; `config_keys` (the plugin ini: type, default, range); `discovery` (host, session file and directory names, session-file fields, environment variable names; dev bridge only); `client` (default timeouts); `ops` (name, `batchable`, `needs_game`, `exactly_one_of`, arguments with type and required flag, result).
@@ -21,7 +21,7 @@ Adapted from: branch `plan-out-of-process`, task 7b (`task-07b-protocol-table-ge
   - `python3 tools/gen_protocol.py` writes the three generated files; `--check` writes nothing, prints `DRIFT: <file> ...` with a unified diff for each stale or `MISSING` file to stderr and exits 1, and otherwise prints `gen_protocol: 3 generated files are up to date`; `--root DIR` points at another checkout (the tests use it). An invalid `protocol.json` prints every problem and exits 2. Output is deterministic: lists keep the order of `protocol.json`, no timestamps, LF line endings (`--check` ignores CRLF, so a Windows checkout with `autocrlf` does not count as drift). Each generated file opens with `GENERATED FILE - DO NOT EDIT`, the source file name and the regenerate command.
   - Importable: `validate(model) -> list[str]`, `load(path)`, `render_cpp/render_py/render_md(model) -> str`, `render_all(model) -> {relative path: text}`, `run(root, check)`, `human_bytes(n)`, `SOURCE`, `OUTPUTS`.
 - Produces, for C++ (`core/include/spy/protocol_generated.h`, header only, standard library only): `spy::kProtocolMajor/Minor`; one `inline constexpr` per limit named `k<CamelName>` (`kMaxFrameBytes`, `kPreAuthFrameBytes`, `kMaxNameBytes`, `kMaxBatchCalls`, `kMinTimeoutMs`, `kMaxTimeoutMs`, `kMaxErrorMessageBytes`, `kMaxClientNameBytes`, `kMaxConnections`, `kHelloTimeoutMs`, `kMaxJsonDepth`, `kMaxQueuedBytesPerConnection`, `kTokenLength`, `kIntMin`, `kIntMax`, `kFloatMaxText`, `kMaxArrayItems`, each with the type `protocol.json` names); `enum class spy::ErrorCode` and `spy::kErrorCodeNames` (`std::array<ErrorCodeName{code, name}, N>`); `spy::kMessageTypes`, `kNotReadyReasons`, `kAliasTypes`, `kDefaultAliasType`, `kArrayElemTypes`; `namespace spy::form_ids`; the op table `spy::kOps` (`OpSpec{name, batchable, needs_game, args, exactly_one_of}`, `ArgSpec{name, type, required}`, `ArgType`), `spy::find_op(name)` and `spy::ops::k<CamelOp>` name constants (`kGameState`, `kFormResolve`, `kPapyrusCallStatic`, `kPapyrusCallMethod`, `kPapyrusGetProperty`, `kPapyrusSetProperty`, `kPapyrusBatch`); the config table `spy::kConfigKeys` (`ConfigKey{name, type, min, max, default_text}`, `ConfigType { u16, u32, boolean, token, path }`), `spy::find_config_key(name)` and `spy::config_defaults::k<CamelKey>` (`kPythonEnabled`, `kScriptsEnabled`, `kBridgeEnabled`, `kPort`, `kFixedToken`, `kSessionFile`, `kDefaultTimeoutMs`, `kMaxInflightPerConnection`, `kMaxInflightTotal`, `kEnableConsole`); `namespace spy::discovery`.
-- Produces, for Python (`skyrim._protocol_generated`, plain constants and tuples, no logic): `PROTOCOL_VERSION`, one `UPPER_SNAKE` constant per limit (including `MAX_ARRAY_ITEMS`), `CODE_<NAME>` per error code, `ERROR_CODES`, `REMOTE_EXCEPTIONS` and `HANDSHAKE_EXCEPTIONS` (wire code to exception class name), `HANDSHAKE_CODES`, `NOT_READY_REASONS`, `ALIAS_TYPES`, `DEFAULT_ALIAS_TYPE`, `ELEM_TYPES`, `FORM_ID_*`, `PLUGIN_EXTENSIONS`, `LIGHT_EXTENSION`, `OP_<NAME>` per op, `OPS` (`name -> {batchable, needs_game, exactly_one_of, args: ((name, type, required), ...)}`), `BATCHABLE_OPS`, `CONFIG_KEYS`, the discovery names (`HOST`, `SESSION_DIR_NAME`, `SESSION_FILE_NAME`, `ENV_SESSION`, `ENV_PORT`, `ENV_TOKEN`, `SESSION_FILE_FIELDS`) and the client defaults (`CALL_TIMEOUT_S`, `CONNECT_TIMEOUT_S`, `SEND_TIMEOUT_S`, `RETRY_NOT_READY_S`, `READY_TIMEOUT_S`, `GRACE_S`, `CLIENT_NAME`).
+- Produces, for Python (`skython._protocol_generated`, plain constants and tuples, no logic): `PROTOCOL_VERSION`, one `UPPER_SNAKE` constant per limit (including `MAX_ARRAY_ITEMS`), `CODE_<NAME>` per error code, `ERROR_CODES`, `REMOTE_EXCEPTIONS` and `HANDSHAKE_EXCEPTIONS` (wire code to exception class name), `HANDSHAKE_CODES`, `NOT_READY_REASONS`, `ALIAS_TYPES`, `DEFAULT_ALIAS_TYPE`, `ELEM_TYPES`, `FORM_ID_*`, `PLUGIN_EXTENSIONS`, `LIGHT_EXTENSION`, `OP_<NAME>` per op, `OPS` (`name -> {batchable, needs_game, exactly_one_of, args: ((name, type, required), ...)}`), `BATCHABLE_OPS`, `CONFIG_KEYS`, the discovery names (`HOST`, `SESSION_DIR_NAME`, `SESSION_FILE_NAME`, `ENV_SESSION`, `ENV_PORT`, `ENV_TOKEN`, `SESSION_FILE_FIELDS`) and the client defaults (`CALL_TIMEOUT_S`, `CONNECT_TIMEOUT_S`, `SEND_TIMEOUT_S`, `RETRY_NOT_READY_S`, `READY_TIMEOUT_S`, `GRACE_S`, `CLIENT_NAME`).
 - Produces `protocol/PROTOCOL.generated.md`: the human-readable tables (error codes, limits, values, ops with argument tables and whether each needs a game, ini keys, discovery, client defaults) that `protocol/PROTOCOL.md` links to.
 - **How to change the protocol afterwards:** edit `protocol/protocol.json`; run `python3 tools/gen_protocol.py`; if a rule changed, change `PROTOCOL.md` and the fixtures in the same commit; run the C++ and Python suites; commit the JSON and the three generated files together. A generated file that differs from the generator's output fails `--check`, and the generator's tests run that check against the real repository (`test_the_committed_generated_files_are_current`). Generated files are committed so the Windows build box never needs Python or the generator.
 - The tests in this task also check `protocol.json` against the golden fixtures (every op has a valid fixture, fixtures use only known argument names and error codes, the fixtures sit exactly on the limits, including both sides of `max_array_items`), pin the two rules the index Contracts fix (`game.state` is the only op without `needs_game`; the ini keys and their defaults), and check that `PROTOCOL.md` links the generated tables and repeats none of their numbers. Tasks 16 and 20 add the same agreement tests on the C++ and Python sides.
@@ -124,7 +124,7 @@ Adapted from: branch `plan-out-of-process`, task 7b (`task-07b-protocol-table-ge
     {"name": "fixed_token", "type": "token", "default": "",
      "doc": "Development only: a fixed 32-hex bridge token. Empty means a random token per start."},
     {"name": "session_file", "type": "path", "default": "",
-     "doc": "Where the bridge writes its session file. Empty means <SKSE log dir>/SkyrimPython/session.json."},
+     "doc": "Where the bridge writes its session file. Empty means <SKSE log dir>/Skython/session.json."},
     {"name": "default_timeout_ms", "type": "u32", "default": 5000, "min": 1, "max": 3600000,
      "doc": "Timeout applied to a call that sends none."},
     {"name": "max_inflight_per_connection", "type": "u32", "default": 256, "min": 1, "max": 4294967295,
@@ -136,15 +136,15 @@ Adapted from: branch `plan-out-of-process`, task 7b (`task-07b-protocol-table-ge
   ],
   "discovery": {
     "host": "127.0.0.1",
-    "session_dir_name": "SkyrimPython",
+    "session_dir_name": "Skython",
     "session_file_name": "session.json",
     "session_file_fields": ["port", "token", "pid", "plugin_version", "protocol"],
-    "env_session": "SKYRIM_PYTHON_SESSION",
-    "env_port": "SKYRIM_PYTHON_PORT",
-    "env_token": "SKYRIM_PYTHON_TOKEN"
+    "env_session": "SKYTHON_SESSION",
+    "env_port": "SKYTHON_PORT",
+    "env_token": "SKYTHON_TOKEN"
   },
   "client": {
-    "name": "skyrim-python",
+    "name": "skython",
     "connect_timeout_s": 5.0,
     "call_timeout_s": 30.0,
     "send_timeout_s": 30.0,
@@ -571,9 +571,9 @@ Expected: FAIL at collection, `ModuleNotFoundError: No module named 'gen_protoco
     python3 tools/gen_protocol.py --check    exit 1 and print a diff if a committed generated file is stale
 
 Outputs (all committed, so the Windows build box needs no extra tooling; the C++ header is read by core/ and the plugin,
-the Python module by the skyrim package, the dev bridge and skyrim.remote):
+the Python module by the skython package, the dev bridge and skython.remote):
     core/include/spy/protocol_generated.h      C++ constants, ErrorCode, op and config tables
-    python/src/skyrim/_protocol_generated.py   Python constants, error-code registry data, op table
+    python/src/skython/_protocol_generated.py   Python constants, error-code registry data, op table
     protocol/PROTOCOL.generated.md             the human-readable tables PROTOCOL.md links to
 
 Output is deterministic: lists keep the order of protocol.json (the order of error codes is the enum order),
@@ -591,7 +591,7 @@ import sys
 SOURCE = "protocol/protocol.json"
 OUTPUTS = {
     "cpp": "core/include/spy/protocol_generated.h",
-    "py": "python/src/skyrim/_protocol_generated.py",
+    "py": "python/src/skython/_protocol_generated.py",
     "md": "protocol/PROTOCOL.generated.md",
 }
 BANNER = "GENERATED FILE - DO NOT EDIT"
@@ -1042,7 +1042,7 @@ def render_cpp(m: dict) -> str:
 # ---------------------------------------------------------------------------------------------- Python
 def render_py(m: dict) -> str:
     L = header_lines("#")
-    L += ["# Constants, error-code registry data and the op table for the skyrim package. Nothing here is logic.",
+    L += ["# Constants, error-code registry data and the op table for the skython package. Nothing here is logic.",
           "", f"PROTOCOL_MAJOR = {m['protocol']['major']}", f"PROTOCOL_MINOR = {m['protocol']['minor']}",
           "PROTOCOL_VERSION = (PROTOCOL_MAJOR, PROTOCOL_MINOR)", "", f"MESSAGE_TYPES = {py(m['message_types'])}", ""]
     L.append("# ---- limits")
@@ -1056,7 +1056,7 @@ def render_py(m: dict) -> str:
     for c in codes:
         L.append(f"CODE_{upper(c['code'])} = {py(c['code'])}")
     L.append(f"ERROR_CODES = {py([c['code'] for c in codes])}")
-    L.append("# wire code -> exception class name in skyrim.errors")
+    L.append("# wire code -> exception class name in skython.errors")
     L.append(f"REMOTE_EXCEPTIONS = {py({c['code']: c['remote_exception'] for c in codes if c['remote_exception']})}")
     L.append(f"HANDSHAKE_EXCEPTIONS = {py({c['code']: c['handshake_exception'] for c in codes if c['handshake_exception']})}")
     L.append(f"HANDSHAKE_CODES = {py([c['code'] for c in codes if c['context'] in ('handshake', 'both')])}")
@@ -1169,7 +1169,7 @@ def render_md(m: dict) -> str:
     L += ["### Argument types", "", "| Type | Meaning |", "|---|---|"]
     for t, (_, meaning) in ARG_TYPES.items():
         L.append(f"| `{t}` | {md_cell(meaning)} |")
-    L += ["", "## Plugin ini keys (`SkyrimPython.ini`)", "", "| Key | Type | Default | Range | Meaning |", "|---|---|---|---|---|"]
+    L += ["", "## Plugin ini keys (`Skython.ini`)", "", "| Key | Type | Default | Range | Meaning |", "|---|---|---|---|---|"]
     for k in m["config_keys"]:
         dflt = ("true" if k["default"] else "false") if k["type"] == "bool" else (f"`{k['default']}`" if k["default"] != "" else "(empty)")
         if k["type"] in ("u16", "u32"):
@@ -1182,7 +1182,7 @@ def render_md(m: dict) -> str:
           f"- Host: `{d['host']}`. Session file: `{d['session_dir_name']}/{d['session_file_name']}` under the game's SKSE log directory unless `session_file` says otherwise.",
           f"- Session file fields: {', '.join('`%s`' % x for x in d['session_file_fields'])}.",
           f"- Environment variables: `{d['env_session']}` (path of a session file), or `{d['env_port']}` together with `{d['env_token']}`.", "",
-          "## Client defaults", "", "Used by `skyrim.Game` in both modes; `connect_timeout_s` and `send_timeout_s` apply to the dev bridge only.", "",
+          "## Client defaults", "", "Used by `skython.Game` in both modes; `connect_timeout_s` and `send_timeout_s` apply to the dev bridge only.", "",
           "| Setting | Value (seconds) |", "|---|---|"]
     c = m["client"]
     for key in ("connect_timeout_s", "call_timeout_s", "send_timeout_s", "retry_not_ready_s", "ready_timeout_s", "grace_s"):
@@ -1259,14 +1259,14 @@ if __name__ == "__main__":
 - [ ] **Step 5: Generate the files and run the tests**
 
 Run: `python3 tools/gen_protocol.py`
-Expected: `wrote core/include/spy/protocol_generated.h`, `wrote python/src/skyrim/_protocol_generated.py`, `wrote protocol/PROTOCOL.generated.md`. A second run prints `unchanged` for all three.
+Expected: `wrote core/include/spy/protocol_generated.h`, `wrote python/src/skython/_protocol_generated.py`, `wrote protocol/PROTOCOL.generated.md`. A second run prints `unchanged` for all three.
 
 Run: `uv run --no-project --python 3.12 --with pytest pytest tools/test_gen_protocol.py -q`
 Expected: `53 passed`. Run it once more with `--python 3.14`, same count. The run takes about a second and writes nothing outside pytest's temporary directories.
 
 The header compiles on its own; this is also one of the tests (`test_the_generated_header_compiles_standalone`, skipped on a machine without `g++`), and the hand check is: `g++ -std=c++20 -Wall -Wextra -Wconversion -pedantic -fsyntax-only -x c++ -I core/include - <<< '#include "spy/protocol_generated.h"'` prints nothing.
 
-Spot-check the two new facts: `grep -n "kMaxArrayItems\|bool needs_game" core/include/spy/protocol_generated.h` prints `inline constexpr std::size_t kMaxArrayItems = 128u;` and the `bool needs_game;` member of `OpSpec`; `grep -n '"game.state"' python/src/skyrim/_protocol_generated.py` shows `"needs_game": False`.
+Spot-check the two new facts: `grep -n "kMaxArrayItems\|bool needs_game" core/include/spy/protocol_generated.h` prints `inline constexpr std::size_t kMaxArrayItems = 128u;` and the `bool needs_game;` member of `OpSpec`; `grep -n '"game.state"' python/src/skython/_protocol_generated.py` shows `"needs_game": False`.
 
 - [ ] **Step 6: The drift check**
 

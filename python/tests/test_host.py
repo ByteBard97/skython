@@ -1,4 +1,4 @@
-"""skyrim._host against the fake _skyrim: logging, the script loader, reload, and the bridge it starts."""
+"""skython._host against the fake _skython: logging, the script loader, reload, and the bridge it starts."""
 import io
 import json
 import socket
@@ -10,15 +10,15 @@ import time
 import pytest
 
 from support import wait_until
-from skyrim import errors
-from skyrim.discovery import Session, find_session, write_session_file
-from skyrim.remote import connect_remote
+from skython import errors
+from skython.discovery import Session, find_session, write_session_file
+from skython.remote import connect_remote
 
 
 @pytest.fixture
 def host(fake, monkeypatch, tmp_path):
-    """skyrim._host with short timeouts; every global it touches is restored afterwards."""
-    from skyrim import _host
+    """skython._host with short timeouts; every global it touches is restored afterwards."""
+    from skython import _host
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     monkeypatch.setattr(threading, "excepthook", threading.excepthook)
     monkeypatch.setattr(sys, "stdout", sys.stdout)
@@ -134,8 +134,8 @@ def test_reload_runs_teardown_and_the_new_code(host, fake, tmp_path):
         game.call("Fake", "Echo", "{v}")
 
     def teardown():
-        import _skyrim
-        _skyrim.log("info", "teardown {v}")
+        import _skython
+        _skython.log("info", "teardown {v}")
     """
     script(tmp_path, "t24_r", body.format(v="one"))
     host.main()
@@ -243,7 +243,7 @@ def test_a_bridge_that_cannot_start_replaces_a_stale_session_file(host, fake, tm
 def test_main_never_raises(host, fake):
     fake.config = lambda: "this is not json"
     assert host.main() is None
-    assert any(level == "error" and "skyrim._host.main failed" in msg for level, msg in fake.logs)
+    assert any(level == "error" and "skython._host.main failed" in msg for level, msg in fake.logs)
 
 
 def test_print_and_uncaught_thread_exceptions_go_to_the_log(host, tmp_path):
@@ -312,7 +312,7 @@ def test_a_log_dir_that_cannot_be_created_does_not_stop_scripts_or_the_bridge(ho
 
 def test_a_startup_failure_leaves_an_inactive_session_file(host, fake, tmp_path, monkeypatch):
     write_session_file(tmp_path / "session.json", Session("127.0.0.1", 45977, "ab" * 16, 1, "0.0.0-fake"))  # last run
-    from skyrim import inprocess
+    from skython import inprocess
 
     def broken(*args, **kwargs):
         raise RuntimeError("no connection for you")
@@ -331,8 +331,8 @@ def test_a_setup_that_finishes_after_its_timeout_is_recorded_and_torn_down_on_re
         time.sleep(0.8)
 
     def teardown():
-        import _skyrim
-        _skyrim.log("info", "late teardown")
+        import _skython
+        _skython.log("info", "late teardown")
     """)
     host.main()
     assert host.status()["scripts"]["t24_late"].startswith("timeout:")
@@ -347,8 +347,8 @@ def test_a_failed_reimport_does_not_run_the_old_teardown_twice(host, fake, tmp_p
         pass
 
     def teardown():
-        import _skyrim
-        _skyrim.log("info", "teardown ran")
+        import _skython
+        _skython.log("info", "teardown ran")
     """
     script(tmp_path, "t24_twice", body)
     host.main()
@@ -359,15 +359,15 @@ def test_a_failed_reimport_does_not_run_the_old_teardown_twice(host, fake, tmp_p
 
 
 def test_reload_drops_only_modules_from_the_scripts_folder(host, fake, tmp_path):
-    import skyrim
-    package = sys.modules["skyrim"]
-    script(tmp_path, "skyrim", "X = 1\n")  # clashes with the package: must never drop it
+    import skython
+    package = sys.modules["skython"]
+    script(tmp_path, "skython", "X = 1\n")  # clashes with the package: must never drop it
     script(tmp_path, "t24_keep", ECHO_SETUP)
     host.main()
     outside = types_module("t24_keep.outside", "/somewhere/else/outside.py")
     sys.modules["t24_keep.outside"] = outside
-    host.reload("skyrim")
-    assert sys.modules["skyrim"] is package and skyrim is package
+    host.reload("skython")
+    assert sys.modules["skython"] is package and skython is package
     host.reload("t24_keep")
     assert sys.modules["t24_keep.outside"] is outside
 
@@ -408,7 +408,7 @@ def test_concurrent_reloads_never_run_setup_twice_at_once(host, fake, tmp_path):
 def test_a_stale_load_never_overwrites_the_reloads_game(host, fake, tmp_path, monkeypatch):
     # The first load times out while creating its Game; a reload then loads the script again. When the first load
     # finally gets its Game, it must not replace the reload's in the host's records, nor run the old setup.
-    from skyrim import inprocess
+    from skython import inprocess
     real = inprocess.connect_in_process
     release = threading.Event()
     made = []
@@ -441,7 +441,7 @@ def test_a_stale_load_finishing_during_reloads_teardown_never_runs_setup(host, f
     # The first load times out while creating its Game. A reload starts and its teardown() blocks; the stale load
     # gets its Game in that window. It must not record that Game or run setup: the reload removed the script.
     import builtins
-    from skyrim import inprocess
+    from skython import inprocess
     real = inprocess.connect_in_process
     release_connect = threading.Event()
     made = []

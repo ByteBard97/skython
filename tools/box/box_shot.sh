@@ -3,12 +3,12 @@
 #   Screenshot of the box's desktop plus the window titles, for a game that hangs behind a dialog (box_wait_log.sh
 #   exit 2, DIALOG). Starts OUR scheduled task SkyrimPythonShot (shot.ps1, runs in geoff's interactive session),
 #   waits (bounded, SHOT_WAIT=60 s, box clock) until shot.png and windows.txt in C:\dev\skyrim-python-box are both
-#   newer than the start, copies shot.png to LOCAL_PNG (default $SKYRIM_PYTHON_STATE/box-shot.png) and prints
+#   newer than the start, copies shot.png to LOCAL_PNG (default $SKYTHON_STATE/box-shot.png) and prints
 #   windows.txt. Writes nothing on the box outside those two files.
 #   BOX_SHOT_PRINT=1 prints the local target and exits before any ssh (offline test).
 set -euo pipefail
 source "$(dirname "$0")/box_env.sh"
-dest="${1:-$SKYRIM_PYTHON_STATE/box-shot.png}"
+dest="${1:-$SKYTHON_STATE/box-shot.png}"
 if [ "${BOX_SHOT_PRINT:-0}" = 1 ]; then echo "$dest"; exit 0; fi
 t0="$(bssh '$t = (Get-Date).ToUniversalTime().Ticks; Start-ScheduledTask -TaskName SkyrimPythonShot; $t' | tr -d '\r')" \
   || box_die "could not start the scheduled task SkyrimPythonShot (run tools/box/box_setup.sh once)"

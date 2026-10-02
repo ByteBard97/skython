@@ -9,10 +9,14 @@ BOX_SSH_OPTS=(-o ConnectTimeout=10 -o BatchMode=yes -o ServerAliveInterval=15 -o
 BOX_GAME_DIR='C:\ChronicleDev\Stock Game'
 BOX_DATA='C:\ChronicleDev\Stock Game\Data'
 BOX_PLUGINS='C:\ChronicleDev\Stock Game\Data\SKSE\Plugins'
-BOX_OWN='C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\SkyrimPython'
+BOX_OWN='C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\Skython'
+# SkyrimPythonSpike.dll still reads Plugins\SkyrimPython\ (spike-autostart, spike-disable, python\): a spike
+# re-run needs BOX_OWN pointed back at ...\Plugins\SkyrimPython for its --file/--python deploys.
 BOX_MYGAMES='C:\Users\geoff\Documents\My Games\Skyrim Special Edition'
 BOX_SKSE_LOG_DIR='C:\Users\geoff\Documents\My Games\Skyrim Special Edition\SKSE'
 BOX_SAVES_DIR='C:\Users\geoff\Documents\My Games\Skyrim Special Edition\Saves'
+# BOX_DIR and the scheduled task names (BOX_TASK, SkyrimPythonShot) keep their pre-Skython names: they already
+# exist on the box, and renaming them here would orphan them.
 BOX_DIR='C:\dev\skyrim-python-box'
 BOX_DIR_FWD='C:/dev/skyrim-python-box'          # scp wants forward slashes
 BOX_TASK=SkyrimPythonGame
@@ -21,10 +25,10 @@ BOX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # The deploy record. An override (BOX_DEPLOYED=...) is honoured only with BOX_DEPLOY_PRINT_TARGET=1 (offline tests):
 # a real deploy always records in out/box-deployed.txt.
 if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" != 1 ] || [ -z "${BOX_DEPLOYED:-}" ]; then BOX_DEPLOYED="$BOX_ROOT/out/box-deployed.txt"; fi
-SKYRIM_PYTHON_STATE="${SKYRIM_PYTHON_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/skyrim-python}"
-BOX_TUNNEL_SOCK="$SKYRIM_PYTHON_STATE/box-tunnel.sock"
-BOX_SESSION_SOCK="$SKYRIM_PYTHON_STATE/box-session.sock"   # the dev-bridge tunnel (box_session.sh)
-export BOX BOX_GAME_DIR BOX_DATA BOX_PLUGINS BOX_OWN BOX_MYGAMES BOX_SKSE_LOG_DIR BOX_SAVES_DIR BOX_DIR BOX_TASK SKYRIM_PYTHON_STATE
+SKYTHON_STATE="${SKYTHON_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/skython}"
+BOX_TUNNEL_SOCK="$SKYTHON_STATE/box-tunnel.sock"
+BOX_SESSION_SOCK="$SKYTHON_STATE/box-session.sock"   # the dev-bridge tunnel (box_session.sh)
+export BOX BOX_GAME_DIR BOX_DATA BOX_PLUGINS BOX_OWN BOX_MYGAMES BOX_SKSE_LOG_DIR BOX_SAVES_DIR BOX_DIR BOX_TASK SKYTHON_STATE
 
 # box_offline <what>: refuse (exit 97) when BOX_OFFLINE=1. Every wrapper below calls it first.
 box_offline() { if [ "${BOX_OFFLINE:-0}" = 1 ]; then echo "BOX_OFFLINE: refusing $*" >&2; exit 97; fi; }
