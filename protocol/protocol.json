@@ -4,7 +4,7 @@
   "message_types": ["hello", "welcome", "handshake_error", "request", "response", "event"],
   "error_codes": [
     {"code": "not_ready", "context": "response", "remote_exception": "NotReady", "handshake_exception": null,
-     "doc": "The game cannot run the request yet; `detail.reason` says why (see not_ready_reasons)."},
+     "doc": "The game cannot run the request yet; `detail.reason` says why (see not_ready_reasons), with `detail.paused` and `detail.menus`. A call already in flight when a save starts loading or the player quits to the main menu also ends not_ready, with the reason of that moment; `detail.dispatched` is true when it had reached the game (its effect may have happened, so it is not resubmitted blindly)."},
     {"code": "busy", "context": "response", "remote_exception": "Busy", "handshake_exception": null,
      "doc": "An in-flight cap was reached (the plugin-wide one, or one bridge connection's); retry later."},
     {"code": "bad_request", "context": "both", "remote_exception": "BadRequest", "handshake_exception": null,
@@ -18,7 +18,7 @@
     {"code": "not_found", "context": "response", "remote_exception": "NotFound", "handshake_exception": null,
      "doc": "A form, alias, quest or property does not exist."},
     {"code": "timeout", "context": "response", "remote_exception": "Timeout", "handshake_exception": null,
-     "doc": "The call did not finish within its timeout_ms (or the caller stopped waiting first: detail.late_cancel is true). It may still run in the game."},
+     "doc": "The call did not finish within its timeout_ms (or the caller stopped waiting first: detail.late_cancel is true). It may still run in the game. A papyrus.batch timeout carries detail.completed and detail.results (the steps that finished)."},
     {"code": "vm_error", "context": "response", "remote_exception": "VmError", "handshake_exception": null,
      "doc": "The Papyrus VM refused or failed the call."},
     {"code": "unsupported", "context": "response", "remote_exception": "Unsupported", "handshake_exception": null,

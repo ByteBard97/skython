@@ -40,5 +40,8 @@
     {"message": {"type": "request", "id": 27, "op": "papyrus.batch", "args": {"calls": [{"op": "papyrus.call_static", "args": {"script": "Utility", "function": "RandomInt", "args": [1, 6]}}], "stop_on_error": "yes"}}, "error": "bad_request"},
     {"message": {"type": "request", "id": 28, "op": "papyrus.batch", "args": {"calls": []}}, "error": "bad_request"},
     {"message": {"type": "request", "id": 29, "op": "form.resolve", "args": {"form_key": "Skyrim.esm|0x1", "form_id": 1}}, "error": "bad_request"}
+  ],
+  "valid_without_args": [
+    {"type": "request", "id": 34, "op": "game.state"}
   ]
 }

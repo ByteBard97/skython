@@ -9,7 +9,7 @@ import time
 import pytest
 
 import _skython
-from conftest import BUILD, FAKE_DIR, code, request, response
+from conftest import BUILD, FAKE_DIR, ROOT, code, request, response
 
 
 def test_surface():
@@ -171,3 +171,17 @@ def test_busy_cap_from_the_fake_ini():
     out = subprocess.run([sys.executable, "-c", code_text], env=env, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "busy"
+
+
+GOLDEN = {r["id"]: r for r in json.loads((ROOT / "protocol" / "v1" / "fixtures" / "responses.json")
+                                         .read_text(encoding="utf-8"))["valid"] if r["type"] == "response"}
+
+
+def test_golden_late_cancel_and_not_ready_dispatched():
+    """protocol/v1/fixtures/responses.json ids 42 and 43, exactly as the module builds them."""
+    _skython._fake_set_paused(False)
+    _skython._fake_set_not_ready(None)
+    assert response(_skython.call(request(42, "Never", timeout_ms=60000), 0.2)) == GOLDEN[42]
+    t = _skython.submit(request(43, "Never"))
+    _skython._fake_bump_loads()
+    assert response(_skython.wait(t, 2.0)) == GOLDEN[43]

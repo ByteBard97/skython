@@ -14,14 +14,14 @@ Protocol version: **1.0** (a major mismatch is refused; a newer minor is accepte
 
 | Code | Sent in | Python exception | Meaning |
 |---|---|---|---|
-| `not_ready` | response | `NotReady` | The game cannot run the request yet; `detail.reason` says why (see not_ready_reasons). |
+| `not_ready` | response | `NotReady` | The game cannot run the request yet; `detail.reason` says why (see not_ready_reasons), with `detail.paused` and `detail.menus`. A call already in flight when a save starts loading or the player quits to the main menu also ends not_ready, with the reason of that moment; `detail.dispatched` is true when it had reached the game (its effect may have happened, so it is not resubmitted blindly). |
 | `busy` | response | `Busy` | An in-flight cap was reached (the plugin-wide one, or one bridge connection's); retry later. |
 | `bad_request` | response and handshake_error | `BadRequest` | The message is malformed: wrong field types, missing or unknown op, bad arguments, nesting deeper than max_json_depth, a duplicate in-flight id on one bridge connection. |
 | `unknown_function` | response | `UnknownFunction` | The script or function does not exist in the running game. |
 | `type_mismatch` | response | `TypeMismatch` | A value has the wrong Papyrus type or is out of range (Int outside 32 bits, Float outside 32-bit range). |
 | `stale_reference` | response | `StaleReference` | A runtime-created reference no longer names the object it was handed out for (fingerprint mismatch). |
 | `not_found` | response | `NotFound` | A form, alias, quest or property does not exist. |
-| `timeout` | response | `Timeout` | The call did not finish within its timeout_ms (or the caller stopped waiting first: detail.late_cancel is true). It may still run in the game. |
+| `timeout` | response | `Timeout` | The call did not finish within its timeout_ms (or the caller stopped waiting first: detail.late_cancel is true). It may still run in the game. A papyrus.batch timeout carries detail.completed and detail.results (the steps that finished). |
 | `vm_error` | response | `VmError` | The Papyrus VM refused or failed the call. |
 | `unsupported` | response | `Unsupported` | The request is valid protocol but this plugin build cannot do it. |
 | `internal` | response | `InternalError` | A bug or an unexpected failure inside the plugin; never caused by the caller alone. |

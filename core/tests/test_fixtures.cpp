@@ -86,6 +86,18 @@ TEST_CASE("request fixtures, as JSON and as the text both modes hand to the plug
     }
 }
 
+TEST_CASE("a request without args is accepted, with empty args (fixture valid_without_args)")
+{
+    auto fx = load("requests.json");
+    REQUIRE(fx["valid_without_args"].size() >= 1);
+    for (const auto& m : fx["valid_without_args"]) {
+        CAPTURE(m.dump());
+        REQUIRE_FALSE(m.contains("args"));
+        CHECK(spy::parse_request(m).args == json::object());
+        CHECK(spy::parse_request_text(spy::dump_json(m)).id == m["id"].get<std::uint64_t>());
+    }
+}
+
 TEST_CASE("responses built by the plugin match the fixture shapes")
 {
     // responses.json also holds the dev bridge's welcome and handshake_error; those are built in Python (Task 23).

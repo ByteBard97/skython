@@ -1,6 +1,7 @@
 #include "doctest/doctest.h"
 #include "spy/dispatcher.h"
 #include <atomic>
+#include <fstream>
 #include <chrono>
 #include <functional>
 #include <mutex>
@@ -554,4 +555,73 @@ TEST_CASE("many threads submitting and waiting at once (run under ThreadSanitize
     for (auto& t : ts) t.join();
     CHECK(ok == 1600);
     CHECK(d.InFlight() == 0);
+}
+
+// Golden responses (protocol/v1/fixtures/responses.json): the dispatcher's own text, byte for byte after a canonical
+// re-dump. Late cancel (id 42) is built by _skython (pyglue/tests/test_module.py checks it against the fixture).
+namespace {
+json golden(std::uint64_t id)
+{
+    std::ifstream f(std::string(SPY_FIXTURES_DIR) + "/responses.json");
+    REQUIRE(f.good());
+    const json fx = json::parse(f);  // named: a range-for over json::parse(f)["valid"] would dangle
+    for (const auto& r : fx["valid"])
+        if (r.value("id", std::uint64_t{0}) == id && r["type"] == "response") return r;
+    FAIL("no golden response with id " << id);
+    return {};
+}
+std::string canon(const std::string& text) { return spy::dump_json(json::parse(text)); }
+json one_step() { return {{"op", "papyrus.call_static"}, {"args", {{"script", "Utility"}, {"function", "RandomInt"}, {"args", json::array({1, 6})}}}}; }
+std::string batch_text(std::uint64_t id, json extra = json::object())
+{
+    json args = {{"calls", json::array({one_step(), one_step()})}};
+    for (auto& [k, v] : extra.items()) args[k] = v;
+    return spy::dump_json({{"type", "request"}, {"id", id}, {"op", "papyrus.batch"}, {"args", args}});
+}
+const json kStepResults = json::array({{{"ok", true}, {"result", 4}},
+    {{"ok", false}, {"error", {{"code", "unknown_function"}, {"message", "no script named Nope is loaded"}, {"detail", json::object()}}}}});
+}
+
+TEST_CASE("golden: a batch result")
+{
+    ManualBackend b;
+    spy::Dispatcher d(b, {});
+    auto t = d.Submit(batch_text(40));
+    b.take(0).done(OpResult::Ok({{"results", kStepResults}}));
+    auto text = d.Wait(t, 1000ms);
+    REQUIRE(text);
+    CHECK(canon(*text) == spy::dump_json(golden(40)));
+}
+
+TEST_CASE("golden: a batch timeout carries completed and results")
+{
+    ManualBackend b;
+    spy::Dispatcher d(b, {});
+    auto t = d.Submit(batch_text(41, {{"timeout_ms", 20}}));
+    b.take(0).progress({{"completed", 1}, {"results", json::array({kStepResults[0]})}});
+    std::this_thread::sleep_for(40ms);
+    d.Tick();
+    auto text = d.Wait(t, 1000ms);
+    REQUIRE(text);
+    CHECK(canon(*text) == spy::dump_json(golden(41)));
+}
+
+TEST_CASE("golden: not_ready with dispatched, after a save load and after a quit to the main menu")
+{
+    ManualBackend b;
+    spy::Dispatcher d(b, {});
+    auto load = d.Submit(call_text(43));
+    b.loads++;  // a save load starts; NotReadyReason says nothing more, so the reason is "loading"
+    d.Tick();
+    auto text = d.Wait(load, 1000ms);
+    REQUIRE(text);
+    CHECK(canon(*text) == spy::dump_json(golden(43)));
+
+    auto quit = d.Submit(call_text(44));
+    b.loads++;  // a quit to the main menu; the state of that moment is "no_game"
+    b.not_ready = "no_game";
+    d.Tick();
+    text = d.Wait(quit, 1000ms);
+    REQUIRE(text);
+    CHECK(canon(*text) == spy::dump_json(golden(44)));
 }
