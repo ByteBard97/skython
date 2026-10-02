@@ -142,8 +142,7 @@ void Run(const Config cfg)
         else if (level == "debug") log::Debug(line);
         else log::Info(line);
     };
-    // interim backend: replaced in Task 27. game::GetDispatcher() is Task 26's interim GameBackend.cpp until
-    // Task 27 overwrites GameBackend.{h,cpp}; this call site keeps the same name and needs no edit then.
+    // _skython talks to the game dispatcher (GameBackend, Task 27).
     InstallModuleHost(std::move(host));
     if (PyImport_AppendInittab("_skython", &PyInit__skython) == -1) throw std::runtime_error("PyImport_AppendInittab failed");
 

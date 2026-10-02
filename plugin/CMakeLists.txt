@@ -25,7 +25,7 @@ target_link_libraries(Skython PRIVATE CommonLibSSE::CommonLibSSE)
 # Core: links python314.lib normally; everything that touches Python, pybind11 or the game lives here.
 set(SPY_CORE_SOURCES
   src/main.cpp src/Log.cpp src/Settings.cpp src/Lifecycle.cpp src/PythonHost.cpp
-  src/GameBackend.cpp src/PyModule.cpp
+  src/GameBackend.cpp src/PyModule.cpp src/Ops.cpp src/Signatures.cpp src/PapyrusValues.cpp
   ${SPY_ROOT}/pyglue/src/pymodule.cpp)
 add_library(SkythonCore SHARED ${SPY_CORE_SOURCES})
 target_compile_definitions(SkythonCore PRIVATE ${SPY_DEFS})
