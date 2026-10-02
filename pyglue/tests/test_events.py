@@ -144,11 +144,13 @@ def test_loading_suppresses_world_events_but_delivers_menus(consumer):
     cell = subscribe(c, "cell_attach")
     subscribe(c, "menu_open", req_id=2)
     _skython._fake_set_not_ready("loading")
-    push("cell_attach", reference=form(20))
-    push("cell_attach", reference=form(21))
-    push("menu_open", menu="Loading Menu")
-    assert [e["event"] for e in drain(c)] == ["menu_open"]
-    _skython._fake_set_not_ready(None)
+    try:
+        push("cell_attach", reference=form(20))
+        push("cell_attach", reference=form(21))
+        push("menu_open", menu="Loading Menu")
+        assert [e["event"] for e in drain(c)] == ["menu_open"]
+    finally:
+        _skython._fake_set_not_ready(None)
     push("cell_attach", reference=form(22))
     got = drain(c)
     assert len(got) == 1 and got[0]["sub"] == cell and got[0]["seq"] == 1 and got[0]["suppressed"] == 2
