@@ -108,6 +108,8 @@ Expected: `INSTALLED`; `0` (anything else: STOP); `BACKUP_SAME`, `ADDED`. (`box_
 
 - [ ] **Step 5: New game in the test cell, observing the lifecycle events**
 
+This step's first live run is also the first test of loading the `skythonbase` save: later tasks load it routinely, so any problem on the load path shows up here first.
+
 ```bash
 tools/box/box_launch.sh
 tools/box/box_wait_log.sh Skython.log "python host: (running|failed|disabled)" 600

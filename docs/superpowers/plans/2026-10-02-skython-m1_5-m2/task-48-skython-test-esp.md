@@ -258,9 +258,9 @@ using Noggog;
 
 namespace SkythonTestEsp
 {
-    // Task 48: the test plugin. FormIDs are fixed here (never Mutagen's counter) so rebuilds are byte-identical and
+    // The test plugin. FormIDs are fixed here (never Mutagen's counter) so rebuilds are byte-identical and
     // tests can name every record by form key. The Skyrim.esm FormKeys below were looked up by EditorID in the
-    // installed Skyrim.esm; `verify-esm` re-checks them (Task 48 Step 4).
+    // installed Skyrim.esm; `verify-esm` re-checks them.
     public static class TestEsp
     {
         static readonly ModKey Own = ModKey.FromNameAndExtension(Names.PluginFile);
@@ -273,19 +273,25 @@ namespace SkythonTestEsp
         static readonly FormKey NordRace = E(0x013746);
         static readonly FormKey WEFarmerMale = E(0x1034E4);         // neutral NPC_ used as the template
         static readonly FormKey EncClassBanditMelee = E(0x01CE17);  // the class WEFarmerMale itself carries (required field)
-        static readonly FormKey DefaultLightingTemplate = E(0x0300E2);
         static readonly FormKey XMarker = E(0x00003B);
         static readonly FormKey COCMarkerHeading = E(0x000032);
         static readonly FormKey ImpFloorMid01 = E(0x03CB89);       // 256 x 256 floor piece; scaled x4 below
+        static readonly FormKey WhiterunBreezehome = E(0x0165A8);   // vanilla interior whose cell record ours copies
+        static readonly FormKey WRFireLightShadow01 = E(0x077FCE);  // a light Breezehome places (radius 768, shadow casting)
+        static readonly FormKey WhiterunBreezehomeLocation = E(0x01F86F);  // vanilla location whose record ours copies
 
         static readonly (string EditorId, FormKey Key)[] EsmRefs =
         {
             ("NordRace", NordRace), ("WEFarmerMale", WEFarmerMale), ("EncClassBanditMelee", EncClassBanditMelee),
-            ("DefaultLightingTemplate", DefaultLightingTemplate), ("XMarker", XMarker),
+            ("XMarker", XMarker),
             ("COCMarkerHeading", COCMarkerHeading), ("ImpFloorMid01", ImpFloorMid01),
+            ("WhiterunBreezehome", WhiterunBreezehome), ("WRFireLightShadow01", WRFireLightShadow01),
+            ("WhiterunBreezehomeLocation", WhiterunBreezehomeLocation),
         };
 
-        // `verify-esm <Skyrim.esm>`: prints "<EditorID> <FormKey> ok|MISMATCH <found>" for each reference above.
+        // `verify-esm <Skyrim.esm>`: prints "<EditorID> <FormKey> ok|MISMATCH <found>" for each reference above, then
+        // "location-link <FormKey> <type> ok|ABSENT" for every Skyrim.esm link the copied location carries (some of those
+        // references have no editor id, so only presence is checked).
         public static int VerifyEsm(string esmPath)
         {
             using var esm = SkyrimMod.CreateFromBinaryOverlay(esmPath, R);
@@ -299,19 +305,28 @@ namespace SkythonTestEsp
                 if (!ok) bad++;
                 System.Console.WriteLine($"{id} {key} {(ok ? "ok" : "MISMATCH " + (found ?? "absent"))}");
             }
+            foreach (var link in TestLocation(esm).ContainedFormLinks)
+            {
+                if (link.FormKey.ModKey != Esm) continue;
+                var ok = byKey.ContainsKey(link.FormKey);
+                if (!ok) bad++;
+                System.Console.WriteLine($"location-link {link.FormKey} {link.Type.Name} {(ok ? "ok" : "ABSENT")}");
+            }
             return bad == 0 ? 0 : 1;
         }
 
         // Ours (SkythonTest.esp|0x0008xx)
         public const uint LocationId = 0x000801, CellId = 0x000802, NpcBaseId = 0x000803, NpcRefId = 0x000804,
-                          MarkerId = 0x000805, CocMarkerId = 0x000806, FloorId = 0x000807, NextId = 0x000808;
+                          MarkerId = 0x000805, CocMarkerId = 0x000806, FloorId = 0x000807, LightRefId = 0x000808,
+                          FirstCopiedRefId = 0x000809;   // Breezehome's copied references take ids from here on
+        public static uint NextId = FirstCopiedRefId;          // set past the last copied reference by TestCell
 
-        public static void Write(string path)
+        public static void Write(string path, string esmPath)
         {
             var mod = new SkyrimMod(Own, R);
-            mod.Locations.Add(new Location(O(LocationId), R) { EditorID = "SkythonTestLocation", Name = "Skython Test Location" });
+            using (var esm = SkyrimMod.CreateFromBinaryOverlay(esmPath, R)) mod.Locations.Add(TestLocation(esm));
             mod.Npcs.Add(NpcBase());
-            mod.Cells.Records.Add(CellBlockWith(TestCell()));
+            mod.Cells.Records.Add(CellBlockWith(TestCell(esmPath)));
             mod.Quests.Add(TestQuest());
             mod.ModHeader.Author = "Skython test data";
             mod.ModHeader.Stats.NextFormID = NextId;
@@ -337,10 +352,51 @@ namespace SkythonTestEsp
         static Placement At(float x, float y, float z) =>
             new Placement { Position = new P3Float(x, y, z), Rotation = new P3Float(0, 0, 0) };
 
-        static Cell TestCell()
+        // Default location of the installed Skyrim.esm (a common Steam library path); SKYTHON_SKYRIM_ESM overrides it.
+        // The cell and the location are copied from it, so the build reads it.
+        public const string DefaultSkyrimEsm = "/mnt/games/SteamLibrary/steamapps/common/Skyrim Special Edition/Data/Skyrim.esm";
+
+        // The location record is a copy of WhiterunBreezehomeLocation (parent location WhiterunLocation, keywords,
+        // the static and marker reference lists, the world location marker), keeping only our FormKey, EditorID and Name
+        // (the fields the tests look up). The copied reference lists still name Breezehome's own references in WhiterunBreezehome,
+        // not our copies of them: a verbatim copy, so this build changes one thing. Name is masked out because reading
+        // Skyrim.esm's localized strings goes through a Windows-only BSA path in Mutagen 23.4.0 on Linux.
+        static Location TestLocation(ISkyrimModDisposableGetter esm)
         {
-            var cell = new Cell(O(CellId), R) { EditorID = "SkythonTestCell", Name = "Skython Test Cell", Flags = Cell.Flag.IsInteriorCell };
-            cell.LightingTemplate = DefaultLightingTemplate;
+            ILocationGetter src = null;
+            foreach (var l in esm.Locations)
+                if (l.FormKey == WhiterunBreezehomeLocation) src = l;
+            if (src == null || src.EditorID != "WhiterunBreezehomeLocation")
+                throw new System.InvalidOperationException($"WhiterunBreezehomeLocation {WhiterunBreezehomeLocation} not found in Skyrim.esm");
+            var location = new Location(O(LocationId), R);
+            location.DeepCopyIn(src, new Location.TranslationMask(defaultOn: true) { Name = false });
+            location.EditorID = "SkythonTestLocation";
+            location.Name = "Skython Test Location";
+            return location;
+        }
+
+        static Cell TestCell(string esmPath)
+        {
+            // The cell record is a copy of the vanilla interior WhiterunBreezehome (lighting template, XCLL, water, image
+            // and acoustic space, music, sky region, encounter zone, flags), without its references, navmeshes and
+            // name. Two hand-built cells crashed the renderer on the first frame after coc.
+            using var esm = SkyrimMod.CreateFromBinaryOverlay(esmPath, R);
+            ICellGetter src = null;
+            foreach (var b in esm.Cells.Records)
+                foreach (var sb in b.SubBlocks)
+                    foreach (var c in sb.Cells)
+                        if (c.FormKey == WhiterunBreezehome) src = c;
+            if (src == null || src.EditorID != "WhiterunBreezehome")
+                throw new System.InvalidOperationException($"WhiterunBreezehome {WhiterunBreezehome} not found in {esmPath}");
+            var mask = new Cell.TranslationMask(defaultOn: true)
+            {
+                Persistent = false, Temporary = false, NavigationMeshes = false, Landscape = false, Name = false,
+            };
+            // Duplicate() throws on a binary-overlay source in Mutagen 23.4.0 (its release is unset), so copy into a new record.
+            var cell = new Cell(O(CellId), R);
+            cell.DeepCopyIn(src, mask);
+            cell.EditorID = "SkythonTestCell";
+            cell.Name = "Skython Test Cell";
             cell.Location = O(LocationId);
             var npc = new PlacedNpc(O(NpcRefId), R) { EditorID = "SkythonTestNPC", MajorFlags = PlacedNpc.MajorFlag.Persistent, Placement = At(0, 128, 70) };
             npc.Base = O(NpcBaseId);
@@ -355,7 +411,44 @@ namespace SkythonTestEsp
             var floor = new PlacedObject(O(FloorId), R) { Scale = 4f, Placement = At(0, 0, 0) };
             floor.Base = ImpFloorMid01;
             cell.Temporary.Add(floor);
+            // One placed light above the floor's centre. The copied cell had no light reference of its own, and coc
+            // from an exterior crashed reading a null NiLight.
+            var light = new PlacedObject(O(LightRefId), R) { Placement = At(0, 0, 256) };
+            light.Base = WRFireLightShadow01;
+            cell.Temporary.Add(light);
+            CopyBreezehomeReferences(esm, src, cell);
             return cell;
+        }
+
+        // Copy Breezehome's own placed statics, moveable statics, furniture and lights into our cell, each as
+        // a new reference of ours (ids from FirstCopiedRefId, in Breezehome's order: persistent first, then temporary).
+        // Everything else is left out: actors, doors, map markers, items, containers, activators, flora. Each copy keeps
+        // its source's fields (base, placement, scale, flags, enable parent, linked refs, ownership); only the editor id
+        // is dropped so no Skyrim.esm editor id appears twice.
+        static void CopyBreezehomeReferences(ISkyrimModDisposableGetter esm, ICellGetter src, Cell cell)
+        {
+            var wanted = new System.Collections.Generic.HashSet<FormKey>();
+            foreach (var r in esm.Statics) wanted.Add(r.FormKey);
+            foreach (var r in esm.MoveableStatics) wanted.Add(r.FormKey);
+            foreach (var r in esm.Furniture) wanted.Add(r.FormKey);
+            foreach (var r in esm.Lights) wanted.Add(r.FormKey);
+            var id = FirstCopiedRefId;
+            void Copy(System.Collections.Generic.IEnumerable<IPlacedGetter> from, Noggog.ExtendedList<IPlaced> to)
+            {
+                foreach (var r in from)
+                {
+                    if (r is not IPlacedObjectGetter po) continue;          // actors and hazards are not copied
+                    if (!wanted.Contains(po.Base.FormKey)) continue;
+                    if (po.MapMarker != null || po.TeleportDestination != null) continue;
+                    var copy = new PlacedObject(O(id++), R);
+                    copy.DeepCopyIn(po);
+                    copy.EditorID = null;
+                    to.Add(copy);
+                }
+            }
+            Copy(src.Persistent, cell.Persistent);
+            Copy(src.Temporary, cell.Temporary);
+            NextId = id;
         }
 
         static CellBlock CellBlockWith(Cell cell)
@@ -380,8 +473,9 @@ namespace SkythonTestEsp
             {
                 EditorID = Names.QuestEditorId, Name = "Skython Test Quest", Flags = Quest.Flag.AllowRepeatedStages,
                 QuestFormVersion = 0,
-                NextAliasID = 4,   // ANAM: the next free alias id after 0-3, as vanilla quests write it
             };
+            // ANAM (NextAliasID) has no settable property in Mutagen 23.4.0: its writer computes it from the aliases.
+            // With aliases 0-3 it writes ANAM = 4, the next free alias id, as vanilla quests do (checked in the bytes).
             var refFlags = QuestAlias.Flag.Optional | QuestAlias.Flag.AllowDisabled | QuestAlias.Flag.AllowReserved
                            | QuestAlias.Flag.AllowDead | QuestAlias.Flag.AllowCleared;
             string[] refNames = { "SkythonTarget", "SkythonItem", "SkythonExtra" };
@@ -418,7 +512,7 @@ namespace SkythonTestEsp
                 a.Scripts.Add(new ScriptEntry { Name = Names.AliasScript });
                 vm.Aliases.Add(a);
             }
-            // Location alias 3 carries its own script (R45: only scripted aliases can be driven).
+            // Location alias 3 carries its own script (Skython drives only aliases that carry a script).
             var loc = new QuestFragmentAlias { Version = 5, ObjectFormat = 2, Property = new ScriptObjectProperty { Name = "", Object = quest.FormKey, Alias = 3 } };
             loc.Scripts.Add(new ScriptEntry { Name = LocationAliasScript });
             vm.Aliases.Add(loc);
