@@ -1,0 +1,33 @@
+{
+  "save": "skython_t42bind_20261002102002",
+  "alias": {
+    "quest": "0x0010FDD5",
+    "alias_id": 0,
+    "before_save": "works (0x10fdd5)",
+    "after_load": "works (0x10fdd5)"
+  },
+  "cold_form": {
+    "form": "Skyrim.esm|0x013988",
+    "log": [
+      "[2026-10-02 10:20:01.075] [global] [info] values: Skyrim.esm|0x013988 bound before call: false",
+      "[2026-10-02 10:20:05.843] [global] [info] values: Skyrim.esm|0x013988 bound before call: true"
+    ]
+  },
+  "control": {
+    "form": "Skyrim.esm|0x013982",
+    "log": [
+      "[2026-10-02 10:20:04.591] [global] [info] values: Skyrim.esm|0x013982 bound before call: false",
+      "[2026-10-02 10:20:05.935] [global] [info] values: Skyrim.esm|0x013982 bound before call: false"
+    ],
+    "in_session_result": "valid"
+  },
+  "fresh_launch": {
+    "alias_first_call": "works (0x10fdd5)",
+    "cold_form_log": [
+      "[2026-10-02 10:23:26.655] [global] [info] values: Skyrim.esm|0x013988 bound before call: true"
+    ],
+    "when": "2026-10-02 10:23:29"
+  },
+  "old_epoch_event_reference": "StaleReference",
+  "when": "2026-10-02 10:20:10"
+}

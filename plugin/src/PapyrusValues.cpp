@@ -1,6 +1,7 @@
 #include "PapyrusValues.h"
 #include "Lifecycle.h"
 #include "Log.h"
+#include "Settings.h"
 #include "Signatures.h"
 #include "spy/papyrus_names.h"
 #include "spy/refs.h"
@@ -11,6 +12,8 @@
 #include <format>
 #include <mutex>
 #include <optional>
+#include <set>
+#include <utility>
 
 // RE/Skyrim.h pulls in windows.h, whose GetObject macro (-> GetObjectA) breaks Variable::GetObject() (compile error C2039).
 // Any plugin .cpp that calls Variable::GetObject() needs this line after its includes (today only this file does).
@@ -97,6 +100,20 @@ TypeInfo ElementType(const TypeInfo& arrayType)
 bool FindBound(RE::VMHandle handle, const std::string& script, RE::BSTSmartPointer<RE::BSScript::Object>& out)
 {
     return VM()->FindBoundObject(handle, script.c_str(), out) && out;
+}
+
+// Task 42 (owner question from Task 29): did a form or alias already have a bound script object when a call reached it?
+// Dev only (trace_timing); once per target per epoch, so a load shows the state again; at most 4096 targets per process.
+void NoteBinding(std::uint64_t key, const std::string& desc, bool boundBefore)
+{
+    if (!settings::Get().trace_timing) return;
+    static std::mutex* mx = new std::mutex;
+    static auto* seen = new std::set<std::pair<std::uint64_t, std::uint32_t>>;
+    {
+        std::lock_guard lk(*mx);
+        if (seen->size() >= 4096 || !seen->insert({ key, life::Epoch() }).second) return;
+    }
+    log::Info(std::format("values: {} bound before call: {}", desc, boundBefore ? "true" : "false"));
 }
 
 // Concrete alias class and VM type id. Do not call BGSBaseAlias::GetVMTypeID(): S4 proved the skyrim_cast route.
@@ -322,7 +339,9 @@ Target ResolveTarget(const Value& object, const std::string& script)
     RE::BSTSmartPointer<RE::BSScript::Object> bound;
     // FindBoundObject also accepts a parent class of the bound object (S7d). The caller dispatches on the returned
     // Object& overload; the (handle, className) overload returns false on a form with no bound object (S7g).
-    if (FindBound(handle, script, bound)) return {bound, desc};
+    const bool boundBefore = FindBound(handle, script, bound);
+    NoteBinding(static_cast<std::uint64_t>(handle), desc, boundBefore);
+    if (boundBefore) return {bound, desc};
     // Aliases are never bound on demand (R45): a plain alias would get an `Alias`-class object (S7g), still not a
     // ReferenceAlias, and the binding adds an attachedScripts entry whose save persistence is unmeasured.
     if (std::holds_alternative<AliasRef>(object.v))
