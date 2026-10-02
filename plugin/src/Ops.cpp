@@ -157,10 +157,15 @@ void CallMethod(const CallArgs& c, const Done& done)
 // (Task 30, launch 1: CWCampaignScript.currentAttackDelta, an Int, read None; ruling R57), so it is not used; nor
 // SetPropertyValue, its vtable neighbour. Object::GetProperty is not used either: at the pin it indexes variables[]
 // with the declaring class's own index and ignores the parents' variables.
-// Reads go through the engine's own VirtualMachine::GetVariableValue (vfunc GetVariableValue1) by that index, which
-// copies the Variable the engine's way (and may take the object's lock: unverified); a false or None answer where the
-// slot holds a value falls back to the direct read (logged once). Writes are direct: there is no trusted engine setter
-// at the pin. A full property (Papyrus get/set code) is refused: its code would not run here.
+// Reads go through the engine's own VirtualMachine::GetVariableValue (vfunc GetVariableValue1) by that index; whether
+// it takes the object's lock is unverified. If it fails (false, or None while the slot holds a value), an Int, Float
+// or Bool property falls back to reading the slot directly (logged once); a String, Object or Array property gets
+// vm_error instead (ruling R58: no lock-free read of a reference-counted value). Writes are direct and limited to Int,
+// Float and Bool properties (R58): a write to a String, Object (form or alias) or Array property would release and
+// take references while a Papyrus thread may be doing the same, so it is refused `unsupported` (call a Papyrus setter
+// with call_method). The Int/Float/Bool writes and fallback reads take no lock: the worst case is a torn or stale
+// value if Papyrus writes the same property at the same moment. A full property (Papyrus get/set code) is refused:
+// its code would not run here.
 struct AutoProperty
 {
     RE::BSScript::TypeInfo type;
@@ -174,6 +179,11 @@ AutoProperty FindAutoProperty(const PropertyArgs& p)
     if (slot.info.getFunction || slot.info.setFunction)
         throw ProtocolError(ErrorCode::unsupported, p.script + "." + p.property + " is a full property (it has Papyrus "
             "get/set code); v1 reads and writes auto properties only: call a Papyrus function on the script instead");
+    // FindPropertySlot leaves the name empty when autoVarIndex is outside the declaring class's own variables: then
+    // the absolute index would point at someone else's variable, so refuse instead of using it.
+    if (slot.variableName.empty())
+        throw ProtocolError(ErrorCode::unsupported, p.script + "." + p.property + " has no auto variable in its "
+            "declaring script (its auto-variable index is out of range); v1 cannot read or write it");
     return {slot.info.type, slot.variableIndex, slot.variableName};
 }
 
@@ -182,11 +192,17 @@ AutoProperty FindAutoProperty(const PropertyArgs& p)
 RE::BSScript::Variable& BackingVariable(const AutoProperty& a, const pv::Target& target, const PropertyArgs& p)
 {
     auto* obj = target.object.get();
-    const auto* type = obj ? obj->GetTypeInfo() : nullptr;
+    if (!obj || !obj->IsConstructed() || !obj->IsValid())  // half-built or torn-down objects: never touch variables[]
+        throw ProtocolError(ErrorCode::vm_error, "the script object of " + target.desc + " is not constructed or not "
+            "valid; " + p.script + "." + p.property + " cannot be accessed now");
+    const auto* type = obj->GetTypeInfo();
     if (!type || a.index >= type->GetTotalNumVariables())
         throw ProtocolError(ErrorCode::vm_error, "the script object of " + target.desc + " has no storage for " + p.script + "." + p.property);
     return obj->variables[a.index];
 }
+
+// Int, Float and Bool are the only types v1 writes, and the only ones it reads from the slot without the engine (R58).
+bool IsPlainValueType(const RE::BSScript::TypeInfo& t) { return t.IsInt() || t.IsFloat() || t.IsBool(); }
 
 std::uintptr_t RawType(const Variable& v) { return static_cast<std::uintptr_t>(v.GetType().GetRawType()); }
 
@@ -217,7 +233,18 @@ json GetProperty(const PropertyArgs& p)
     LogPropertySlot(a, target, p, slot, engineOk, engine);
     const bool engineNone = engine.GetType().GetRawType() == RE::BSScript::TypeInfo::RawType::kNone;
     const bool slotNone = slot.GetType().GetRawType() == RE::BSScript::TypeInfo::RawType::kNone;
-    if (!engineOk || (engineNone && !slotNone)) {  // don't fail the call: the direct slot holds the value
+    if (!engineOk || (engineNone && !slotNone)) {
+        if (!IsPlainValueType(a.type)) {  // R58: a reference-counted value is never read lock-free
+            static std::once_flag refOnce;
+            std::call_once(refOnce, [&] {
+                log::Warn(std::format("ops: GetVariableValue failed for {}.{} on {} (a {} property): returned={} "
+                    "engine_raw_type={:X} direct_raw_type={:X}; no direct read for this type, answered vm_error",
+                    p.script, p.property, target.desc, pv::TypeName(a.type), engineOk, RawType(engine), RawType(slot)));
+            });
+            throw ProtocolError(ErrorCode::vm_error, "the engine did not return " + p.script + "." + p.property + " on " +
+                target.desc + " (a " + pv::TypeName(a.type) + " property; v1 reads those only through the engine)");
+        }
+        // Int, Float or Bool: don't fail the call, the direct slot holds the value.
         static std::once_flag once;
         std::call_once(once, [&] {
             log::Warn(std::format("ops: GetVariableValue fallback for {}.{} on {}: returned={} engine_raw_type={:X} "
@@ -229,11 +256,16 @@ json GetProperty(const PropertyArgs& p)
     return pv::FromVariable(engine);  // inside this SKSE task (Run), so an object value is converted here
 }
 
-// Direct write through Variable's own assignment (it releases the old value and takes a reference to the new one).
-// Not synchronised with Papyrus threads running the same script, and no OnPropertyChanged-style event fires.
+// Direct write of an Int, Float or Bool property (R58); every other type is refused before the object is resolved.
+// Lock-free: a Papyrus thread writing the same property at the same moment can leave a torn or stale value. No
+// OnPropertyChanged-style event fires.
 void SetProperty(const PropertyArgs& p)
 {
     const auto a = FindAutoProperty(p);
+    if (!IsPlainValueType(a.type))
+        throw ProtocolError(ErrorCode::unsupported, p.script + "." + p.property + " is a " + pv::TypeName(a.type) +
+            " property; v1 writes only Int, Float and Bool properties directly (a write to a reference-counted value "
+            "races Papyrus threads); call a Papyrus setter function with call_method instead");
     auto target = pv::ResolveTarget(p.object, p.script);
     auto& slot = BackingVariable(a, target, p);
     Variable in;

@@ -136,6 +136,22 @@ def test_get_property_reads_an_auto_property(game):
         assert game.call_method(quest, script, getter) == first
 
 
+def test_set_property_refuses_a_reference_counted_property(game):
+    """R58: v1 writes only Int, Float and Bool properties. S7c's property is alias-typed (a reference-counted value):
+    writing even the value it already holds is refused `unsupported` before anything is written, and it reads the
+    same afterwards."""
+    quest_id, script, prop, kind = _s7c_property()
+    quest = game.resolve(form_id=quest_id)
+    before = game.get_property(quest, script, prop)
+    assert type(before) is KINDS[kind], (kind, before)
+    # The same value it holds: the refusal cannot be a type_mismatch, only the R58 rule.
+    with pytest.raises(errors.Unsupported, match="v1 writes only Int, Float and Bool"):
+        game.set_property(quest, script, prop, before)
+    with pytest.raises(errors.Unsupported, match="v1 writes only Int, Float and Bool"):
+        game.set_property(quest, script, prop, None)  # a None write would clear it: refused the same way
+    assert game.get_property(quest, script, prop) == before
+
+
 def test_get_property_reads_an_int_auto_property(game):
     """An Int auto property cannot hold None, so this read is not vacuous the way an unfilled object property is.
     SPY_OWN_QUEST/SPY_OWN_SCRIPT as in test_m1_calls.py; SPY_OWN_INT_PROPERTY: an Int auto property declared on that
