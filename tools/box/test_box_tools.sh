@@ -116,6 +116,11 @@ for args in "devbench.dll devbench.dll.off" "SkyrimPython/../../x SkyrimPython/y
   # shellcheck disable=SC2086
   if mv_t $args >/dev/null; then bad "--move accepted: $args"; else ok "--move refuses: $args"; fi
 done
+t="$(BOX_DEPLOYED=/nonexistent/box-deployed.txt BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --move SkyrimPython/python SkyrimPython/python.off 2>&1)"
+case "$t" in *"no deploy record"*) ok "--move refuses clearly when the deploy record is missing" ;; *) bad "--move with no deploy record: '$t'" ;; esac
+[ -e /nonexistent/box-deployed.txt ] && bad "print mode created the deploy record" || true
+t="$(BOX_DEPLOYED=/tmp/elsewhere.txt bash -c 'source "$1/box_env.sh"; echo "$BOX_DEPLOYED"' _ "$B")"
+[ "$t" = "$ROOT/out/box-deployed.txt" ] && ok "BOX_DEPLOYED override ignored outside print mode" || bad "BOX_DEPLOYED override honoured outside print mode: '$t'"
 grep -qE '^\s*Move-Item -LiteralPath \$src -Destination \$dest$' "$B/win/place.ps1" 2>/dev/null && ok "place.ps1 move: Move-Item without -Force" || bad "place.ps1 has no plain Move-Item for -Mode move"
 if grep -hE 'Move-Item' "$B"/win/*.ps1 | grep -vE '^\s*#' | grep -q -- '-Force'; then bad "Move-Item -Force somewhere"; else ok "no Move-Item -Force"; fi
 grep -qF '"ERR destination exists' "$B/win/place.ps1" 2>/dev/null && ok "place.ps1 move refuses an existing destination" || bad "place.ps1 move does not refuse an existing destination"

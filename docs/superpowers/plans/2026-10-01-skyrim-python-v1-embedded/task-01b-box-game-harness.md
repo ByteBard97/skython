@@ -31,7 +31,7 @@
   - `BOX_OFFLINE=1` (ruling R43): every wrapper in `box_env.sh` (`bssh_t`, `bssh`, `bscp`, `bps`, `btunnel_start`, `btunnel_ctl`) prints `BOX_OFFLINE: refusing <cmd>` and exits 97 before any ssh/scp. `test_box_tools.sh` exports it, puts failing `ssh`/`scp` traps first on `PATH`, proves the refusal first and that no call reached the traps last; every check that runs a real script uses its print-only mode on top of that.
   - Part C additions (ruling R42; Tasks 25-32 use them through [Task 1c](task-01c-part-c-on-the-box.md)):
     - `box_deploy.sh out/SkyrimPython.dll [ini]`: loader to `Plugins\SkyrimPython.dll`, `out/SkyrimPythonCore.dll` (must exist, not older) to `Plugins\SkyrimPython\SkyrimPythonCore.dll`, the ini to `Plugins\SkyrimPython.ini`; `BOX_DEPLOY_PRINT_TARGET=1` prints the three targets before any ssh.
-    - `box_deploy.sh --move REL NEWREL` (both relative to `Plugins`): `Move-Item` without `-Force` (`place.ps1 -Mode move`), only of a recorded target or something inside one, only to an absent destination inside `Plugins`; appends `<date> <src> -> <dest>` to `out/box-moves.txt` and records the destination. Never a delete.
+    - `box_deploy.sh --move REL NEWREL` (both relative to `Plugins`): `Move-Item` without `-Force` (`place.ps1 -Mode move`), only of a recorded target or something inside one (refused with `no deploy record ...` when `out/box-deployed.txt` does not exist; a `BOX_DEPLOYED=` override is honoured only in print mode), only to an absent destination inside `Plugins`; appends `<date> <src> -> <dest>` to `out/box-moves.txt` and records the destination. Never a delete.
     - `box_launch.sh [--env SKYRIM_PYTHON_TEST_<NAME>=VALUE]...`: `launch.env` is rewritten on every launch (empty without `--env`); `launch.ps1` sets only `SKYRIM_PYTHON_TEST_*` lines in its environment before starting the loader (the game inherits them), logs them, and empties the file.
     - `box_session.sh up | env | down | status | probe [PORT] | rewrite`: see its header. `up` writes `out/box-session.json` (mode 600, port = the tunnel's local end) and `out/box-live.env`, and keeps one tunnel `127.0.0.1:LOCAL -> box 127.0.0.1:PORT` (socket `box-session.sock`); `probe` asks the box whether a port listens.
     - `box_files.sh pull NAME... | put-control FILE`: mirror of the text written since the launch stamp into `out/box-skse/NAME` (empty when none); the one Linux-written file on the box is `SKSE\SkyrimPython\livetest_control.json`.
@@ -161,6 +161,11 @@ for args in "devbench.dll devbench.dll.off" "SkyrimPython/../../x SkyrimPython/y
   # shellcheck disable=SC2086
   if mv_t $args >/dev/null; then bad "--move accepted: $args"; else ok "--move refuses: $args"; fi
 done
+t="$(BOX_DEPLOYED=/nonexistent/box-deployed.txt BOX_DEPLOY_PRINT_TARGET=1 "$B/box_deploy.sh" --move SkyrimPython/python SkyrimPython/python.off 2>&1)"
+case "$t" in *"no deploy record"*) ok "--move refuses clearly when the deploy record is missing" ;; *) bad "--move with no deploy record: '$t'" ;; esac
+[ -e /nonexistent/box-deployed.txt ] && bad "print mode created the deploy record" || true
+t="$(BOX_DEPLOYED=/tmp/elsewhere.txt bash -c 'source "$1/box_env.sh"; echo "$BOX_DEPLOYED"' _ "$B")"
+[ "$t" = "$ROOT/out/box-deployed.txt" ] && ok "BOX_DEPLOYED override ignored outside print mode" || bad "BOX_DEPLOYED override honoured outside print mode: '$t'"
 grep -qE '^\s*Move-Item -LiteralPath \$src -Destination \$dest$' "$B/win/place.ps1" 2>/dev/null && ok "place.ps1 move: Move-Item without -Force" || bad "place.ps1 has no plain Move-Item for -Mode move"
 if grep -hE 'Move-Item' "$B"/win/*.ps1 | grep -vE '^\s*#' | grep -q -- '-Force'; then bad "Move-Item -Force somewhere"; else ok "no Move-Item -Force"; fi
 grep -qF '"ERR destination exists' "$B/win/place.ps1" 2>/dev/null && ok "place.ps1 move refuses an existing destination" || bad "place.ps1 move does not refuse an existing destination"
@@ -242,7 +247,9 @@ BOX_DIR_FWD='C:/dev/skyrim-python-box'          # scp wants forward slashes
 BOX_TASK=SkyrimPythonGame
 BOX_DEVBENCH_URL='http://127.0.0.1:8920'
 BOX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BOX_DEPLOYED="${BOX_DEPLOYED:-$BOX_ROOT/out/box-deployed.txt}"   # overridable for the offline tests only
+# The deploy record. An override (BOX_DEPLOYED=...) is honoured only with BOX_DEPLOY_PRINT_TARGET=1 (offline tests):
+# a real deploy always records in out/box-deployed.txt.
+if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" != 1 ] || [ -z "${BOX_DEPLOYED:-}" ]; then BOX_DEPLOYED="$BOX_ROOT/out/box-deployed.txt"; fi
 SKYRIM_PYTHON_STATE="${SKYRIM_PYTHON_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/skyrim-python}"
 BOX_TUNNEL_SOCK="$SKYRIM_PYTHON_STATE/box-tunnel.sock"
 BOX_SESSION_SOCK="$SKYRIM_PYTHON_STATE/box-session.sock"   # the dev-bridge tunnel (box_session.sh)
@@ -318,7 +325,8 @@ bps 60 setup_task.ps1 | tr -d '\r'
 # Files are staged under C:\dev\skyrim-python-box\stage (no spaces for scp), then copied into place on the box.
 set -euo pipefail
 source "$(dirname "$0")/box_env.sh"
-mkdir -p "$BOX_ROOT/out/box-stage"; touch "$BOX_DEPLOYED"
+mkdir -p "$BOX_ROOT/out/box-stage"
+[ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ] || touch "$BOX_DEPLOYED"   # print mode never creates the record
 
 recorded() { grep -qxF -- "$1" "$BOX_DEPLOYED"; }
 rec() { recorded "$1" || echo "$1" >> "$BOX_DEPLOYED"; }
@@ -368,6 +376,7 @@ spike_ok() { case "$(basename "$1")" in *Spike*) [ "${CONFIRM_THROWAWAY_SAVE:-0}
 [ $# -ge 1 ] || box_die "usage: see the header of $0"
 owned() {  # owned <windows path>: recorded, or inside a recorded folder
   local r
+  [ -f "$BOX_DEPLOYED" ] || box_die "no deploy record $BOX_DEPLOYED: this tool deployed nothing, so there is nothing it may move"
   while IFS= read -r r; do
     [ -n "$r" ] || continue
     [ "$1" = "$r" ] && return 0
@@ -1142,7 +1151,8 @@ Get-ChildItem (Join-Path $my 'Saves') -Force -ErrorAction SilentlyContinue | Whe
 #   new: for each name (relative to the SKSE log folder), one line "<name>`t<state>`t<base64>": state NEW (the text
 #        written since the last launch stamp, see snapshot_lib.ps1; base64 of its UTF-8), UNCHANGED (nothing written
 #        since the stamp), ABSENT, or REFUSED (a path with '..', a drive or a leading slash, or session.json).
-#        Exit 3 with NO_STAMP when no launch was stamped.
+#        Exit 3 with NO_STAMP when no launch was stamped. A file rewritten since the stamp with exactly the bytes it
+#        had then (same length, same hash) reads as UNCHANGED: snapshot_lib cannot tell it from an untouched file.
 #   session: the same for SkyrimPython\session.json alone (box_session.sh; it holds the bridge token, so only that
 #        script reads it, and only into out/box-session.json).
 #   put: writes exactly one file, SkyrimPython\livetest_control.json (livetest/smoke.py's command channel; Task 31),

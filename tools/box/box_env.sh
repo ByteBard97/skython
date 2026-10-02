@@ -18,7 +18,9 @@ BOX_DIR_FWD='C:/dev/skyrim-python-box'          # scp wants forward slashes
 BOX_TASK=SkyrimPythonGame
 BOX_DEVBENCH_URL='http://127.0.0.1:8920'
 BOX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-BOX_DEPLOYED="${BOX_DEPLOYED:-$BOX_ROOT/out/box-deployed.txt}"   # overridable for the offline tests only
+# The deploy record. An override (BOX_DEPLOYED=...) is honoured only with BOX_DEPLOY_PRINT_TARGET=1 (offline tests):
+# a real deploy always records in out/box-deployed.txt.
+if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" != 1 ] || [ -z "${BOX_DEPLOYED:-}" ]; then BOX_DEPLOYED="$BOX_ROOT/out/box-deployed.txt"; fi
 SKYRIM_PYTHON_STATE="${SKYRIM_PYTHON_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/skyrim-python}"
 BOX_TUNNEL_SOCK="$SKYRIM_PYTHON_STATE/box-tunnel.sock"
 BOX_SESSION_SOCK="$SKYRIM_PYTHON_STATE/box-session.sock"   # the dev-bridge tunnel (box_session.sh)

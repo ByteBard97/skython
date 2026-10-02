@@ -25,7 +25,8 @@
 # Files are staged under C:\dev\skyrim-python-box\stage (no spaces for scp), then copied into place on the box.
 set -euo pipefail
 source "$(dirname "$0")/box_env.sh"
-mkdir -p "$BOX_ROOT/out/box-stage"; touch "$BOX_DEPLOYED"
+mkdir -p "$BOX_ROOT/out/box-stage"
+[ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ] || touch "$BOX_DEPLOYED"   # print mode never creates the record
 
 recorded() { grep -qxF -- "$1" "$BOX_DEPLOYED"; }
 rec() { recorded "$1" || echo "$1" >> "$BOX_DEPLOYED"; }
@@ -75,6 +76,7 @@ spike_ok() { case "$(basename "$1")" in *Spike*) [ "${CONFIRM_THROWAWAY_SAVE:-0}
 [ $# -ge 1 ] || box_die "usage: see the header of $0"
 owned() {  # owned <windows path>: recorded, or inside a recorded folder
   local r
+  [ -f "$BOX_DEPLOYED" ] || box_die "no deploy record $BOX_DEPLOYED: this tool deployed nothing, so there is nothing it may move"
   while IFS= read -r r; do
     [ -n "$r" ] || continue
     [ "$1" = "$r" ] && return 0
