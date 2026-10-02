@@ -16,6 +16,7 @@ struct ModuleHost
     std::function<void(const std::string& level, const std::string& msg)> log;  // _skython.log()
     FakeBackend* fake = nullptr;  // set only by the fake build: adds the _fake_* controls
     EventHub* events = nullptr;  // open_consumer / close_consumer / next_events; null: no events in this build
+    std::function<void(const std::string& message)> console_echo;  // _skython.console_echo(); unset = no-op (Task 43)
 };
 
 void InstallModuleHost(ModuleHost host);

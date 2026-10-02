@@ -112,6 +112,10 @@ void DefineModule(py::module_& m)
           "The plugin's settings and paths as JSON text.");
     m.def("log", [](const std::string& level, const std::string& message) { if (Host().log) Host().log(level, message); },
           py::arg("level"), py::arg("message"), release(), "Write one line to the plugin log.");
+    m.def("console_echo", [](const std::string& message) { if (Host().console_echo) Host().console_echo(message); },
+          py::arg("message"), release(),
+          "Queue one rate-limited line for the in-game console (at most 5 at once, then 1 per second; extra lines are "
+          "summarised). Never blocks, never raises for rate limiting.");
     m.def("in_flight", [] { return Disp().InFlight(); }, release(), "Calls submitted and not yet finished.");
     m.def("now_us", [] { return NowUs(); },
           "steady_clock microseconds: the clock of the plugin's trace_timing stamps (Task 38).");

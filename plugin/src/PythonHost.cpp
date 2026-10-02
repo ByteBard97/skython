@@ -1,6 +1,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/eval.h>
 #include "PythonHost.h"
+#include "ConsoleEcho.h"
 #include "GameBackend.h"
 #include "Events.h"
 #include "Log.h"
@@ -144,6 +145,7 @@ void Run(const Config cfg)
         else if (level == "debug") log::Debug(line);
         else log::Info(line);
     };
+    host.console_echo = [](const std::string& m) { console::Echo(m); };
     // _skython talks to the game dispatcher (GameBackend, Task 27).
     InstallModuleHost(std::move(host));
     if (PyImport_AppendInittab("_skython", &PyInit__skython) == -1) throw std::runtime_error("PyImport_AppendInittab failed");

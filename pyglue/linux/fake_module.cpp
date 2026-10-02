@@ -4,6 +4,7 @@
 //   SKYTHON_FAKE_INI  ini text parsed like Skython.ini; read by config() on every call, and once at import for the
 //                    dispatcher's default_timeout_ms and max_inflight_total
 #include "spy/config.h"
+#include "spy/console_echo.h"
 #include "spy/pymodule.h"
 #include <cstdlib>
 #include <filesystem>
@@ -73,7 +74,9 @@ PYBIND11_MODULE(_skython, m)
     }();
     // Named fields (C++20 designated initializers), never positional: later tasks append ModuleHost fields
     // (console_echo in Task 43, probe_sink_cycles in Task 44), each with a default.
+    static spy::ConsoleEcho* echo = new spy::ConsoleEcho([](const std::string& line) { Log("info", "console: " + line); });  // leaked like the fake
     spy::InstallModuleHost({.dispatcher = dispatcher, .backend = "fake", .config_json = ConfigJson, .log = Log,
-                            .fake = fake, .events = hub});
+                            .fake = fake, .events = hub,
+                            .console_echo = [](const std::string& m) { echo->Echo(m); }});
     spy::DefineModule(m);
 }

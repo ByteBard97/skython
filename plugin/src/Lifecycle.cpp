@@ -1,4 +1,5 @@
 #include "Lifecycle.h"
+#include "ConsoleEcho.h"
 #include "Events.h"
 #include "Log.h"
 #include "SaveLoad.h"
@@ -49,8 +50,10 @@ struct MenuSink final : RE::BSTEventSink<RE::MenuOpenCloseEvent>
             if (auto* ui = RE::UI::GetSingleton()) State().set_paused(ui->GameIsPaused());
             if (name == RE::LoadingMenu::MENU_NAME)
                 log::Info(std::string("lifecycle: Loading Menu ") + (e->opening ? "opened" : "closed"));
-            else if (name == RE::MainMenu::MENU_NAME && e->opening)
+            else if (name == RE::MainMenu::MENU_NAME && e->opening) {
                 log::Info("lifecycle: Main Menu opened; no game loaded");
+                console::FlushHeld();  // queues one SKSE task for lines held before the console existed (Task 43)
+            }
             NoteInteractive();
         } catch (...) {
             log::Error("lifecycle: menu sink threw");

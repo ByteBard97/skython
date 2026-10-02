@@ -4,6 +4,8 @@ skython.remote.RemoteTransport from another process (over the dev bridge, Task 2
 import math
 import threading
 import time
+import types
+from collections.abc import Mapping
 from typing import Any, Callable, Protocol
 
 from . import _protocol_generated as _g
@@ -13,6 +15,7 @@ from .events import EventDispatcher, EventStream, Subscription
 
 _GRACE = _g.GRACE_S  # seconds the Game waits beyond a server-side timeout
 _STEP_TIMEOUT = _g.CONFIG_KEYS["default_timeout_ms"]["default"] / 1000  # the plugin's default, to size a batch's wait
+_EMPTY_SETTINGS: Mapping[str, Any] = types.MappingProxyType({})
 
 
 class Transport(Protocol):
@@ -80,10 +83,17 @@ class Game:
         self._events_lock = threading.Lock()
         self._dispatcher: EventDispatcher | None = None
         self._closing = False
+        self._settings: Mapping[str, Any] = _EMPTY_SETTINGS
 
     @property
     def closed(self) -> bool:
         return self.transport.closed
+
+    @property
+    def settings(self) -> Mapping[str, Any]:
+        """This player script's settings file (scripts/<name>.toml or scripts/<name>/settings.toml), read-only:
+        tables are MappingProxyType, arrays tuples. Empty for a Game that is not a player script's (Task 43)."""
+        return self._settings
 
     # -- plumbing -------------------------------------------------------------------------------
     def _request(self, op: str, args: dict, timeout: float | None = None) -> Any:

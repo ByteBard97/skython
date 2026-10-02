@@ -6,6 +6,7 @@ Skipped unless SKYTHON_REAL_MODULE_DIR names the folder holding the built _skyth
 import importlib
 import json
 import os
+import pathlib
 import socket
 import sys
 import threading
@@ -188,3 +189,18 @@ def test_bridge_connections_are_isolated_over_the_real_module(real):
             assert [e.data["channel"] for e in b_seen] == ["real_b"]
     finally:
         srv.close()
+
+
+def test_console_echo_rate_limit_in_the_real_module(real):
+    log_file = pathlib.Path(json.loads(real.config())["log_dir"], "plugin.log")
+    time.sleep(5.5)  # a full bucket: earlier tests in this process may have spent tokens (5 tokens, 1 per second)
+    start = log_file.stat().st_size if log_file.exists() else 0  # count only lines written from here on
+    for i in range(20):
+        real.console_echo(f"Skython: script t43_{i} failed: X; see python.log")
+    time.sleep(1.6)  # one refill window plus slack: the summary comes from the limiter's own thread
+    with log_file.open("rb") as f:
+        f.seek(start)
+        text = f.read().decode("utf-8", "replace")
+    lines = [l for l in text.splitlines() if " console: " in l]
+    assert len(lines) == 6, lines
+    assert lines[-1].endswith("console: Skython: 15 more script errors; see python.log")

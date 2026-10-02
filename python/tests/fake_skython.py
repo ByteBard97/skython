@@ -504,6 +504,7 @@ class FakeSkython:
         self.max_inflight_total = max_inflight_total
         self.requests: list[dict] = []  # every well-formed request, in submit order
         self.logs: list[tuple[str, str]] = []
+        self.console_lines: list[str] = []
         self.handler_calls = 0
         self.late_results = 0
         self._epoch_base = 0
@@ -853,3 +854,8 @@ class FakeSkython:
                 if done or remaining <= 0 or not any(t in self._entries for t in tickets):
                     return done  # an unknown or cancelled ticket never completes: do not wait for it
                 self._cond.wait(min(remaining, 0.01))
+
+    def console_echo(self, message: str) -> None:
+        """Like _skython.console_echo; the pure-Python fake records lines (rate limiting is tested on the C++ side)."""
+        with self._cond:
+            self.console_lines.append(message)

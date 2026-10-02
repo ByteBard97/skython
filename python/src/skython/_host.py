@@ -34,7 +34,9 @@ import pathlib
 import sys
 import threading
 import time
+import tomllib
 import traceback
+import types
 
 log = logging.getLogger("skython.host")
 
@@ -178,6 +180,41 @@ def _script_names(folder: pathlib.Path) -> list[str]:
     return sorted(set(names))
 
 
+class _SettingsError(Exception):
+    pass
+
+
+def _freeze(v):
+    if isinstance(v, dict):
+        return types.MappingProxyType({k: _freeze(x) for k, x in v.items()})
+    if isinstance(v, list):
+        return tuple(_freeze(x) for x in v)
+    return v
+
+
+def _read_settings(name: str):
+    """scripts/<name>.toml, else scripts/<name>/settings.toml (the first that exists wins); frozen; {} if neither."""
+    folder = pathlib.Path(_STATE["scripts_dir"])
+    for path in (folder / f"{name}.toml", folder / name / "settings.toml"):
+        if path.is_file():
+            try:
+                return _freeze(tomllib.loads(path.read_text(encoding="utf-8")))
+            except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError) as e:
+                raise _SettingsError(f"{path.name}: {e}") from e
+    return _freeze({})
+
+
+def _echo_failure(name: str, status: str) -> None:
+    """One rate-limited console line per failed script (console_echo_errors, default true); never raises."""
+    try:
+        if not (_STATE.get("config") or {}).get("console_echo_errors", True):
+            return
+        import _skython
+        _skython.console_echo(f"Skython: script {name} {status.splitlines()[0][:200]}; see python.log")
+    except Exception:  # noqa: BLE001 - the console is a convenience; python.log has the full story
+        log.debug("console echo failed", exc_info=True)
+
+
 def _run_with_timeout(fn, thread_name: str, timeout: float) -> tuple[bool, str | None, str | None]:
     """Run fn() on its own thread and wait up to `timeout`. Returns (finished, error, traceback)."""
     box: dict = {}
@@ -223,8 +260,10 @@ def _load_one(name: str) -> str:
             log.info("script %s: %s", name, status)
         elif status.startswith("failed: no setup"):
             log.error("script %s: %s", name, status)
+            _echo_failure(name, status)
         elif status.startswith("failed"):
             log.error("script %s %s%s\n%s", name, status, suffix, holder.get("traceback"))
+            _echo_failure(name, status)
         elif took > SETUP_WARN_S:
             log.warning("script %s: setup took %.1f s%s; setup(game) should return quickly and start a thread "
                         "for long work", name, took, suffix)
@@ -255,7 +294,17 @@ def _load_one(name: str) -> str:
                     if holder.get("stale"):
                         game.close()  # a reload replaced this load: its Game must not drive the game
                     else:
-                        setup(game)
+                        try:
+                            game._settings = _read_settings(name)
+                        except _SettingsError as e:
+                            holder["error"] = f"settings: {e}"
+                            holder["traceback"] = ""
+                            game.close()  # setup never ran: this Game must not linger or drive the game
+                            with _LOCK:
+                                if current():  # only this load's own record; a newer load keeps its Game
+                                    _STATE["games"].pop(name, None)
+                        else:
+                            setup(game)
         except BaseException as e:  # noqa: BLE001 - SystemExit from a script is a failure, not an exit
             holder["error"] = f"{type(e).__name__}: {e}"
             holder["traceback"] = traceback.format_exc()
@@ -289,6 +338,7 @@ def _load_one(name: str) -> str:
             _STATE["scripts"][name] = status
     if timed_out:
         log.error("script %s: %s (it keeps running; the other scripts still load)", name, status)
+        _echo_failure(name, status)
     else:
         report(status, time.monotonic() - t0, late=False)
     return status
