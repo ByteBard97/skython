@@ -1,6 +1,7 @@
 #pragma once
 #include "spy/errors.h"  // spy::json
 #include "spy/events.h"
+#include <cstdint>
 #include <string_view>
 
 namespace RE { class TESForm; }
@@ -15,4 +16,5 @@ void RegisterSinks();                                  // once, at kDataLoaded: 
 void RegisterWorldSinks();                             // batch 2 (Task 40, EventSinksWorld.cpp)
 void NoteSinkError(const char* sink, const char* what) noexcept;  // logs the first failure per sink only
 void NoteFirstEvent(const char* event) noexcept;                  // one line per event name: the S5-style thread note
+std::uint64_t SkippedNullTotal() noexcept;  // events not pushed because a required (non-null) form field was null
 }

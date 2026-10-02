@@ -82,6 +82,7 @@ private:
         s["diagnostics"]["event_subscriptions"] = hub.Subscriptions();
         s["diagnostics"]["events_dropped_total"] = hub.DroppedTotal();
         s["diagnostics"]["events_suppressed_total"] = hub.SuppressedTotal();
+        s["diagnostics"]["events_skipped_null_total"] = events::SkippedNullTotal();  // Task 40 (Task 39 review)
         return s;
     }
 

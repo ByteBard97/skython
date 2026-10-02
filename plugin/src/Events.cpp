@@ -5,7 +5,9 @@
 #include "PapyrusValues.h"
 #include <RE/Skyrim.h>
 #include <SKSE/SKSE.h>
+#include <array>
 #include <atomic>
+#include <cstdint>
 #include <format>
 #include <mutex>
 #include <set>
@@ -24,9 +26,42 @@ spy::EventHub& Hub()
     return *hub;
 }
 
+namespace {
+std::atomic<std::uint64_t> g_skippedNull{ 0 };
+std::array<std::atomic_bool, spy::kEvents.size()> g_firstSeen{};      // NoteFirstEvent: one flag per table entry
+std::array<std::atomic_bool, spy::kEvents.size()> g_nullNoted{};      // MissingRequiredForm: logged once per event
+
+std::size_t EventIndex(const spy::EventSpec* spec) { return static_cast<std::size_t>(spec - spy::kEvents.data()); }
+
+// A form field the events table marks non-null (victim, quest, target, actor, item, reference, ...) that the sink could
+// not resolve: the event is not pushed (a consumer never sees null where the protocol promises a form) and is counted.
+bool MissingRequiredForm(std::string_view event, const json& data) noexcept
+{
+    const spy::EventSpec* spec = spy::find_event(event);
+    if (!spec) return false;
+    for (const auto& f : spec->fields) {
+        if (f.type != spy::EventFieldType::form || f.nullable) continue;
+        const auto it = data.find(f.name);
+        if (it != data.end() && !it->is_null()) continue;
+        g_skippedNull.fetch_add(1, std::memory_order_relaxed);
+        if (!g_nullNoted[EventIndex(spec)].exchange(true)) {
+            try {
+                log::Warn(std::format("events: {} skipped: required form field {} is null (counted in "
+                                      "events_skipped_null_total; logged once per event)", event, f.name));
+            } catch (...) {}
+        }
+        return true;
+    }
+    return false;
+}
+}
+
+std::uint64_t SkippedNullTotal() noexcept { return g_skippedNull.load(std::memory_order_relaxed); }
+
 void Push(std::string_view event, json data) noexcept
 {
     try {
+        if (MissingRequiredForm(event, data)) return;
         Hub().Push(event, std::move(data));
     } catch (...) {  // Push is documented never to throw; this is the belt to that brace
         static std::atomic_bool once{ false };
@@ -53,10 +88,10 @@ void NoteSinkError(const char* sink, const char* what) noexcept
 void NoteFirstEvent(const char* event) noexcept
 {
     try {
-        static std::mutex* mx = new std::mutex;
-        static std::set<std::string>* seen = new std::set<std::string>;
-        std::lock_guard lk(*mx);
-        if (!seen->insert(event).second) return;
+        // Fast path for every event after the first: one table lookup and one atomic exchange, no lock, no allocation
+        // (a hit flood calls this on engine threads for every event that passes Wants).
+        const spy::EventSpec* spec = spy::find_event(event);
+        if (!spec || g_firstSeen[EventIndex(spec)].exchange(true)) return;
         std::ostringstream tid;
         tid << std::this_thread::get_id();
         // A note for RESULTS only (S5 style). Nothing in the plugin keys on a thread id (R49).

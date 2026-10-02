@@ -5,7 +5,7 @@ import queue
 import pytest
 
 from skython import errors
-from skython.values import Form, to_wire
+from skython.values import Form, from_wire, to_wire
 from smoke import command
 from support import raw_connect, read_event, read_events, rpc, subscribe
 
@@ -69,6 +69,10 @@ def test_death_and_dying_with_victim_filter(game, session):
             assert f["data"]["victim"]["form_id"] == a.form_id and f["data"]["victim"]["type"] == "Actor"
             assert f["data"]["killer"] is not None and f["data"]["killer"]["form_id"] == PLAYER.form_id  # Kill(player)
             assert "dropped" not in f and "suppressed" not in f
+        # The event's own reference (with its fingerprint) works in a later call: event fingerprints match the
+        # plugin's live fingerprint end to end (Task 39 review).
+        victim = from_wire(frames_for(frames, death)[0]["data"]["victim"])
+        assert game.call_method(victim, "Actor", "IsDead") is True
         no_new_bounty(game, bounty)
     finally:
         s.close()
@@ -99,9 +103,10 @@ def test_quest_start_stage_stop(game):
         assert game.call_method(quest, "Quest", "SetStage", 10) is True
         game.call_method(quest, "Quest", "Stop")
         seen = [got.get(timeout=10.0) for _ in range(3)]
-        assert [e.name for e in seen] == ["quest_start", "quest_stage", "quest_stop"], seen
+        # Three subscriptions fed from sinks on different engine threads: their relative order is not guaranteed.
+        assert sorted(e.name for e in seen) == ["quest_stage", "quest_start", "quest_stop"], seen
         assert all(e.data["quest"].form_id == quest.form_id for e in seen)
-        assert seen[1].data["stage"] == 10
+        assert next(e for e in seen if e.name == "quest_stage").data["stage"] == 10
     finally:
         for sub in subs:
             sub.close()
