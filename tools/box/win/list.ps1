@@ -15,7 +15,7 @@ foreach ($n in 'SkyrimPythonGame','SkyrimPythonShot') {
 }
 "== logs written by the spikes and the plugin =="
 Get-ChildItem (Join-Path $my 'SKSE') -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'Skython*' -or $_.Name -like 'SkyrimPython*' } | ForEach-Object { Show $_.FullName }
-"== throwaway saves (spikebase, spytest, s4test, skypy_r38_savecall) =="
-Get-ChildItem (Join-Path $my 'Saves') -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(spikebase|spytest|s4test|skypy_r38_savecall)' } | ForEach-Object { Show $_.FullName }
+"== throwaway saves (spikebase, spytest, s4test, skypy_r38_savecall, skythonbase) =="
+Get-ChildItem (Join-Path $my 'Saves') -Force -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(spikebase|spytest|s4test|skypy_r38_savecall|skythonbase)' } | ForEach-Object { Show $_.FullName }
 ''
 'Nothing was removed. Review this list and remove by hand only the items you are sure of, one at a time.'

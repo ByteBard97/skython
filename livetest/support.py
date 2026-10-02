@@ -4,6 +4,7 @@ import pathlib
 import socket
 import struct
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 
@@ -354,9 +355,50 @@ def wait_save_file(name: str, timeout: float = 30.0) -> None:
         time.sleep(2.0)
 
 
+def _creations_prompt_open() -> bool:
+    """True while the game shows the "Creations are currently loaded" Yes/No prompt: loading a save made without
+    plugins while the test ESP is active opens it before anything loads, and the load waits for its answer."""
+    try:
+        r = _box_tool("box_console.sh", "--tool", "menu", '{"action":"describe"}')
+    except Exception:  # noqa: BLE001 - a stalled DevBench means "not known yet"
+        return False
+    return r.returncode == 0 and "creations are currently loaded" in r.stdout.lower()
+
+
+def _accept_creations_prompt() -> None:
+    """Answer Yes (button 0) to the creations prompt through DevBench; no player input."""
+    subprocess.run([str(REPO / "tools" / "box" / "box_console.sh"), "--tool", "menu",
+                    '{"action":"accept","index":0}'], check=True, capture_output=True, text=True, timeout=90)
+
+
 def load_save(game, name: str, timeout: float = 120.0) -> dict:
     """Load one of the saves these tests or the spikes made (s4test, spikebase, skythonbase, skython_*) through Game.load and
-    wait until the game is interactive again with a higher epoch. Returns that state."""
+    wait until the game is interactive again with a higher epoch. Returns that state. On the test machine a save made
+    without plugins (s4test, spikebase) loaded while the test ESP is active opens the "Creations are currently loaded"
+    prompt before anything loads, so the load runs on a thread while this one answers the prompt through DevBench."""
     if not LOADABLE.fullmatch(name):
         raise ValueError(f"tests load only s4test, spikebase, skythonbase or skython_* saves, not {name!r}")
-    return game.load(name, timeout=timeout, wait=True)
+    if not BOX:
+        return game.load(name, timeout=timeout, wait=True)
+    outcome: dict = {}
+
+    def loader():
+        try:
+            outcome["state"] = game.load(name, timeout=timeout, wait=True)
+        except Exception as e:  # noqa: BLE001 - re-raised on this thread below
+            outcome["error"] = e
+
+    t = threading.Thread(target=loader, name="load-save", daemon=True)
+    t.start()
+    answered = 0
+    while t.is_alive():
+        t.join(2.0)
+        if t.is_alive() and _creations_prompt_open():
+            _accept_creations_prompt()
+            answered += 1
+    t.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    if answered:
+        print(f"load {name}: answered the creations-are-loaded prompt {answered} time(s)")
+    return outcome["state"]

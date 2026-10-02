@@ -259,6 +259,7 @@ echo "$pre" | grep -qF '$fullDest = [IO.Path]::GetFullPath($dest)' \
 
 # 6g. the teardown list shows the save-call test's save
 grep -qF 'spikebase|spytest|s4test|skypy_r38_savecall' "$B/win/list.ps1" 2>/dev/null && ok "list.ps1 lists skypy_r38_savecall" || bad "list.ps1 does not list skypy_r38_savecall"
+grep -qE "Where-Object \{ \\\$_\.Name -match '\^\([^']*\|skythonbase[|)]" "$B/win/list.ps1" 2>/dev/null && ok "list.ps1 lists skythonbase" || bad "list.ps1 does not list skythonbase"
 
 # 6h. the SKSE modal dialog: wait_log.ps1 exits 2 with DIALOG; box_shot.sh and its task
 wl="$B/win/wait_log.ps1"
