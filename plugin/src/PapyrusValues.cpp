@@ -76,6 +76,20 @@ bool FindBound(RE::VMHandle handle, const std::string& script, RE::BSTSmartPoint
     return VM()->FindBoundObject(handle, script.c_str(), out) && out;
 }
 
+// Concrete alias class and VM type id. Do not call BGSBaseAlias::GetVMTypeID(): S4 proved the skyrim_cast route.
+// skyrim_cast needs a non-const pointer (verified by compiling), hence the const_cast in DescribeAlias.
+const char* AliasKind(RE::BGSBaseAlias* a)
+{
+    if (skyrim_cast<RE::BGSRefAlias*>(a)) return "ReferenceAlias";
+    if (skyrim_cast<RE::BGSLocAlias*>(a)) return "LocationAlias";
+    return nullptr;
+}
+
+RE::VMTypeID AliasTypeId(RE::BGSBaseAlias* a)
+{
+    return skyrim_cast<RE::BGSRefAlias*>(a) ? RE::BGSRefAlias::VMTYPEID : RE::BGSLocAlias::VMTYPEID;
+}
+
 void BindObject(const void* ptr, RE::VMTypeID type, const std::string& nativeClass, const std::string& desc,
     const TypeInfo& declared, const std::string& param, Variable& out)
 {
@@ -106,10 +120,36 @@ void BindObject(const void* ptr, RE::VMTypeID type, const std::string& nativeCla
     throw ProtocolError(ErrorCode::type_mismatch, "parameter " + param + " expects " + canonical_script_name(want) + ", got " + desc + " (a " + nativeClass + ")");
 }
 
-// Task 29 replaces this with the real conversion (it needs DescribeAlias).
-json AliasObjectToJson(RE::BSScript::IObjectHandlePolicy*, RE::VMHandle)
+// An alias argument. Unlike a form, an alias is never bound on demand (R45): no PackHandle, which on a plain alias
+// would bind a script object to it. Only an object already bound to the alias is passed, re-typed to the declared
+// parameter type as BindObject does for forms (Task 28: a value typed as its own class made natives return None).
+void BindAlias(RE::BGSBaseAlias* alias, const AliasRef& a, const TypeInfo& declared, const std::string& param, Variable& out)
 {
-    throw ProtocolError(ErrorCode::unsupported, "the result is an alias, which this build cannot return yet (Task 29)");
+    const auto* cls = declared.GetTypeInfo();  // a single object type here (IsObject), never an object array
+    const std::string want = cls ? cls->GetName() : a.alias_type;
+    const auto desc = std::format("alias {} of {}", a.alias_id, Describe(a.quest));
+    auto* policy = VM()->GetObjectHandlePolicy();
+    const auto handle = policy->GetHandleForObject(AliasTypeId(alias), alias);
+    if (handle == policy->EmptyHandle()) throw ProtocolError(ErrorCode::vm_error, "the VM has no handle for " + desc);
+    RE::BSTSmartPointer<RE::BSScript::Object> bound;
+    if (FindBound(handle, want, bound)) {  // also accepts a parent class of the bound object (S7d)
+        if (cls) out.SetObject(bound, declared.GetRawType());
+        else out.SetObject(bound);
+        return;
+    }
+    throw ProtocolError(ErrorCode::type_mismatch, "parameter " + param + " expects " + canonical_script_name(want) + ", got " + desc +
+        " (a " + a.alias_type + " with no " + canonical_script_name(want) + " script object bound; v1 drives scripted aliases only)");
+}
+
+json AliasObjectToJson(RE::BSScript::IObjectHandlePolicy* policy, RE::VMHandle handle)
+{
+    if (policy->HandleIsType(RE::BGSRefAlias::VMTYPEID, handle))
+        if (auto* a = static_cast<RE::BGSRefAlias*>(policy->GetObjectForHandle(RE::BGSRefAlias::VMTYPEID, handle)))
+            return alias_ref_to_json(DescribeAlias(a));
+    if (policy->HandleIsType(RE::BGSLocAlias::VMTYPEID, handle))
+        if (auto* a = static_cast<RE::BGSLocAlias*>(policy->GetObjectForHandle(RE::BGSLocAlias::VMTYPEID, handle)))
+            return alias_ref_to_json(DescribeAlias(a));
+    throw ProtocolError(ErrorCode::vm_error, "an alias handle in the result could not be resolved");
 }
 
 json ObjectToJson(const RE::BSScript::Object& obj)
@@ -196,6 +236,80 @@ FormRef DescribeForm(const RE::TESForm* form)
     return r;
 }
 
+RE::BGSBaseAlias* ResolveAlias(const AliasRef& a)
+{
+    auto* quest = ResolveForm(a.quest)->As<RE::TESQuest>();
+    if (!quest) throw ProtocolError(ErrorCode::type_mismatch, "alias owner " + Describe(a.quest) + " is not a Quest");
+    RE::BSReadLockGuard lock(quest->aliasAccessLock);
+    for (auto* alias : quest->aliases) {
+        if (!alias || alias->aliasID != static_cast<std::uint32_t>(a.alias_id)) continue;
+        const char* kind = AliasKind(alias);
+        if (!kind || a.alias_type != kind)
+            throw ProtocolError(ErrorCode::type_mismatch, std::format("alias {} of {} is not a {}", a.alias_id, Describe(a.quest), a.alias_type));
+        return alias;
+    }
+    throw ProtocolError(ErrorCode::not_found, std::format("quest {} has no alias {}", Describe(a.quest), a.alias_id));
+}
+
+AliasRef DescribeAlias(const RE::BGSBaseAlias* alias)
+{
+    if (!alias->owningQuest) throw ProtocolError(ErrorCode::vm_error, std::format("alias {} has no owning quest", alias->aliasID));
+    auto* mutableAlias = const_cast<RE::BGSBaseAlias*>(alias);  // skyrim_cast wants a non-const pointer here
+    AliasRef a;
+    a.quest = DescribeForm(alias->owningQuest);
+    a.alias_id = static_cast<std::int32_t>(alias->aliasID);
+    const char* kind = AliasKind(mutableAlias);
+    a.alias_type = kind ? kind : "ReferenceAlias";
+    a.epoch = life::Epoch();
+    return a;
+}
+
+Target ResolveTarget(const Value& object, const std::string& script)
+{
+    auto* vm = VM();
+    auto* policy = vm->GetObjectHandlePolicy();
+    const void* ptr = nullptr;
+    RE::VMTypeID type = 0;
+    std::string nativeClass, desc;
+    if (const auto* f = std::get_if<FormRef>(&object.v)) {
+        auto* form = ResolveForm(*f);
+        ptr = form;
+        type = static_cast<RE::VMTypeID>(form->GetFormType());
+        nativeClass = ScriptClassOf(form);
+        desc = Describe(*f);
+    } else if (const auto* a = std::get_if<AliasRef>(&object.v)) {
+        auto* alias = ResolveAlias(*a);
+        ptr = alias;
+        type = AliasTypeId(alias);
+        nativeClass = a->alias_type;
+        desc = std::format("alias {} of {}", a->alias_id, Describe(a->quest));
+    } else {
+        throw ProtocolError(ErrorCode::bad_request, "object must be a form or alias reference");
+    }
+    const auto handle = policy->GetHandleForObject(type, ptr);
+    if (handle == policy->EmptyHandle()) throw ProtocolError(ErrorCode::vm_error, "the VM has no handle for " + desc);
+    RE::BSTSmartPointer<RE::BSScript::Object> bound;
+    // FindBoundObject also accepts a parent class of the bound object (S7d). The caller dispatches on the returned
+    // Object& overload; the (handle, className) overload returns false on a form with no bound object (S7g).
+    if (FindBound(handle, script, bound)) return {bound, desc};
+    // Aliases are never bound on demand (R45): a plain alias would get an `Alias`-class object (S7g), still not a
+    // ReferenceAlias, and the binding adds an attachedScripts entry whose save persistence is unmeasured.
+    if (std::holds_alternative<AliasRef>(object.v))
+        throw ProtocolError(ErrorCode::type_mismatch, desc + " has no " + script + " script object bound (an unscripted alias; "
+            "v1 drives scripted aliases only)");
+    if (sig::IsA(nativeClass, script)) {
+        // A form no script has touched (a cold form, or an unscripted quest) has no bound object yet; PackHandle binds
+        // the native one, and the Object& overload dispatches on it (S7d/S7g). Side effect: an attachedScripts entry
+        // (save persistence unmeasured, see Task 29's Rules).
+        Variable v;
+        RE::BSScript::PackHandle(&v, ptr, type);
+        if (v.IsObject())
+            if (auto obj = v.GetObject()) return {obj, desc};
+        throw ProtocolError(ErrorCode::vm_error, "could not bind a " + nativeClass + " script object to " + desc);
+    }
+    throw ProtocolError(ErrorCode::type_mismatch, desc + " is a " + nativeClass + " and has no script " + script + " attached");
+}
+
 std::string TypeName(const TypeInfo& t)
 {
     // Never GetTypeInfo() on an object array: the pinned CommonLib returns a pointer 8 bytes off (crashed the game in
@@ -264,8 +378,10 @@ void ToVariable(const Value& v, const TypeInfo& t, const std::string& param, Var
             BindObject(form, static_cast<RE::VMTypeID>(form->GetFormType()), ScriptClassOf(form), Describe(*f), t, param, out);
             return;
         }
-        if (std::holds_alternative<AliasRef>(v.v))
-            throw ProtocolError(ErrorCode::unsupported, "parameter " + param + ": alias arguments arrive with Task 29");
+        if (const auto* a = std::get_if<AliasRef>(&v.v)) {
+            BindAlias(ResolveAlias(*a), *a, t, param, out);
+            return;
+        }
         mismatch();
     }
     switch (t.GetRawType()) {

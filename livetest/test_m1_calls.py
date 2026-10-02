@@ -1,13 +1,17 @@
 """Needs a save loaded (interactive). Spike S4's recorded quest/alias go in env vars (used by Task 29):
 SPY_S4_QUEST=0x<quest form id> SPY_S4_ALIAS=<alias id> SPY_S4_REF=0x<expected reference form id>
+SPY_PLAIN_QUEST=0x<quest form id> SPY_PLAIN_ALIAS=<id of an unscripted alias>
+SPY_OWN_QUEST=0x<quest form id> SPY_OWN_SCRIPT=<its attached script> SPY_OWN_FUNCTION=<parameterless bytecode getter>
+Values used on the box (s4test): spikes/RESULTS.md, S4 row and the Task 29 entry.
 """
+import os
 import time
 
 import pytest
 
 from skython import errors
-from skython.values import Form
-from support import raw_connect, rpc
+from skython.values import Alias, Form
+from support import log_text, raw_connect, rpc
 
 PLAYER_ID = 0x14
 IRON_SWORD = "Skyrim.esm|0x012EB7"
@@ -181,6 +185,10 @@ def test_actor_for_an_object_reference_parameter(game):
     player = game.call("Game", "GetPlayer")
     assert game.call("Debug", "SendAnimationEvent", player, "SkythonNoSuchEvent") is None
     assert 1 <= game.call("Utility", "RandomInt", 1, 6) <= 6  # the VM and the game carry on
+    # SendAnimationEvent returns nothing, so None cannot tell a re-typed argument from a native that never ran. GetDistance
+    # returns a Float: an Actor for its ObjectReference parameter gives 0.0 to itself, a native that never ran gives None.
+    d = game.call_method(player, "ObjectReference", "GetDistance", player)
+    assert isinstance(d, float) and d == 0.0, d
 
 
 def test_none_for_an_object_parameter(game):
@@ -231,3 +239,162 @@ def test_light_plugin_form_key(game):
     f = game.call("Game", "GetFormFromFile", 0x800, name)
     assert f.form_key == f"{name}|0x000800" and (f.form_id >> 24) == 0xFE
     assert game.call("Utility", "CreateFormArray", 1, f) == [f]  # a light form as an argument and back
+
+
+def _s4():
+    """The quest/alias/reference spike S4 recorded. They come from one particular throwaway save and can go stale."""
+    try:
+        return int(os.environ["SPY_S4_QUEST"], 16), int(os.environ["SPY_S4_ALIAS"]), int(os.environ["SPY_S4_REF"], 16)
+    except KeyError as e:
+        pytest.skip(f"set SPY_S4_QUEST, SPY_S4_ALIAS and SPY_S4_REF from spikes/RESULTS.md ({e.args[0]} is missing)")
+
+
+def test_method_call_float(game):
+    hp = game.call_method(Form(form_id=PLAYER_ID), "Actor", "GetActorValue", "Health")
+    assert isinstance(hp, float) and hp > 0
+
+
+def test_method_call_on_ancestor_script(game):
+    name = game.call_method(Form(form_id=PLAYER_ID), "Form", "GetName")
+    assert isinstance(name, str)
+
+
+def test_method_call_on_cold_base_form(game):
+    # A base form no script has touched has no bound script object until the server binds one.
+    sword = game.form(IRON_SWORD)
+    name = game.call_method(sword, "Form", "GetName")
+    assert isinstance(name, str) and name
+    assert game.call_method(sword, "Weapon", "GetBaseDamage") > 0
+
+
+def test_resolve_by_key_and_by_id(game):
+    sword = game.form(IRON_SWORD)
+    assert sword.type == "Weapon" and sword.form_key == IRON_SWORD
+    assert game.resolve(form_id=sword.form_id).form_key == IRON_SWORD
+
+
+def test_global_called_as_member_is_bad_request(game):
+    with pytest.raises(errors.BadRequest, match="global"):
+        game.call_method(Form(form_id=PLAYER_ID), "Utility", "RandomInt", 1, 6)
+
+
+def test_method_on_wrong_kind_of_form(game):
+    sword = game.form(IRON_SWORD)
+    with pytest.raises(errors.TypeMismatch, match="Weapon"):
+        game.call_method(sword, "Actor", "GetActorValue", "Health")
+
+
+def test_resolve_missing_form_is_not_found(game):
+    with pytest.raises(errors.NotFound):
+        game.form("Skyrim.esm|0xFFFFF0")
+    with pytest.raises(errors.NotFound):
+        game.form("NotAPlugin.esp|0x000800")
+
+
+def test_editor_id_unavailable_is_a_clear_not_found(game):
+    with pytest.raises(errors.NotFound, match="editor id"):
+        game.resolve(editor_id="NoSuchEditorIdAnywhere")
+
+
+def test_object_array_result(game):
+    try:
+        forms = game.call_method(Form(form_id=PLAYER_ID), "ObjectReference", "GetContainerForms")  # SKSE
+    except errors.UnknownFunction:
+        pytest.skip("SKSE's ObjectReference.GetContainerForms is not available")
+    assert isinstance(forms, list) and forms, "the player's inventory should not be empty"
+    assert all(isinstance(f, Form) for f in forms) and any(f.form_key for f in forms)
+
+
+def test_form_argument_arrives(game):
+    # The proof Task 28 could not give: these counts only change if the Form argument reaches the game as that form
+    # (a None or empty Variable would leave GetItemCount at 0 and AddItem without effect).
+    player = Form(form_id=PLAYER_ID)
+    sword = game.form(IRON_SWORD)
+    n = game.call_method(player, "ObjectReference", "GetItemCount", sword)
+    game.call_method(player, "ObjectReference", "AddItem", sword, 1, True)
+    try:
+        assert game.call_method(player, "ObjectReference", "GetItemCount", sword) == n + 1
+    finally:
+        # RemoveItem(akItemToRemove, aiCount, abSilent, akOtherContainer): every argument is passed (no defaults), so
+        # akOtherContainer is None, a typed None ObjectReference (Task 28).
+        game.call_method(player, "ObjectReference", "RemoveItem", sword, 1, True, None)
+    assert game.call_method(player, "ObjectReference", "GetItemCount", sword) == n
+
+
+def test_alias_method_calls(game):
+    quest_id, alias_id, expected_ref = _s4()
+    quest = game.resolve(form_id=quest_id)
+    alias = game.alias(quest, alias_id)
+    # The converse of the alias-0 test below: a Quest result must decode as a Form of type Quest, not as an alias.
+    owner = game.call_method(alias, "Alias", "GetOwningQuest")
+    assert isinstance(owner, Form) and not isinstance(owner, Alias) and owner.form_id == quest_id and owner.type == "Quest"
+    # Spec 4.4 names GetRef; ReferenceAlias also has GetReference. Check ReferenceAlias.psc and use whichever
+    # this runtime's script declares (the plan calls GetReference; both return the filled reference).
+    ref = game.call_method(alias, "ReferenceAlias", "GetReference")
+    assert ref.form_id == expected_ref
+
+
+def test_alias_result_is_an_alias_not_its_quest(game):
+    # Quest.GetAlias returns an Alias object. Alias 0's handle equals the quest's FormID exactly (S7g), the hardest
+    # case for ObjectToJson's form-first decode: HandleIsType(form type) must reject it and the alias check take it.
+    # Side effect: GetAlias(0) binds an `Alias`-class object to plain alias 0 (S7g); harmless only because `s4test` is
+    # never saved.
+    quest_id, alias_id, _ = _s4()
+    quest = game.resolve(form_id=quest_id)
+    for aid in sorted({0, alias_id}):
+        result = game.call_method(quest, "Quest", "GetAlias", aid)
+        assert isinstance(result, Alias) and result.alias_id == aid and result.quest.form_id == quest_id, (aid, result)
+
+
+def test_quest_result_is_a_quest_not_an_alias(game):
+    # Measurement for Task 28's decode order: ObjectToJson logs, once, whether a Quest's own handle also passes
+    # HandleIsType(BGSRefAlias/BGSLocAlias). Record the line in spikes/RESULTS.md; form-first is correct either way.
+    quest_id, alias_id, _ = _s4()
+    owner = game.call_method(game.alias(game.resolve(form_id=quest_id), alias_id), "Alias", "GetOwningQuest")
+    assert isinstance(owner, Form) and not isinstance(owner, Alias) and owner.type == "Quest"
+    lines = [l for l in log_text().splitlines() if "values: quest handle" in l]
+    assert lines, "ObjectToJson did not log the quest-handle measurement"
+    print(lines[0])
+
+
+def test_alias_plain_is_not_dispatchable_as_reference_alias(game):
+    # R45: an unscripted alias has no bound ReferenceAlias object, and the server never binds one on demand.
+    try:
+        quest_id, alias_id = int(os.environ["SPY_PLAIN_QUEST"], 16), int(os.environ["SPY_PLAIN_ALIAS"])
+    except KeyError:
+        pytest.skip("set SPY_PLAIN_QUEST/SPY_PLAIN_ALIAS (S7g cand 0: quest 0x0010FDD5, alias 0, plain)")
+    alias = game.alias(game.resolve(form_id=quest_id), alias_id)
+    with pytest.raises(errors.TypeMismatch):
+        game.call_method(alias, "ReferenceAlias", "GetReference")
+
+
+def test_skse_native_with_form_argument(game):
+    # Actor.EquipItemEx(Form item, int equipSlot, bool preventUnequip, bool equipSound) is an SKSE native; every
+    # argument is passed (no defaults). The form must arrive as that form, or IsEquipped stays False.
+    player = Form(form_id=PLAYER_ID)
+    sword = game.form(IRON_SWORD)
+    game.call_method(player, "ObjectReference", "AddItem", sword, 1, True)
+    try:
+        game.call_method(player, "Actor", "EquipItemEx", sword, 1, False, False)
+        time.sleep(0.5)
+        assert game.call_method(player, "Actor", "IsEquipped", sword) is True
+        game.call_method(player, "Actor", "UnequipItemEx", sword, 1, False)
+    finally:
+        game.call_method(player, "ObjectReference", "RemoveItem", sword, 1, True, None)
+
+
+def _own_script():
+    """A quest, a script attached to it (not a native class) and a member function declared on that script itself."""
+    try:
+        return (int(os.environ["SPY_OWN_QUEST"], 16), os.environ["SPY_OWN_SCRIPT"], os.environ["SPY_OWN_FUNCTION"])
+    except KeyError as e:
+        pytest.skip(f"set SPY_OWN_QUEST, SPY_OWN_SCRIPT and SPY_OWN_FUNCTION (see Step 1) ({e.args[0]} is missing)")
+
+
+def test_own_script_bytecode_member_function(game):
+    # The gate S7c could not give: a Papyrus-bytecode (non-native) member function declared on a mod's own attached
+    # script, found through FindBoundObject(handle, "<script>") and dispatched on the bound object.
+    quest_id, script, function = _own_script()
+    quest = game.resolve(form_id=quest_id)
+    first = game.call_method(quest, script, function)
+    assert game.call_method(quest, script, function) == first  # a side-effect-free getter answers the same twice

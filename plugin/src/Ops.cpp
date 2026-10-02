@@ -110,6 +110,43 @@ void CallStatic(const CallArgs& c, const Done& done)
         done(OpResult::Err(ErrorCode::vm_error, "the VM refused the call to " + qualified));
     }
 }
+
+json Resolve(const json& args)
+{
+    RE::TESForm* form = nullptr;
+    if (args.contains("editor_id")) {
+        if (!args["editor_id"].is_string()) throw ProtocolError(ErrorCode::bad_request, "editor_id must be a string");
+        const auto eid = args["editor_id"].get<std::string>();
+        // Verified at the pinned commit: LookupByEditorID tests its map pointer and returns nullptr, so no guard is
+        // needed. Editor ids are only populated when an editor-id-caching mod is installed, so null is common.
+        form = RE::TESForm::LookupByEditorID(eid);
+        if (!form)
+            throw ProtocolError(ErrorCode::not_found, "no form with editor id " + eid +
+                " (the game keeps editor ids for only some form types unless powerofthree's Tweaks is installed)");
+    } else {
+        json ref = args;
+        ref["kind"] = "form";
+        form = pv::ResolveForm(form_ref_from_json(ref));
+    }
+    return form_ref_to_json(pv::DescribeForm(form));
+}
+
+void CallMethod(const CallArgs& c, const Done& done)
+{
+    if (c.require_unpaused && PausedNow()) return done(PausedError());
+    const auto qualified = c.script + "." + c.function;
+    // Function first, object second: a global called as a member must be bad_request ("use papyrus.call_static"),
+    // not the type_mismatch that resolving the object would raise.
+    auto fn = sig::FindFunction(c.script, c.function, true);
+    auto target = pv::ResolveTarget(*c.object, c.script);
+    auto vars = sig::BindArgs(*fn, c.args, qualified);
+    auto* args = new DynArgs(std::move(vars));
+    RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> cb{new Callback(done, args)};  // cb owns args (S2)
+    if (!VM()->DispatchMethodCall(target.object, RE::BSFixedString(c.function), args, cb)) {
+        KeptOnRefusal(qualified);  // never `delete args` here (R37); same rule as CallStatic
+        done(OpResult::Err(ErrorCode::vm_error, "the VM refused the call to " + qualified + " on " + target.desc));
+    }
+}
 }
 
 void AddStateExtras(json& s)
@@ -136,7 +173,9 @@ void Run(const std::string& op, const json& args, Done done, Cancelled cancelled
     try {
         if (auto why = life::NotReadyReason(false)) return done(NotReady(*why));  // recheck inside the task
         if (op == "papyrus.call_static") return CallStatic(parse_call_args(args, false), done);
-        // Task 29 adds form.resolve and papyrus.call_method; Task 30 adds properties and batch.
+        if (op == "form.resolve") return done(OpResult::Ok(Resolve(args)));
+        if (op == "papyrus.call_method") return CallMethod(parse_call_args(args, true), done);
+        // Task 30 adds properties and batch.
         done(OpResult::Err(ErrorCode::unsupported, "op " + op + " is not available in this build"));
     } catch (const ProtocolError& e) {
         done(OpResult::Err(e.code, e.what()));
