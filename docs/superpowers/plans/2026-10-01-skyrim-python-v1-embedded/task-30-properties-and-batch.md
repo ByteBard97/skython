@@ -2,7 +2,7 @@
 
 Adapted from: branch `plan-out-of-process`, task 18 (`task-18-properties-batch-and-the-in-flight-caps.md`). The batch code in `Ops.cpp` is the branch's apart from comments and a `catch (...)`; the property code now uses the engine's `GetPropertyValue`/`SetPropertyValue` and refuses full properties (plan review F). What moved: the per-connection in-flight cap is now the dev bridge's (Task 23, Python) and the global cap is the Dispatcher's (Task 18), so the cap test here exercises the bridge's cap through a low-cap ini; the batch timeout's partial results are reported by the Dispatcher from the `Progress` callback this task feeds.
 
-> Part of the [skyrim-python v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), sections 4.3, 4.5 rule 8, 4.9. Steps use checkbox (`- [ ]`) syntax.
+> Part of the [Skython v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), sections 4.3, 4.5 rule 8, 4.9. Steps use checkbox (`- [ ]`) syntax.
 
 > **Gate:** start only after Task 29 is done (which needs S2, S4, S7, S8 and S9 PASS). S5 and S6 gate the M2 plan only.
 >
@@ -30,7 +30,7 @@ Known costs and limits (Task 32 puts them in the README):
 
 `plugin/config/variants/low-cap.ini` (the cap test needs a small per-connection cap so it never puts hundreds of latent calls into the VM; deploy it only for that run; sections are ignored by core's parser):
 ```ini
-[SkyrimPython]
+[Skython]
 python_enabled = true
 scripts_enabled = true
 bridge_enabled = true
@@ -42,7 +42,7 @@ max_inflight_per_connection = 16
 max_inflight_total = 64
 enable_console = false
 ```
-If Task 25's `SkyrimPython.dev.ini` sets other keys (a fixed token, for example), copy them here unchanged; only the two caps differ.
+If Task 25's `Skython.dev.ini` sets other keys (a fixed token, for example), copy them here unchanged; only the two caps differ.
 
 `livetest/test_m1_batch_props.py`:
 ```python
@@ -50,8 +50,8 @@ import os
 
 import pytest
 
-from skyrim import errors
-from skyrim.values import Alias, Form
+from skython import errors
+from skython.values import Alias, Form
 from support import raw_connect, read_frame, send_request
 
 PLAYER = Form(form_id=0x14)
@@ -283,33 +283,33 @@ and delete the two `(void)cancelled; (void)progress;` lines in `Run`. Note: the 
 
 The game runs on the Windows box ([Task 1c](task-01c-part-c-on-the-box.md)); the save is loaded through DevBench; every wait is bounded and counts only this launch's log text. The cap test needs the low-cap ini, so the run is in two parts. The property happy path needs the quest S7c used, so load the named save S7 ran on (spikes/RESULTS.md), not the most recent one.
 ```bash
-tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
-tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/remote_build.sh plugin Skython.dll && tools/remote_build.sh plugin SkythonCore.dll
+tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini
 tools/box/box_deploy.sh --package
 tools/box/box_launch.sh
-tools/box/box_wait_log.sh SkyrimPython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
+tools/box/box_wait_log.sh Skython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
 tools/box/box_session.sh up && source out/box-live.env
-tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
+tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
 tools/box/box_console.sh "load <the S7 save>"     # then Task 1b block B6
-tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: interactive = true" 300
+tools/box/box_wait_log.sh Skython.log "lifecycle: interactive = true" 300
 export SPY_S7C_QUEST=0x001093E4 SPY_S7C_SCRIPT=QF_TGTQ01Handler_001093E4 SPY_S7C_PROPERTY=Alias_TGHandlerSilverMoldAlias SPY_S7C_KIND=Alias   # the S7c row of spikes/RESULTS.md
 export SPY_S4_QUEST=0x... SPY_S4_ALIAS=... SPY_S4_REF=0x...                          # as in Task 29
-SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_batch_props.py livetest/test_m1_calls.py -q -rs
+SKYTHON_LIVE=1 uv run --project python pytest livetest/test_m1_batch_props.py livetest/test_m1_calls.py -q -rs
 # test_per_connection_cap_returns_busy reports a skip here. Quit the game, then:
 tools/box/box_quit.sh     # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh
-tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/variants/low-cap.ini
+tools/box/box_deploy.sh out/Skython.dll plugin/config/variants/low-cap.ini
 tools/box/box_launch.sh
-tools/box/box_wait_log.sh SkyrimPython.log "python host: (running|failed|disabled)" 600
+tools/box/box_wait_log.sh Skython.log "python host: (running|failed|disabled)" 600
 tools/box/box_session.sh up && source out/box-live.env     # new launch, new token
-tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: Main Menu open" 600
+tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600
 tools/box/box_console.sh "load <the S7 save>"     # then Task 1b block B6
-tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: interactive = true" 600
-SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_batch_props.py -q -rs -k per_connection_cap
+tools/box/box_wait_log.sh Skython.log "lifecycle: interactive = true" 600
+SKYTHON_LIVE=1 uv run --project python pytest livetest/test_m1_batch_props.py -q -rs -k per_connection_cap
 tools/box/box_quit.sh
 # Put the dev ini back afterwards:
-tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini
 ```
-Expected: the first run passes except the one skip (`test_per_connection_cap_returns_busy`); the second run passes it (at most 16 ok, the rest busy). A skip is not a pass: run the second part before committing, and a skip of `test_get_property_reads_an_auto_property` (missing `SPY_S7C_*`) or of the alias tests means they did not run. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. The 100-step batch takes about 3-7 s, the 150-step one with no timeout about 5-10 s. If `test_get_property_reads_an_auto_property` gets `Unsupported` ("is a full property"), STOP (see the STOP list).
+Expected: the first run passes except the one skip (`test_per_connection_cap_returns_busy`); the second run passes it (at most 16 ok, the rest busy). A skip is not a pass: run the second part before committing, and a skip of `test_get_property_reads_an_auto_property` (missing `SPY_S7C_*`) or of the alias tests means they did not run. Any skip whose reason is `live test: set SKYTHON_LIVE=1` is a failure. The 100-step batch takes about 3-7 s, the 150-step one with no timeout about 5-10 s. If `test_get_property_reads_an_auto_property` gets `Unsupported` ("is a full property"), STOP (see the STOP list).
 
 - [ ] **Step 4: Commit**
 

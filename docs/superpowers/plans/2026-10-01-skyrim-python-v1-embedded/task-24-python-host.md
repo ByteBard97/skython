@@ -1,8 +1,8 @@
-# Task 24: `skyrim._host`: logging, script loader, reload, bridge startup
+# Task 24: `skython._host`: logging, script loader, reload, bridge startup
 
-> Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.5, 4.7 and 4.10). Steps use checkbox (`- [ ]`) syntax for tracking.
+> Part of the [Skython v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.5, 4.7 and 4.10). Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Depends on:** Task 23 (`skyrim.bridge.serve`), Task 22 (`write_inactive_session_file`, `connect_remote` and `find_session` in the tests), Task 21 (`connect_in_process`, `fake_skyrim.py`, the `fake` fixture). Linux only. Task 26 calls `skyrim._host.main()` from the plugin's host thread.
+> **Depends on:** Task 23 (`skython.bridge.serve`), Task 22 (`write_inactive_session_file`, `connect_remote` and `find_session` in the tests), Task 21 (`connect_in_process`, `fake_skython.py`, the `fake` fixture). Linux only. Task 26 calls `skython._host.main()` from the plugin's host thread.
 
 **What this module is.** The Python side of the plugin's host thread. `main()` sets up logging, routes `print`, stderr and uncaught exceptions (main thread and other threads) into it, starts the dev bridge when `bridge_enabled` is set (before the scripts, so a slow script never delays the developer's tools), loads the player scripts and returns. It never raises into the plugin. Long work belongs on threads the scripts start; after `main()` returns, the host thread releases the GIL and waits forever (Global Constraints, Task 26).
 
@@ -11,17 +11,17 @@
 - **Each script gets its own `Game`** (`connect_in_process()` on the script's thread), so a script that closes its `Game` (`with game:` in `setup`) closes no one else's. The host keeps each script's `Game` and `reload` closes it after `teardown()`: a thread `teardown()` did not stop gets `ConnectionLost` instead of driving the game (SkyrimPlatform comparison, Top 4; ruling R38). Each load of a name takes a new generation: a load that a reload replaced (its setup timed out, then the reload loaded the script again) records nothing in `_STATE` when it finally finishes, closes the `Game` it made and skips its `setup`, so it can never overwrite the reload's `Game`, module or status (ruling R42). `reload` invalidates the running load's generation before `teardown()`, so this also holds while `teardown()` runs (ruling R44).
 - **No game is loaded while `setup` runs.** In the game, `main()` runs at `kDataLoaded`, at the main menu, so a `needs_game` call in `setup` answers `NotReady`. The module docstring says so: game work belongs on a thread that `setup` starts and that first calls `game.wait_ready()`; a test pins that pattern.
 - **The switch interval stays at CPython's default (0.005 s)**: `SWITCH_INTERVAL_S = None`. Spike S9 (Task 5) measures what a CPU-bound Python thread adds to other threads' game calls and records a recommendation in `spikes/RESULTS.md`; if it says `set 0.001`, change this one constant (the owner can veto). `status()` reports the interval in use and `main()` logs it.
-- **Log files:** `python.log` in `_skyrim.config()["log_dir"]` (the folder that also holds `session.json`), rotating at 1 MiB with 3 backups, all levels from INFO; WARNING and above also go to the plugin's `SkyrimPython.log` through `_skyrim.log`. There is no console in the game, so stdout and stderr are replaced by line-buffered writers into the log.
-- **A disabled bridge writes an inactive session file** (reason `bridge_enabled is false in SkyrimPython.ini`), so `skyrim.connect()` on Linux says why instead of following a stale port from an earlier run. A bridge that cannot start is reported in `status()` and the log, and the session file says why (`serve` writes `could not listen ...` itself on an `OSError`; for any other failure, such as a malformed `fixed_token`, `_host` writes `the bridge could not start: ...`); the scripts still load.
+- **Log files:** `python.log` in `_skython.config()["log_dir"]` (the folder that also holds `session.json`), rotating at 1 MiB with 3 backups, all levels from INFO; WARNING and above also go to the plugin's `Skython.log` through `_skython.log`. There is no console in the game, so stdout and stderr are replaced by line-buffered writers into the log.
+- **A disabled bridge writes an inactive session file** (reason `bridge_enabled is false in Skython.ini`), so `skython.connect()` on Linux says why instead of following a stale port from an earlier run. A bridge that cannot start is reported in `status()` and the log, and the session file says why (`serve` writes `could not listen ...` itself on an `OSError`; for any other failure, such as a malformed `fixed_token`, `_host` writes `the bridge could not start: ...`); the scripts still load.
 - **`sys.stdout` and `sys.stderr` are `io.TextIOBase` writers** (`encoding`, `writable()`), and each thread keeps its own partial line, because `print()` writes the text and the newline separately.
 
 **Files:**
-- Create: `python/src/skyrim/_host.py`, `python/tests/test_host.py`, `python/tests/test_real_module.py` (Step 6: the package against the real `_skyrim` from Task 19)
+- Create: `python/src/skython/_host.py`, `python/tests/test_host.py`, `python/tests/test_real_module.py` (Step 6: the package against the real `_skython` from Task 19)
 
 **Interfaces:**
-- Consumes: the `_skyrim` API from the index Contracts (`config`, `state`, `log`, plus what `connect_in_process` and `serve` use), Task 23 (`skyrim.bridge.serve`), Task 22 (`skyrim.discovery.write_inactive_session_file`), Task 21 (`skyrim.inprocess.connect_in_process`), and in the tests the `fake` fixture (`FakeSkyrim` with `config_overrides`, `epoch`, `logs`, `requests`), `support.wait_until`, `connect_remote`, `find_session`.
-- Produces (`skyrim._host`):
-  - `main() -> None`: never raises; on a failure before logging is set up it reports the traceback through `_skyrim.log("error", ...)`.
+- Consumes: the `_skython` API from the index Contracts (`config`, `state`, `log`, plus what `connect_in_process` and `serve` use), Task 23 (`skython.bridge.serve`), Task 22 (`skython.discovery.write_inactive_session_file`), Task 21 (`skython.inprocess.connect_in_process`), and in the tests the `fake` fixture (`FakeSkython` with `config_overrides`, `epoch`, `logs`, `requests`), `support.wait_until`, `connect_remote`, `find_session`.
+- Produces (`skython._host`):
+  - `main() -> None`: never raises; on a failure before logging is set up it reports the traceback through `_skython.log("error", ...)`.
   - `load_scripts(game, scripts_dir) -> dict[str, str]`: every `<name>.py` and `<name>/__init__.py` in name order (names starting with `_` or `.` skipped); name → `"ok"`, `"failed: <ExceptionType>: <message>"`, `"failed: no setup(game) function"` or `"timeout: setup still running after <n> s"`. Each script's `setup` gets a `Game` of its own; `game` is the host's, kept for `status` and `reload`. Appends the folder to `sys.path` if it is missing (in the game it is already on the search path), so a script's name must not clash with a standard-library or site-packages module.
   - `reload(name) -> str`: `teardown()` if the script has one (same timeout; a failing teardown is logged and the reload goes on), closes the script's previous `Game`, drops `name` and `name.*` from `sys.modules`, re-imports and calls `setup` with a new `Game`; returns the new status, or `"failed: no scripts have been loaded yet"` / `"failed: no script named ..."`. Best effort (spec 4.10).
   - `status() -> dict`: `scripts`, `bridge` (`"not started"`, `"disabled"`, `"listening on 127.0.0.1:<port>"` or `"failed: <why>"`), `bridge_port`, `bridge_connections`, `switch_interval_s`, `log_file`, `python`. Plain data.
@@ -31,7 +31,7 @@
 
 `python/tests/test_host.py`:
 ```python
-"""skyrim._host against the fake _skyrim: logging, the script loader, reload, and the bridge it starts."""
+"""skython._host against the fake _skython: logging, the script loader, reload, and the bridge it starts."""
 import io
 import json
 import socket
@@ -43,15 +43,15 @@ import time
 import pytest
 
 from support import wait_until
-from skyrim import errors
-from skyrim.discovery import Session, find_session, write_session_file
-from skyrim.remote import connect_remote
+from skython import errors
+from skython.discovery import Session, find_session, write_session_file
+from skython.remote import connect_remote
 
 
 @pytest.fixture
 def host(fake, monkeypatch, tmp_path):
-    """skyrim._host with short timeouts; every global it touches is restored afterwards."""
-    from skyrim import _host
+    """skython._host with short timeouts; every global it touches is restored afterwards."""
+    from skython import _host
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     monkeypatch.setattr(threading, "excepthook", threading.excepthook)
     monkeypatch.setattr(sys, "stdout", sys.stdout)
@@ -167,8 +167,8 @@ def test_reload_runs_teardown_and_the_new_code(host, fake, tmp_path):
         game.call("Fake", "Echo", "{v}")
 
     def teardown():
-        import _skyrim
-        _skyrim.log("info", "teardown {v}")
+        import _skython
+        _skython.log("info", "teardown {v}")
     """
     script(tmp_path, "t24_r", body.format(v="one"))
     host.main()
@@ -276,7 +276,7 @@ def test_a_bridge_that_cannot_start_replaces_a_stale_session_file(host, fake, tm
 def test_main_never_raises(host, fake):
     fake.config = lambda: "this is not json"
     assert host.main() is None
-    assert any(level == "error" and "skyrim._host.main failed" in msg for level, msg in fake.logs)
+    assert any(level == "error" and "skython._host.main failed" in msg for level, msg in fake.logs)
 
 
 def test_print_and_uncaught_thread_exceptions_go_to_the_log(host, tmp_path):
@@ -345,7 +345,7 @@ def test_a_log_dir_that_cannot_be_created_does_not_stop_scripts_or_the_bridge(ho
 
 def test_a_startup_failure_leaves_an_inactive_session_file(host, fake, tmp_path, monkeypatch):
     write_session_file(tmp_path / "session.json", Session("127.0.0.1", 45977, "ab" * 16, 1, "0.0.0-fake"))  # last run
-    from skyrim import inprocess
+    from skython import inprocess
 
     def broken(*args, **kwargs):
         raise RuntimeError("no connection for you")
@@ -364,8 +364,8 @@ def test_a_setup_that_finishes_after_its_timeout_is_recorded_and_torn_down_on_re
         time.sleep(0.8)
 
     def teardown():
-        import _skyrim
-        _skyrim.log("info", "late teardown")
+        import _skython
+        _skython.log("info", "late teardown")
     """)
     host.main()
     assert host.status()["scripts"]["t24_late"].startswith("timeout:")
@@ -380,8 +380,8 @@ def test_a_failed_reimport_does_not_run_the_old_teardown_twice(host, fake, tmp_p
         pass
 
     def teardown():
-        import _skyrim
-        _skyrim.log("info", "teardown ran")
+        import _skython
+        _skython.log("info", "teardown ran")
     """
     script(tmp_path, "t24_twice", body)
     host.main()
@@ -392,15 +392,15 @@ def test_a_failed_reimport_does_not_run_the_old_teardown_twice(host, fake, tmp_p
 
 
 def test_reload_drops_only_modules_from_the_scripts_folder(host, fake, tmp_path):
-    import skyrim
-    package = sys.modules["skyrim"]
-    script(tmp_path, "skyrim", "X = 1\n")  # clashes with the package: must never drop it
+    import skython
+    package = sys.modules["skython"]
+    script(tmp_path, "skython", "X = 1\n")  # clashes with the package: must never drop it
     script(tmp_path, "t24_keep", ECHO_SETUP)
     host.main()
     outside = types_module("t24_keep.outside", "/somewhere/else/outside.py")
     sys.modules["t24_keep.outside"] = outside
-    host.reload("skyrim")
-    assert sys.modules["skyrim"] is package and skyrim is package
+    host.reload("skython")
+    assert sys.modules["skython"] is package and skython is package
     host.reload("t24_keep")
     assert sys.modules["t24_keep.outside"] is outside
 
@@ -441,7 +441,7 @@ def test_concurrent_reloads_never_run_setup_twice_at_once(host, fake, tmp_path):
 def test_a_stale_load_never_overwrites_the_reloads_game(host, fake, tmp_path, monkeypatch):
     # The first load times out while creating its Game; a reload then loads the script again. When the first load
     # finally gets its Game, it must not replace the reload's in the host's records, nor run the old setup.
-    from skyrim import inprocess
+    from skython import inprocess
     real = inprocess.connect_in_process
     release = threading.Event()
     made = []
@@ -474,7 +474,7 @@ def test_a_stale_load_finishing_during_reloads_teardown_never_runs_setup(host, f
     # The first load times out while creating its Game. A reload starts and its teardown() blocks; the stale load
     # gets its Game in that window. It must not record that Game or run setup: the reload removed the script.
     import builtins
-    from skyrim import inprocess
+    from skython import inprocess
     real = inprocess.connect_in_process
     release_connect = threading.Event()
     made = []
@@ -529,17 +529,17 @@ def test_a_stale_load_finishing_during_reloads_teardown_never_runs_setup(host, f
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `cd python && uv run --python 3.14 pytest -q tests/test_host.py`
-Expected: FAIL with `24 errors`, each `ImportError: cannot import name '_host' from 'skyrim'` (the `host` fixture imports it).
+Expected: FAIL with `24 errors`, each `ImportError: cannot import name '_host' from 'skython'` (the `host` fixture imports it).
 
 - [ ] **Step 3: Implement the host module**
 
-`python/src/skyrim/_host.py`:
+`python/src/skython/_host.py`:
 ```python
-"""What the plugin runs inside the game. SkyrimPythonCore.dll (Task 26) imports this module on its host
+"""What the plugin runs inside the game. SkythonCore.dll (Task 26) imports this module on its host
 thread right after Py_InitializeFromConfig and calls main() once.
 
 main() sets up logging (python.log next to session.json, rotating 1 MiB x 3; WARNING and above also go to
-the plugin's own log through _skyrim.log), sends stdout, stderr and uncaught exceptions to that log, starts
+the plugin's own log through _skython.log), sends stdout, stderr and uncaught exceptions to that log, starts
 the dev bridge when bridge_enabled is set, loads the player scripts, and returns. It never raises: a failure
 is logged and the game goes on. Long-running work lives on threads the scripts start; the host thread
 itself releases the GIL once main() returns (Global Constraints).
@@ -573,7 +573,7 @@ import threading
 import time
 import traceback
 
-log = logging.getLogger("skyrim.host")
+log = logging.getLogger("skython.host")
 
 SETUP_WARN_S = 1.0
 SETUP_TIMEOUT_S = 10.0
@@ -600,7 +600,7 @@ _STATE.update(_fresh_state())
 
 # -- logging ---------------------------------------------------------------------------------------------
 class _PluginLogHandler(logging.Handler):
-    """WARNING and above also go to the plugin's own log (SkyrimPython.log) through _skyrim.log."""
+    """WARNING and above also go to the plugin's own log (Skython.log) through _skython.log."""
 
     def __init__(self, module):
         super().__init__(logging.WARNING)
@@ -656,7 +656,7 @@ class _StreamToLog(io.TextIOBase):
 def _setup_logging(module, log_dir) -> str:
     root = logging.getLogger()
     for h in list(root.handlers):
-        if getattr(h, "_skyrim_host", False):
+        if getattr(h, "_skython_host", False):
             root.removeHandler(h)
             h.close()
     os.makedirs(log_dir, exist_ok=True)
@@ -666,7 +666,7 @@ def _setup_logging(module, log_dir) -> str:
     ph = _PluginLogHandler(module)
     ph.setFormatter(logging.Formatter("python: %(name)s: %(message)s"))
     for h in (fh, ph):
-        h._skyrim_host = True
+        h._skython_host = True
         root.addHandler(h)
     root.setLevel(logging.INFO)
     return path
@@ -676,12 +676,12 @@ def _setup_plugin_log_only(module) -> None:
     """Fallback when python.log cannot be opened: WARNING and above still reach the plugin's own log."""
     root = logging.getLogger()
     for h in list(root.handlers):
-        if getattr(h, "_skyrim_host", False):
+        if getattr(h, "_skython_host", False):
             root.removeHandler(h)
             h.close()
     ph = _PluginLogHandler(module)
     ph.setFormatter(logging.Formatter("python: %(name)s: %(message)s"))
-    ph._skyrim_host = True
+    ph._skython_host = True
     root.addHandler(ph)
     root.setLevel(logging.INFO)
 
@@ -906,7 +906,7 @@ def _start_bridge(module, cfg: dict) -> None:
         with _LOCK:
             _STATE["bridge_status"] = "disabled"
         if session_file:
-            write_inactive_session_file(session_file, "bridge_enabled is false in SkyrimPython.ini",
+            write_inactive_session_file(session_file, "bridge_enabled is false in Skython.ini",
                                         pid=os.getpid(), plugin_version=cfg.get("plugin_version"))
         log.info("bridge: disabled (bridge_enabled = false)")
         return
@@ -942,23 +942,23 @@ def _write_startup_failure(cfg: dict, why: str) -> None:
     if not session_file:
         return
     try:
-        write_inactive_session_file(session_file, f"skyrim._host could not start: {why}",
+        write_inactive_session_file(session_file, f"skython._host could not start: {why}",
                                     pid=os.getpid(), plugin_version=cfg.get("plugin_version"))
     except Exception:  # noqa: BLE001
         log.exception("could not write the inactive session file")
 
 
 def _main() -> None:
-    import _skyrim
+    import _skython
 
     from .inprocess import connect_in_process
 
-    cfg = json.loads(_skyrim.config())
+    cfg = json.loads(_skython.config())
     log_file = None
     try:
-        log_file = _setup_logging(_skyrim, cfg["log_dir"])
+        log_file = _setup_logging(_skython, cfg["log_dir"])
     except Exception as e:  # noqa: BLE001 - no python.log: keep going with the plugin log only
-        _setup_plugin_log_only(_skyrim)
+        _setup_plugin_log_only(_skython)
         log.error("python.log could not be opened (%s); logging to the plugin log only", e)
     with _LOCK:
         _STATE["config"] = cfg
@@ -969,23 +969,23 @@ def _main() -> None:
         log.exception("could not route print and uncaught exceptions into the log; going on without")
     if SWITCH_INTERVAL_S is not None:
         sys.setswitchinterval(SWITCH_INTERVAL_S)
-    log.info("skyrim._host: Python %s, plugin %s, game %s (%s), switch interval %g s", sys.version.split()[0],
+    log.info("skython._host: Python %s, plugin %s, game %s (%s), switch interval %g s", sys.version.split()[0],
              cfg.get("plugin_version"), cfg.get("game_version"), cfg.get("runtime"), sys.getswitchinterval())
     try:
-        game = connect_in_process(module=_skyrim)
+        game = connect_in_process(module=_skython)
     except Exception as e:  # noqa: BLE001
         log.exception("could not connect in process")
         _write_startup_failure(cfg, str(e))
         return
     with _LOCK:
         _STATE["game"] = game
-    _start_bridge(_skyrim, cfg)  # before the scripts, so a slow script never delays the developer's tools
+    _start_bridge(_skython, cfg)  # before the scripts, so a slow script never delays the developer's tools
     if cfg.get("scripts_enabled", True):
         results = load_scripts(game, cfg["scripts_dir"])
-        log.info("skyrim._host: ready: %d of %d script(s) ok; bridge %s",
+        log.info("skython._host: ready: %d of %d script(s) ok; bridge %s",
                  sum(1 for s in results.values() if s == "ok"), len(results), _STATE["bridge_status"])
     else:
-        log.info("skyrim._host: ready: scripts disabled; bridge %s", _STATE["bridge_status"])
+        log.info("skython._host: ready: scripts disabled; bridge %s", _STATE["bridge_status"])
 
 
 def main() -> None:
@@ -993,13 +993,13 @@ def main() -> None:
     try:
         _main()
     except BaseException:  # noqa: BLE001 - nothing may propagate into the plugin's host thread
-        text = "skyrim._host.main failed:\n" + traceback.format_exc()
+        text = "skython._host.main failed:\n" + traceback.format_exc()
         if _STATE.get("log_file"):
             log.error(text)  # the plugin-log handler forwards it too
             return
         try:
-            import _skyrim
-            _skyrim.log("error", text)
+            import _skython
+            _skython.log("error", text)
         except Exception:  # noqa: BLE001
             pass
 
@@ -1025,7 +1025,7 @@ def _reset() -> None:
         bridge.close()
     root = logging.getLogger()
     for h in list(root.handlers):
-        if getattr(h, "_skyrim_host", False):
+        if getattr(h, "_skython_host", False):
             root.removeHandler(h)
             h.close()
 ```
@@ -1044,16 +1044,16 @@ Expected: `110 passed` five times.
 Run: `python3 tools/gen_protocol.py --check`
 Expected: `gen_protocol: 3 generated files are up to date`.
 
-- [ ] **Step 6: Cross-check the whole package against the real `_skyrim`**
+- [ ] **Step 6: Cross-check the whole package against the real `_skython`**
 
-Every Python test so far runs against `fake_skyrim`, a Python copy of the Dispatcher rules. This test runs the in-process transport, `skyrim.bridge` and `skyrim.remote` against the real module built in Task 19 (the C++ `Dispatcher` over `FakeBackend`), so the two cannot drift apart silently. It skips unless `SKYRIM_REAL_MODULE_DIR` is set. The GIL test makes the call on a worker thread and checks, while that call is still in flight, that this thread saw it in flight and that a spinner thread advanced. (Checked while writing this plan: with the `release()` guard removed from `_skyrim.call` it fails, because the in-flight wait times out; the earlier version, which counted spins around the whole call, still passed.) The `real` fixture restores `SKYRIM_FAKE_DIR` and `sys.modules["_skyrim"]` when the file is done, so later test files see the fake again.
+Every Python test so far runs against `fake_skython`, a Python copy of the Dispatcher rules. This test runs the in-process transport, `skython.bridge` and `skython.remote` against the real module built in Task 19 (the C++ `Dispatcher` over `FakeBackend`), so the two cannot drift apart silently. It skips unless `SKYTHON_REAL_MODULE_DIR` is set. The GIL test makes the call on a worker thread and checks, while that call is still in flight, that this thread saw it in flight and that a spinner thread advanced. (Checked while writing this plan: with the `release()` guard removed from `_skython.call` it fails, because the in-flight wait times out; the earlier version, which counted spins around the whole call, still passed.) The `real` fixture restores `SKYTHON_FAKE_DIR` and `sys.modules["_skython"]` when the file is done, so later test files see the fake again.
 
 `python/tests/test_real_module.py`:
 ```python
-"""The skyrim package against the REAL _skyrim (C++ Dispatcher + FakeBackend, Task 19), not fake_skyrim.
+"""The skython package against the REAL _skython (C++ Dispatcher + FakeBackend, Task 19), not fake_skython.
 
-Skipped unless SKYRIM_REAL_MODULE_DIR names the folder holding the built _skyrim*.so
-(pyglue/build after Task 19). It pins fake_skyrim's behaviour to the real Dispatcher's.
+Skipped unless SKYTHON_REAL_MODULE_DIR names the folder holding the built _skython*.so
+(pyglue/build after Task 19). It pins fake_skython's behaviour to the real Dispatcher's.
 """
 import importlib
 import json
@@ -1066,25 +1066,25 @@ import time
 import pytest
 
 from support import wait_until
-from skyrim import _framing, bridge, errors
-from skyrim.inprocess import connect_in_process
-from skyrim.remote import connect_remote
+from skython import _framing, bridge, errors
+from skython.inprocess import connect_in_process
+from skython.remote import connect_remote
 
-MODULE_DIR = os.environ.get("SKYRIM_REAL_MODULE_DIR")
-pytestmark = pytest.mark.skipif(not MODULE_DIR, reason="SKYRIM_REAL_MODULE_DIR not set")
+MODULE_DIR = os.environ.get("SKYTHON_REAL_MODULE_DIR")
+pytestmark = pytest.mark.skipif(not MODULE_DIR, reason="SKYTHON_REAL_MODULE_DIR not set")
 TOKEN = "ab" * 16
 
 
 @pytest.fixture(scope="module")
 def real(tmp_path_factory):
-    """The real module, imported for this file only: SKYRIM_FAKE_DIR and sys.modules["_skyrim"] are restored
+    """The real module, imported for this file only: SKYTHON_FAKE_DIR and sys.modules["_skython"] are restored
     afterwards, so later tests see the fake again."""
-    before = sys.modules.pop("_skyrim", None)
+    before = sys.modules.pop("_skython", None)
     with pytest.MonkeyPatch.context() as mp:
-        mp.setenv("SKYRIM_FAKE_DIR", str(tmp_path_factory.mktemp("real")))
+        mp.setenv("SKYTHON_FAKE_DIR", str(tmp_path_factory.mktemp("real")))
         sys.path.insert(0, MODULE_DIR)
         try:
-            mod = importlib.import_module("_skyrim")
+            mod = importlib.import_module("_skython")
         finally:
             sys.path.remove(MODULE_DIR)
         try:
@@ -1092,9 +1092,9 @@ def real(tmp_path_factory):
             yield mod
             mod._fake_set_not_ready(None)
         finally:
-            sys.modules.pop("_skyrim", None)
+            sys.modules.pop("_skython", None)
             if before is not None:
-                sys.modules["_skyrim"] = before
+                sys.modules["_skython"] = before
 
 
 @pytest.fixture
@@ -1159,7 +1159,7 @@ def test_a_load_fails_calls_in_flight(game, real):
 
 def test_the_gil_is_released_while_waiting(game, real):
     # The call runs on a worker. This thread can only see it in flight, and the spinner can only advance, while
-    # the worker is inside _skyrim.call if call released the GIL; before and after the call they always could.
+    # the worker is inside _skython.call if call released the GIL; before and after the call they always could.
     count, stop = [0], [False]
 
     def spin():
@@ -1224,14 +1224,14 @@ def test_bridge_over_the_real_module(real):
 Run (the module is the one Task 19 built; rebuild it first if `core/` or `pyglue/` changed):
 ```bash
 cmake --build pyglue/build -j
-(cd python && SKYRIM_REAL_MODULE_DIR="$PWD/../pyglue/build" uv run --python 3.14 pytest tests/test_real_module.py -q)
+(cd python && SKYTHON_REAL_MODULE_DIR="$PWD/../pyglue/build" uv run --python 3.14 pytest tests/test_real_module.py -q)
 (cd python && uv run --python 3.12 pytest tests/test_real_module.py -q)
 ```
-Expected: `7 passed` on 3.14; `7 skipped` on 3.12 (the module is built for 3.14 only). If a test fails here but its `fake_skyrim` counterpart passes, the fake has drifted from the real Dispatcher: fix `fake_skyrim.py` (Task 21) to match the C++ behaviour, never the other way round.
+Expected: `7 passed` on 3.14; `7 skipped` on 3.12 (the module is built for 3.14 only). If a test fails here but its `fake_skython` counterpart passes, the fake has drifted from the real Dispatcher: fix `fake_skython.py` (Task 21) to match the C++ behaviour, never the other way round.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add python/src/skyrim/_host.py python/tests/test_host.py python/tests/test_real_module.py
-git commit -m "feat(python): skyrim._host: python.log, player script loader with timeouts and reload, dev bridge startup"
+git add python/src/skython/_host.py python/tests/test_host.py python/tests/test_real_module.py
+git commit -m "feat(python): skython._host: python.log, player script loader with timeouts and reload, dev bridge startup"
 ```

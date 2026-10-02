@@ -1,29 +1,29 @@
 # Task 23: The dev bridge server
 
-Adapted from: branch `plan-out-of-process`, task 16 (`task-16-loopback-server-io-thread-handshake-session-file.md`): the server rules of its C++ Winsock IO thread (loopback only, handshake order, hello timeout, pre-auth limit, connection cap, frame checks, the drain after a handshake error, the stuck-reader cap, the session file), now in Python on top of `_skyrim`.
+Adapted from: branch `plan-out-of-process`, task 16 (`task-16-loopback-server-io-thread-handshake-session-file.md`): the server rules of its C++ Winsock IO thread (loopback only, handshake order, hello timeout, pre-auth limit, connection cap, frame checks, the drain after a handshake error, the stuck-reader cap, the session file), now in Python on top of `_skython`.
 
-> Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, section 4.2). Steps use checkbox (`- [ ]`) syntax for tracking.
+> Part of the [Skython v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, section 4.2). Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Depends on:** Task 22 (`connect_remote`, `find_session`, `write_session_file`, `write_inactive_session_file`) and Task 21 (`fake_skyrim.py`, the `fake` fixture). Linux only: the tests run a real bridge over the fake `_skyrim` and drive it with the real remote transport, so the whole dev path is tested end to end without the game.
+> **Depends on:** Task 22 (`connect_remote`, `find_session`, `write_session_file`, `write_inactive_session_file`) and Task 21 (`fake_skython.py`, the `fake` fixture). Linux only: the tests run a real bridge over the fake `_skython` and drive it with the real remote transport, so the whole dev path is tested end to end without the game.
 
 **What the bridge is.** A Python server that runs inside the game (Task 24 starts it when `bridge_enabled` is set) and lets another process use the same API as an in-process script. It forwards each request **text unchanged** to `backend.submit` and writes each response text back unchanged in a frame, so the C++ request parser and the Dispatcher's rules (not ready, timeouts, load cancellation, the global in-flight cap) apply exactly as they do in-process. What only a socket needs is done here: the handshake and token, framing limits, a per-connection in-flight cap (`busy`), duplicate request ids on one connection (`bad_request`; `PROTOCOL.md` puts that check here), cancelling a connection's calls when it goes away, and closing a client that stops reading. Three threads per connection: a reader (handshake, then requests), a completion thread (`backend.wait_any` over that connection's tickets, 5 ms at a time while it has any, with the GIL released in the real module; a request submitted meanwhile is not in that wait's list, so a longer poll would hold every new call behind a slow one) and a writer (the only thread that sends after the welcome). The Dispatcher's reaper enforces each request's `timeout_ms`; the bridge never times a call out itself.
 
 **Files:**
-- Create: `python/src/skyrim/bridge.py`, `python/tests/test_bridge.py`
+- Create: `python/src/skython/bridge.py`, `python/tests/test_bridge.py`
 
 **Interfaces:**
-- Consumes: Task 22 (`skyrim.discovery.Session`, `write_session_file`, `write_inactive_session_file`, `find_session`; `skyrim.remote.connect_remote` in the tests), Task 21 (the `fake` fixture: a `FakeSkyrim` with `submit`, `wait_any`, `cancel`, `in_flight`, `_fake_set_not_ready`), Task 20 (`_framing` in the tests), `skyrim._protocol_generated` (Task 12: `PROTOCOL_VERSION`, `PROTOCOL_MAJOR`, `PROTOCOL_MINOR`, `OPS`, `HOST`, `TOKEN_LENGTH`, `INT_MAX`, `MAX_FRAME_BYTES`, `PRE_AUTH_FRAME_BYTES`, `MAX_JSON_DEPTH`, `MAX_CONNECTIONS`, `HELLO_TIMEOUT_MS`, `MAX_QUEUED_BYTES_PER_CONNECTION`, `MAX_CLIENT_NAME_BYTES`, `CONFIG_KEYS`, `CODE_*`), the golden `hello.json` (Task 11: its `invalid` and `check` cases are replayed against the bridge).
-- Produces (`skyrim.bridge`):
+- Consumes: Task 22 (`skython.discovery.Session`, `write_session_file`, `write_inactive_session_file`, `find_session`; `skython.remote.connect_remote` in the tests), Task 21 (the `fake` fixture: a `FakeSkython` with `submit`, `wait_any`, `cancel`, `in_flight`, `_fake_set_not_ready`), Task 20 (`_framing` in the tests), `skython._protocol_generated` (Task 12: `PROTOCOL_VERSION`, `PROTOCOL_MAJOR`, `PROTOCOL_MINOR`, `OPS`, `HOST`, `TOKEN_LENGTH`, `INT_MAX`, `MAX_FRAME_BYTES`, `PRE_AUTH_FRAME_BYTES`, `MAX_JSON_DEPTH`, `MAX_CONNECTIONS`, `HELLO_TIMEOUT_MS`, `MAX_QUEUED_BYTES_PER_CONNECTION`, `MAX_CLIENT_NAME_BYTES`, `CONFIG_KEYS`, `CODE_*`), the golden `hello.json` (Task 11: its `invalid` and `check` cases are replayed against the bridge).
+- Produces (`skython.bridge`):
   - `serve(backend, *, host=HOST, port=45977, token=None, session_file=None, welcome_info, max_connections=MAX_CONNECTIONS, max_inflight_per_connection=256, hello_timeout=HELLO_TIMEOUT_MS / 1000, max_queued_bytes=MAX_QUEUED_BYTES_PER_CONNECTION) -> BridgeServer`. `backend` is anything with `submit(text) -> int`, `wait_any(tickets, timeout) -> list[tuple[int, str]]` and `cancel(ticket)`. `welcome_info` is a dict, or a function returning one, with `plugin_version`, `game_version`, `runtime` and `epoch` (a function gives each client the current epoch). Port 0 picks a free port. A token is `secrets.token_hex(16)` unless given; a given token must be 32 lowercase hex characters and `host` must be a loopback address (`ValueError` otherwise). With `session_file`, the active session file is written once listening; if the bridge cannot listen, an inactive one with the reason is written and the `OSError` is raised. The last two keyword arguments exist for tests and are not in the index Contract.
   - `class BridgeServer` with `.host`, `.port`, `.token`, `.connections() -> int`, `.close()` (stop accepting, close every connection and cancel its calls, mark the session file inactive with reason `"the bridge was closed"`), context manager.
   - `check_hello(hello: dict, token: str) -> tuple[str | None, str]` (error code or `None`, and a message) and `nesting_within(text: str, max_depth: int) -> bool` (a raw-text scan; brackets inside strings do not count).
-  - Rules: the welcome is `{**welcome_info, "type": "welcome", "protocol": [1, 0], "capabilities": <op names from OPS>}`; a hello is checked for shape (`bad_request`), then the token in constant time (`unauthorized`), then the protocol major (`protocol_mismatch`), and a refused client gets `handshake_error`, a half-close and a drain of up to 0.5 s; the first frame must arrive within the hello timeout and be at most `PRE_AUTH_FRAME_BYTES`; after the welcome a frame over `MAX_FRAME_BYTES`, not UTF-8, not a JSON object or nested deeper than `MAX_JSON_DEPTH` closes that connection only; a request id already in flight on the connection is `bad_request`, more than `max_inflight_per_connection` in flight is `busy` (both answered by the bridge in the plugin's response shape, with the request's id or 0); replies waiting to be sent over `max_queued_bytes` close the connection; every socket has `TCP_NODELAY`; non-loopback peers and connections over `max_connections` are closed at accept; an error from `accept()` itself (a client that reset before it was accepted, `EMFILE`) is logged and accepting goes on after 50 ms. The depth scan (`nesting_within`) is linear in the frame size (a possessive pattern), so a hostile pre-auth frame cannot hold the GIL. The bridge logs to the `skyrim.bridge` logger (Task 24 sends it to `python.log`).
+  - Rules: the welcome is `{**welcome_info, "type": "welcome", "protocol": [1, 0], "capabilities": <op names from OPS>}`; a hello is checked for shape (`bad_request`), then the token in constant time (`unauthorized`), then the protocol major (`protocol_mismatch`), and a refused client gets `handshake_error`, a half-close and a drain of up to 0.5 s; the first frame must arrive within the hello timeout and be at most `PRE_AUTH_FRAME_BYTES`; after the welcome a frame over `MAX_FRAME_BYTES`, not UTF-8, not a JSON object or nested deeper than `MAX_JSON_DEPTH` closes that connection only; a request id already in flight on the connection is `bad_request`, more than `max_inflight_per_connection` in flight is `busy` (both answered by the bridge in the plugin's response shape, with the request's id or 0); replies waiting to be sent over `max_queued_bytes` close the connection; every socket has `TCP_NODELAY`; non-loopback peers and connections over `max_connections` are closed at accept; an error from `accept()` itself (a client that reset before it was accepted, `EMFILE`) is logged and accepting goes on after 50 ms. The depth scan (`nesting_within`) is linear in the frame size (a possessive pattern), so a hostile pre-auth frame cannot hold the GIL. The bridge logs to the `skython.bridge` logger (Task 24 sends it to `python.log`).
 
 - [ ] **Step 1: Write the failing tests**
 
 `python/tests/test_bridge.py`:
 ```python
-"""The dev bridge, end to end on Linux: a real BridgeServer over the fake _skyrim, driven by the real remote
+"""The dev bridge, end to end on Linux: a real BridgeServer over the fake _skython, driven by the real remote
 transport and by raw sockets for everything a well-behaved client would never send."""
 import json
 import logging
@@ -35,13 +35,13 @@ import time
 import pytest
 
 from support import load_fixture, wait_until
-from skyrim import _framing
-from skyrim import _protocol_generated as g
-from skyrim import bridge as bridge_mod
-from skyrim import errors
-from skyrim.bridge import nesting_within, serve
-from skyrim.discovery import find_session
-from skyrim.remote import connect_remote
+from skython import _framing
+from skython import _protocol_generated as g
+from skython import bridge as bridge_mod
+from skython import errors
+from skython.bridge import nesting_within, serve
+from skython.discovery import find_session
+from skython.remote import connect_remote
 
 INFO = {"plugin_version": "0.1.0", "game_version": "1.6.1170.0", "runtime": "AE", "epoch": 1}
 
@@ -278,7 +278,7 @@ def test_an_accept_error_is_logged_and_the_bridge_keeps_accepting(bridge, caplog
 
 
 def test_a_client_that_stops_reading_is_closed(start, fake, caplog):
-    caplog.set_level(logging.INFO, logger="skyrim.bridge")
+    caplog.set_level(logging.INFO, logger="skython.bridge")
     b = start(max_queued_bytes=256 * 1024)
     s = socket.socket()
     s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
@@ -448,16 +448,16 @@ def test_a_failure_after_listening_closes_the_listener_and_says_why(fake, tmp_pa
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `cd python && uv run --python 3.14 pytest -q tests/test_bridge.py`
-Expected: FAIL with `1 error during collection`: `ModuleNotFoundError: No module named 'skyrim.bridge'`.
+Expected: FAIL with `1 error during collection`: `ModuleNotFoundError: No module named 'skython.bridge'`.
 
 - [ ] **Step 3: Implement the bridge**
 
-`python/src/skyrim/bridge.py`:
+`python/src/skython/bridge.py`:
 ```python
 """The dev bridge: the same requests as in-process, from another process, over loopback TCP.
 
-It runs inside the game (skyrim._host starts it when bridge_enabled is set) and forwards each request text
-unchanged to `backend` (the _skyrim module; a fake in tests); the response text goes back unchanged in a frame.
+It runs inside the game (skython._host starts it when bridge_enabled is set) and forwards each request text
+unchanged to `backend` (the _skython module; a fake in tests); the response text goes back unchanged in a frame.
 Rules (protocol/PROTOCOL.md, "Dev bridge transport" and "Handshake"):
 - 127.0.0.1 only; a non-loopback peer is closed at accept; at most `max_connections` connections.
 - The first frame must be a valid hello within the hello timeout, and at most PRE_AUTH_FRAME_BYTES long.
@@ -490,7 +490,7 @@ import time
 from . import _protocol_generated as _g
 from .discovery import Session, write_inactive_session_file, write_session_file
 
-log = logging.getLogger("skyrim.bridge")
+log = logging.getLogger("skython.bridge")
 
 _U64_MAX = 2**64 - 1
 _POLL_S = 0.005  # how long the completion thread waits on its tickets per round (it releases the GIL meanwhile)
@@ -914,7 +914,7 @@ def serve(backend, *, host: str = _g.HOST, port: int = _g.CONFIG_KEYS["port"]["d
           max_inflight_per_connection: int = _g.CONFIG_KEYS["max_inflight_per_connection"]["default"],
           hello_timeout: float = _g.HELLO_TIMEOUT_MS / 1000,
           max_queued_bytes: int = _g.MAX_QUEUED_BYTES_PER_CONNECTION) -> BridgeServer:
-    """Start a dev bridge over `backend` (anything with submit, wait_any and cancel: the _skyrim module).
+    """Start a dev bridge over `backend` (anything with submit, wait_any and cancel: the _skython module).
 
     `welcome_info` is a dict, or a function returning one, with plugin_version, game_version, runtime and
     epoch (a function gives every client the current epoch). Port 0 picks a free port (see .port). The
@@ -938,11 +938,11 @@ Expected: `48 passed` six times, each in about 1 s. No test sleeps for luck: eve
 - [ ] **Step 5: Run the drift check**
 
 Run: `python3 tools/gen_protocol.py --check`
-Expected: `gen_protocol: 3 generated files are up to date`. `bridge.py` must not spell out a limit, an error code, the token length, the default port or the host: they come from `skyrim._protocol_generated`.
+Expected: `gen_protocol: 3 generated files are up to date`. `bridge.py` must not spell out a limit, an error code, the token length, the default port or the host: they come from `skython._protocol_generated`.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add python/src/skyrim/bridge.py python/tests/test_bridge.py
+git add python/src/skython/bridge.py python/tests/test_bridge.py
 git commit -m "feat(python): the dev bridge server: handshake, per-connection caps, cancel on disconnect, session file"
 ```

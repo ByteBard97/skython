@@ -2,18 +2,18 @@
 
 Adapted from: branch `plan-out-of-process`, task 8 (`task-08-core-library-scaffold-linux-build-and-test.md`).
 
-> Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, section 8). Steps use checkbox (`- [ ]`) syntax for tracking.
+> Part of the [Skython v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, section 8). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Depends on:** Task 0 (`third_party/nlohmann/json.hpp`, `third_party/doctest/doctest.h`) and Task 12 (`core/include/spy/protocol_generated.h`, committed by the generator). This Linux task needs no game and may run in parallel with the M0 spikes.
 
-**What changed from the out-of-process plan.** Nothing in substance. The core library is still pure C++20 with no Windows, CommonLib or Python headers. It is now linked into the plugin's core DLL (Task 25) and into the Linux build of the `_skyrim` module (Task 19), so it must stay free of anything platform-specific. The old C++ framing task (old task 9) is gone: the dev bridge is Python (Task 23).
+**What changed from the out-of-process plan.** Nothing in substance. The core library is still pure C++20 with no Windows, CommonLib or Python headers. It is now linked into the plugin's core DLL (Task 25) and into the Linux build of the `_skython` module (Task 19), so it must stay free of anything platform-specific. The old C++ framing task (old task 9) is gone: the dev bridge is Python (Task 23).
 
 **Files:**
 - Create: `core/CMakeLists.txt`, `core/tests/main.cpp`, `core/src/version.cpp`
 
 **Interfaces:**
 - Consumes: `third_party/nlohmann/json.hpp`, `third_party/doctest/doctest.h` (Task 0); `core/include/spy/protocol_generated.h` (Task 12).
-- Produces: CMake target `spy_core` (static library; include dirs `core/include` and `third_party`; C++20; position-independent code so the Linux `_skyrim` extension module in Task 19 can link it), test executable `spy_core_tests`, compile definition `SPY_FIXTURES_DIR` pointing at `protocol/v1/fixtures`. Tasks 14-18 add sources under `core/src/` and tests under `core/tests/`; both directories are globbed with `CONFIGURE_DEPENDS`, so they need no CMake edits, only a re-configure.
+- Produces: CMake target `spy_core` (static library; include dirs `core/include` and `third_party`; C++20; position-independent code so the Linux `_skython` extension module in Task 19 can link it), test executable `spy_core_tests`, compile definition `SPY_FIXTURES_DIR` pointing at `protocol/v1/fixtures`. Tasks 14-18 add sources under `core/src/` and tests under `core/tests/`; both directories are globbed with `CONFIGURE_DEPENDS`, so they need no CMake edits, only a re-configure.
 
 - [ ] **Step 1: Write the CMake file, the test main and a placeholder source**
 
@@ -28,7 +28,7 @@ target_include_directories(spy_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${CMAKE_CURRENT_SOURCE_DIR}/../third_party)
 target_compile_features(spy_core PUBLIC cxx_std_20)
-# The Linux build of the _skyrim extension module (Task 19) links this static library into a shared object.
+# The Linux build of the _skython extension module (Task 19) links this static library into a shared object.
 set_target_properties(spy_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 find_package(Threads REQUIRED)
 target_link_libraries(spy_core PUBLIC Threads::Threads)

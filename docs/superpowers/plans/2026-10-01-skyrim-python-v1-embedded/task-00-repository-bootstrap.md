@@ -2,7 +2,7 @@
 
 Adapted from: branch `plan-out-of-process`, task 0 (`task-00-repository-bootstrap.md`).
 
-> Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4). Steps use checkbox (`- [ ]`) syntax for tracking.
+> Part of the [Skython v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Files:**
 - Create: `LICENSE`, `.gitmodules` (via git), `third_party/nlohmann/json.hpp`, `third_party/doctest/doctest.h`, `third_party/pybind11/LICENSE`, `third_party/pybind11/include/pybind11/**` (54 headers), `plugin/extern/CommonLibSSE-NG` (submodule), `tools/fetch_python.sh`, `docs/PINS.md`

@@ -2,24 +2,24 @@
 
 Adapted from: branch `plan-out-of-process`, task 13 (`task-13-python-package-basics-framing-errors-values-form.md`).
 
-> Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.2, 4.4 and 4.7). Steps use checkbox (`- [ ]`) syntax for tracking.
+> Part of the [Skython v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.2, 4.4 and 4.7). Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Depends on:** Task 11 (the fixtures) and Task 12 (the generated `python/src/skyrim/_protocol_generated.py`; run `python3 tools/gen_protocol.py --check` first, it must print `gen_protocol: 3 generated files are up to date`). This is pure Linux work; it does not need spike S8 or the game. Task 21 builds on it.
+> **Depends on:** Task 11 (the fixtures) and Task 12 (the generated `python/src/skython/_protocol_generated.py`; run `python3 tools/gen_protocol.py --check` first, it must print `gen_protocol: 3 generated files are up to date`). This is pure Linux work; it does not need spike S8 or the game. Task 21 builds on it.
 
-**What changed from the out-of-process plan.** Almost nothing: the package is the same pure-Python code, now used in two modes (in the game over `_skyrim`, and from another process over the dev bridge), so it needs Python 3.12 or later (skyrim-dm's floor; the game runs 3.14) and is tested on 3.12 and 3.14. Three additions: `_framing.dumps(obj) -> str` gives the JSON text of a message without the length prefix, because the in-process transport (Task 21) hands text to `_skyrim` and must fail exactly like `encode`; `values.MAX_ARRAY_ITEMS` (the generated 128) makes an over-long array a `TypeMismatch` before anything is sent, matching the 129-item fixture; and the generated-table tests pin `MAX_ARRAY_ITEMS`, `needs_game` and the new ini keys.
+**What changed from the out-of-process plan.** Almost nothing: the package is the same pure-Python code, now used in two modes (in the game over `_skython`, and from another process over the dev bridge), so it needs Python 3.12 or later (skyrim-dm's floor; the game runs 3.14) and is tested on 3.12 and 3.14. Three additions: `_framing.dumps(obj) -> str` gives the JSON text of a message without the length prefix, because the in-process transport (Task 21) hands text to `_skython` and must fail exactly like `encode`; `values.MAX_ARRAY_ITEMS` (the generated 128) makes an over-long array a `TypeMismatch` before anything is sent, matching the 129-item fixture; and the generated-table tests pin `MAX_ARRAY_ITEMS`, `needs_game` and the new ini keys.
 
 **Files:**
-- Create: `python/pyproject.toml`, `python/src/skyrim/__init__.py`, `python/src/skyrim/_framing.py`, `python/src/skyrim/errors.py`, `python/src/skyrim/values.py`, `python/src/skyrim/refs.py`
+- Create: `python/pyproject.toml`, `python/src/skython/__init__.py`, `python/src/skython/_framing.py`, `python/src/skython/errors.py`, `python/src/skython/values.py`, `python/src/skython/refs.py`
 - Create: `python/tests/support.py`, `python/tests/test_framing.py`, `python/tests/test_errors.py`, `python/tests/test_values_refs.py`, `python/tests/test_fixtures.py`, `python/tests/test_generated.py`
-- Consumes (generated, committed in Task 12): `python/src/skyrim/_protocol_generated.py`. The package imports its limits, error-code registry data, value types and form-id rules from there and defines none of them. That module is plain constants and tuples, so it imports nothing and every other module can import it.
+- Consumes (generated, committed in Task 12): `python/src/skython/_protocol_generated.py`. The package imports its limits, error-code registry data, value types and form-id rules from there and defines none of them. That module is plain constants and tuples, so it imports nothing and every other module can import it.
 
 **Interfaces:**
-- Consumes: `skyrim._protocol_generated` (Task 12: `PROTOCOL_VERSION`, the limits including `MAX_FRAME_BYTES` and `MAX_ARRAY_ITEMS`, `CODE_*`, `ERROR_CODES`, `REMOTE_EXCEPTIONS`, `HANDSHAKE_EXCEPTIONS`, `HANDSHAKE_CODES`, `ALIAS_TYPES`, `DEFAULT_ALIAS_TYPE`, `ELEM_TYPES`, `FORM_ID_*`, `PLUGIN_EXTENSIONS`, `LIGHT_EXTENSION`, `OPS` with `needs_game`, `BATCHABLE_OPS`, `CONFIG_KEYS`, `HOST`, `ENV_*`) and the golden fixtures from Task 11 (`protocol/v1/fixtures/`: `values.json`, `form_keys.json`, `responses.json`, and for the agreement tests `requests.json` and `hello.json`). The tests look entries up by content (the `not_ready` error response, the `handshake_error` message, the arrays longer than `MAX_ARRAY_ITEMS`), so Task 11 may add or reorder entries.
+- Consumes: `skython._protocol_generated` (Task 12: `PROTOCOL_VERSION`, the limits including `MAX_FRAME_BYTES` and `MAX_ARRAY_ITEMS`, `CODE_*`, `ERROR_CODES`, `REMOTE_EXCEPTIONS`, `HANDSHAKE_EXCEPTIONS`, `HANDSHAKE_CODES`, `ALIAS_TYPES`, `DEFAULT_ALIAS_TYPE`, `ELEM_TYPES`, `FORM_ID_*`, `PLUGIN_EXTENSIONS`, `LIGHT_EXTENSION`, `OPS` with `needs_game`, `BATCHABLE_OPS`, `CONFIG_KEYS`, `HOST`, `ENV_*`) and the golden fixtures from Task 11 (`protocol/v1/fixtures/`: `values.json`, `form_keys.json`, `responses.json`, and for the agreement tests `requests.json` and `hello.json`). The tests look entries up by content (the `not_ready` error response, the `handshake_error` message, the arrays longer than `MAX_ARRAY_ITEMS`), so Task 11 may add or reorder entries.
 - Produces (names as in the index Contracts):
-  - `skyrim._framing`: `MAX_FRAME: int` (the generated `MAX_FRAME_BYTES`); `dumps(obj: dict) -> str` (the JSON text of one message, compact, non-ASCII kept; raises `EncodeError` for a body over `MAX_FRAME` bytes, text that is not valid Unicode, or anything JSON cannot hold, including NaN); `encode(obj: dict) -> bytes` (the 4-byte little-endian length plus the `dumps` text as UTF-8; same failures); `read_frame(sock, deadline: float | None = None) -> dict`. `deadline` is a `time.monotonic()` value that bounds the WHOLE frame read (header and body, however many `recv` calls), and `TimeoutError` is raised when it passes. With no deadline the call waits as long as it takes; a socket timeout is then only a wake-up tick and is retried without losing the bytes already read. Raises `ConnectionLost` on EOF, `ProtocolViolation` on an oversized header, non-UTF-8, bad JSON or a non-object payload.
-  - `skyrim.errors`: `SkyrimPythonError`; `ConnectionLost`, `NotRunning`, `CallTimeout`, `ProtocolViolation`; `EncodeError` (also a `ValueError`: the request cannot be sent, nothing was sent); `HandshakeError(code, message)` with `Unauthorized`, `ProtocolMismatch`; `RemoteError(code, message, detail)` with one subclass per code: `NotReady`, `Busy`, `BadRequest`, `UnknownFunction`, `TypeMismatch`, `StaleReference`, `NotFound`, `Timeout`, `VmError`, `Unsupported`, `InternalError`. **The classes are written out in `errors.py` (so `errors.NotReady`, pickling and type checkers work), but the code-to-class mapping is the generated `REMOTE_EXCEPTIONS` / `HANDSHAKE_EXCEPTIONS` data**: at import, `errors.py` looks each named class up, sets its `code` from the table and builds the registries `_REMOTE` and `_HANDSHAKE`; a code in `protocol.json` whose class is missing is an `ImportError` naming it, and `test_generated.py` fails if a class exists that the table does not list. `remote_error_from_wire(err) -> RemoteError` (accepts any JSON value: a malformed error object gives an `InternalError` whose message says so); `handshake_error_from_wire(msg: dict) -> HandshakeError`. Every exception can be pickled and copied (`__reduce__`).
-  - `skyrim.values`: `INT_MIN`, `INT_MAX`, `FLOAT_MAX`, `MAX_ARRAY_ITEMS`, `ALIAS_TYPES`, `ELEM_TYPES` are the generated constants re-exported; frozen dataclasses `Fingerprint(base, type)`, `Form(form_id=None, form_key=None, type=None, epoch=None, fingerprint=None)`, `Alias(quest: Form, alias_id: int, alias_type="ReferenceAlias", epoch=None)`, `PArray(elem: str, items: tuple)`; `to_wire(v) -> Any`; `from_wire(j) -> Any` (arrays decode to plain `list`; a malformed form, alias or array from the server raises `ProtocolViolation`, including a `Bool`, `Int`, `Float` or `String` array with an item of another JSON type: a `bool` is not an `Int`, and a `Float` item may be an int or a float). `Form` and `Alias` validate on construction (`ValueError`): `form_id` in `0..0xFFFFFFFF`; when both `form_id` and `form_key` are given they must agree on the local id (24 bits, 12 for a `0xFE` light form) and a `0xFF` runtime id has no key; `alias_id` in `0..INT_MAX`; `alias_type` is `ReferenceAlias` or `LocationAlias`. Float rule: a float with magnitude above `3.4028235e38`, or non-finite, is `TypeMismatch`. Int rule: a scalar Python `int` is always a Papyrus Int and is range-checked (`TypeMismatch`), even where the Papyrus parameter is a Float, until the M3 signature table can tell the two apart; pass `3.0`, not `3`. Inside a list that infers as Float (or a `PArray("Float", ...)`), ints are converted with `float()` and are not range-checked. Array rule: a list or `PArray` with more than `MAX_ARRAY_ITEMS` (128) items is `TypeMismatch`, raised by `to_wire` before anything is sent.
-  - `skyrim.refs`: `parse_form_key(text) -> tuple[str, int]` (raises `ValueError`; whole-string match, so a trailing newline, an empty or space-padded plugin name, control characters and non-ASCII look-alikes are all rejected, and an `.esl` local id is at most `0xFFF`, as in `PROTOCOL.md`), `format_form_key(plugin, local_id) -> str`, `is_runtime_form_id(int) -> bool`, `is_light_form_id(int) -> bool`
+  - `skython._framing`: `MAX_FRAME: int` (the generated `MAX_FRAME_BYTES`); `dumps(obj: dict) -> str` (the JSON text of one message, compact, non-ASCII kept; raises `EncodeError` for a body over `MAX_FRAME` bytes, text that is not valid Unicode, or anything JSON cannot hold, including NaN); `encode(obj: dict) -> bytes` (the 4-byte little-endian length plus the `dumps` text as UTF-8; same failures); `read_frame(sock, deadline: float | None = None) -> dict`. `deadline` is a `time.monotonic()` value that bounds the WHOLE frame read (header and body, however many `recv` calls), and `TimeoutError` is raised when it passes. With no deadline the call waits as long as it takes; a socket timeout is then only a wake-up tick and is retried without losing the bytes already read. Raises `ConnectionLost` on EOF, `ProtocolViolation` on an oversized header, non-UTF-8, bad JSON or a non-object payload.
+  - `skython.errors`: `SkythonError`; `ConnectionLost`, `NotRunning`, `CallTimeout`, `ProtocolViolation`; `EncodeError` (also a `ValueError`: the request cannot be sent, nothing was sent); `HandshakeError(code, message)` with `Unauthorized`, `ProtocolMismatch`; `RemoteError(code, message, detail)` with one subclass per code: `NotReady`, `Busy`, `BadRequest`, `UnknownFunction`, `TypeMismatch`, `StaleReference`, `NotFound`, `Timeout`, `VmError`, `Unsupported`, `InternalError`. **The classes are written out in `errors.py` (so `errors.NotReady`, pickling and type checkers work), but the code-to-class mapping is the generated `REMOTE_EXCEPTIONS` / `HANDSHAKE_EXCEPTIONS` data**: at import, `errors.py` looks each named class up, sets its `code` from the table and builds the registries `_REMOTE` and `_HANDSHAKE`; a code in `protocol.json` whose class is missing is an `ImportError` naming it, and `test_generated.py` fails if a class exists that the table does not list. `remote_error_from_wire(err) -> RemoteError` (accepts any JSON value: a malformed error object gives an `InternalError` whose message says so); `handshake_error_from_wire(msg: dict) -> HandshakeError`. Every exception can be pickled and copied (`__reduce__`).
+  - `skython.values`: `INT_MIN`, `INT_MAX`, `FLOAT_MAX`, `MAX_ARRAY_ITEMS`, `ALIAS_TYPES`, `ELEM_TYPES` are the generated constants re-exported; frozen dataclasses `Fingerprint(base, type)`, `Form(form_id=None, form_key=None, type=None, epoch=None, fingerprint=None)`, `Alias(quest: Form, alias_id: int, alias_type="ReferenceAlias", epoch=None)`, `PArray(elem: str, items: tuple)`; `to_wire(v) -> Any`; `from_wire(j) -> Any` (arrays decode to plain `list`; a malformed form, alias or array from the server raises `ProtocolViolation`, including a `Bool`, `Int`, `Float` or `String` array with an item of another JSON type: a `bool` is not an `Int`, and a `Float` item may be an int or a float). `Form` and `Alias` validate on construction (`ValueError`): `form_id` in `0..0xFFFFFFFF`; when both `form_id` and `form_key` are given they must agree on the local id (24 bits, 12 for a `0xFE` light form) and a `0xFF` runtime id has no key; `alias_id` in `0..INT_MAX`; `alias_type` is `ReferenceAlias` or `LocationAlias`. Float rule: a float with magnitude above `3.4028235e38`, or non-finite, is `TypeMismatch`. Int rule: a scalar Python `int` is always a Papyrus Int and is range-checked (`TypeMismatch`), even where the Papyrus parameter is a Float, until the M3 signature table can tell the two apart; pass `3.0`, not `3`. Inside a list that infers as Float (or a `PArray("Float", ...)`), ints are converted with `float()` and are not range-checked. Array rule: a list or `PArray` with more than `MAX_ARRAY_ITEMS` (128) items is `TypeMismatch`, raised by `to_wire` before anything is sent.
+  - `skython.refs`: `parse_form_key(text) -> tuple[str, int]` (raises `ValueError`; whole-string match, so a trailing newline, an empty or space-padded plugin name, control characters and non-ASCII look-alikes are all rejected, and an `.esl` local id is at most `0xFFF`, as in `PROTOCOL.md`), `format_form_key(plugin, local_id) -> str`, `is_runtime_form_id(int) -> bool`, `is_light_form_id(int) -> bool`
   - `python/tests/support.py` (plain module; pytest's default import mode puts `tests/` on `sys.path`): `FIXTURES: pathlib.Path`, `load_fixture(name) -> dict`. Task 21 adds `wait_until`; Task 22 appends the socket test helpers.
 
 - [ ] **Step 1: Project file and test helpers**
@@ -29,7 +29,7 @@ The package targets Python 3.12 or later and has no runtime dependencies. `uv ru
 `python/pyproject.toml`:
 ```toml
 [project]
-name = "skyrim-python"
+name = "skython"
 version = "0.1.0"
 description = "Call Papyrus in a running Skyrim from Python: in the game through the embedded interpreter, or from another process through the dev bridge"
 requires-python = ">=3.12"
@@ -44,7 +44,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/skyrim"]
+packages = ["src/skython"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -73,8 +73,8 @@ import time
 
 import pytest
 
-from skyrim import _framing
-from skyrim.errors import ConnectionLost, EncodeError, ProtocolViolation
+from skython import _framing
+from skython.errors import ConnectionLost, EncodeError, ProtocolViolation
 
 
 @pytest.fixture
@@ -263,7 +263,7 @@ import pickle
 
 import pytest
 
-from skyrim import errors
+from skython import errors
 
 SAMPLES = [
     errors.ConnectionLost("gone"),
@@ -321,9 +321,9 @@ import math
 
 import pytest
 
-from skyrim import errors
-from skyrim.refs import format_form_key, is_light_form_id, is_runtime_form_id, parse_form_key
-from skyrim.values import INT_MAX, INT_MIN, MAX_ARRAY_ITEMS, Alias, Form, PArray, from_wire, to_wire
+from skython import errors
+from skython.refs import format_form_key, is_light_form_id, is_runtime_form_id, parse_form_key
+from skython.values import INT_MAX, INT_MIN, MAX_ARRAY_ITEMS, Alias, Form, PArray, from_wire, to_wire
 
 
 def test_int_range_checked_not_truncated():
@@ -484,9 +484,9 @@ def test_arrays_hold_at_most_max_array_items():
 import pytest
 
 from support import load_fixture
-from skyrim import errors
-from skyrim.refs import format_form_key, parse_form_key
-from skyrim.values import MAX_ARRAY_ITEMS, PArray, from_wire, to_wire
+from skython import errors
+from skython.refs import format_form_key, parse_form_key
+from skython.values import MAX_ARRAY_ITEMS, PArray, from_wire, to_wire
 
 VALUES = load_fixture("values.json")
 KEYS = load_fixture("form_keys.json")
@@ -587,7 +587,7 @@ import inspect
 import pytest
 
 from support import load_fixture
-from skyrim import _framing, _protocol_generated as g, errors, refs, values
+from skython import _framing, _protocol_generated as g, errors, refs, values
 
 REQUESTS = load_fixture("requests.json")
 HELLO = load_fixture("hello.json")
@@ -617,7 +617,7 @@ def test_v1_wire_contract_is_pinned():
                                     "default_timeout_ms", "max_inflight_per_connection", "max_inflight_total", "enable_console")
     assert g.CONFIG_KEYS["port"]["default"] == 45977 and g.CONFIG_KEYS["bridge_enabled"]["default"] is False
     assert g.HOST == "127.0.0.1"
-    assert (g.ENV_SESSION, g.ENV_PORT, g.ENV_TOKEN) == ("SKYRIM_PYTHON_SESSION", "SKYRIM_PYTHON_PORT", "SKYRIM_PYTHON_TOKEN")
+    assert (g.ENV_SESSION, g.ENV_PORT, g.ENV_TOKEN) == ("SKYTHON_SESSION", "SKYTHON_PORT", "SKYTHON_TOKEN")
 
 
 def test_the_exception_registry_is_built_from_the_table():
@@ -709,11 +709,11 @@ def test_every_plugin_extension_parses_with_its_own_local_id_ceiling(ext):
 - [ ] **Step 3: Run to verify they fail**
 
 Run: `cd python && uv run --python 3.14 pytest -q`
-Expected: FAIL. `uv run` creates the virtualenv and installs pytest, then pytest stops with `5 errors during collection` (`test_errors.py`, `test_fixtures.py`, `test_framing.py`, `test_generated.py`, `test_values_refs.py`), each `ImportError: cannot import name ... from 'skyrim' (unknown location)`: the package directory already holds Task 12's `_protocol_generated.py` but no `__init__.py` yet, so `skyrim` is an empty namespace package.
+Expected: FAIL. `uv run` creates the virtualenv and installs pytest, then pytest stops with `5 errors during collection` (`test_errors.py`, `test_fixtures.py`, `test_framing.py`, `test_generated.py`, `test_values_refs.py`), each `ImportError: cannot import name ... from 'skython' (unknown location)`: the package directory already holds Task 12's `_protocol_generated.py` but no `__init__.py` yet, so `skython` is an empty namespace package.
 
 - [ ] **Step 4: Implement**
 
-`python/src/skyrim/errors.py`:
+`python/src/skython/errors.py`:
 ```python
 """Exceptions. Server error codes map one-to-one onto RemoteError subclasses.
 
@@ -727,32 +727,32 @@ At the bottom of this module each class is looked up by the name the table gives
 from . import _protocol_generated as _g
 
 
-class SkyrimPythonError(Exception):
+class SkythonError(Exception):
     """Base class for everything this package raises on purpose."""
 
 
-class ConnectionLost(SkyrimPythonError):
+class ConnectionLost(SkythonError):
     """The connection to the game closed (game quit, crashed, stopped reading, or the client closed it)."""
 
 
-class NotRunning(SkyrimPythonError):
-    """No reachable SkyrimPython server: no session file, connection refused, or no welcome in time."""
+class NotRunning(SkythonError):
+    """No reachable Skython server: no session file, connection refused, or no welcome in time."""
 
 
-class CallTimeout(SkyrimPythonError):
+class CallTimeout(SkythonError):
     """The client stopped waiting for a response. The call may still run in the game."""
 
 
-class ProtocolViolation(SkyrimPythonError):
+class ProtocolViolation(SkythonError):
     """The peer sent something that is not protocol v1."""
 
 
-class EncodeError(SkyrimPythonError, ValueError):
+class EncodeError(SkythonError, ValueError):
     """A request cannot be put on the wire: over the frame limit, or text that is not valid Unicode.
     Raised before anything is sent, so the connection is unaffected."""
 
 
-class HandshakeError(SkyrimPythonError):
+class HandshakeError(SkythonError):
     def __init__(self, code: str, message: str):
         super().__init__(f"{code}: {message}")
         self.code = code
@@ -770,7 +770,7 @@ class ProtocolMismatch(HandshakeError):
     """Client and plugin speak different protocol major versions."""
 
 
-class RemoteError(SkyrimPythonError):
+class RemoteError(SkythonError):
     code = _g.CODE_INTERNAL  # the class default; each subclass below gets its code from the generated table
 
     def __init__(self, code: str, message: str, detail: dict | None = None):
@@ -802,7 +802,7 @@ def _registry(names: dict, base: type) -> dict:
     for wire_code, class_name in names.items():
         cls = globals().get(class_name)
         if not (isinstance(cls, type) and issubclass(cls, base)):
-            raise ImportError(f"skyrim.errors has no {base.__name__} subclass {class_name!r}, "
+            raise ImportError(f"skython.errors has no {base.__name__} subclass {class_name!r}, "
                               f"which protocol.json names for the code {wire_code!r}")
         cls.code = wire_code
         out[wire_code] = cls
@@ -840,11 +840,11 @@ def handshake_error_from_wire(msg: dict) -> HandshakeError:
     return _HANDSHAKE.get(code, HandshakeError)(code, _text(msg.get("message"), ""))
 
 
-__all__ = ["SkyrimPythonError", "ConnectionLost", "NotRunning", "CallTimeout", "ProtocolViolation", "EncodeError",
+__all__ = ["SkythonError", "ConnectionLost", "NotRunning", "CallTimeout", "ProtocolViolation", "EncodeError",
            "HandshakeError", "Unauthorized", "ProtocolMismatch", "RemoteError", *[c.__name__ for c in _REMOTE.values()]]
 ```
 
-`python/src/skyrim/_framing.py`:
+`python/src/skython/_framing.py`:
 ```python
 """4-byte little-endian length prefix + UTF-8 JSON object. Same rules as protocol/PROTOCOL.md.
 
@@ -956,7 +956,7 @@ def read_frame(sock: socket.socket, deadline: float | None = None) -> dict:
             sock.settimeout(previous)
 ```
 
-`python/src/skyrim/refs.py`:
+`python/src/skython/refs.py`:
 ```python
 """Form keys ("Plugin.esp|0x0012AB") and form-id ranges. Grammar: protocol/PROTOCOL.md "Values"; the extensions,
 digit counts and ceilings are the generated constants (protocol.json "form_ids")."""
@@ -998,7 +998,7 @@ def is_light_form_id(form_id: int) -> bool:
     return (form_id >> 24) == _g.FORM_ID_LIGHT_PREFIX
 ```
 
-`python/src/skyrim/values.py`:
+`python/src/skython/values.py`:
 ```python
 """Papyrus values on the wire. See protocol/PROTOCOL.md "Values"."""
 import math
@@ -1207,7 +1207,7 @@ def from_wire(j: Any) -> Any:
 
 The package's `__init__.py` (Task 21 adds the `Game` API; Task 22 adds `connect`):
 
-`python/src/skyrim/__init__.py`:
+`python/src/skython/__init__.py`:
 ```python
 """Call Papyrus in a running Skyrim from Python."""
 from .errors import *  # noqa: F401,F403
@@ -1226,7 +1226,7 @@ Note on the fixture round trip: `{"array":"Float","items":[1,2.5]}` decodes to `
 - [ ] **Step 6: Run the drift check**
 
 Run: `python3 tools/gen_protocol.py --check`
-Expected: `gen_protocol: 3 generated files are up to date`. `errors.py`, `_framing.py`, `refs.py` and `values.py` must not spell out an error code, a limit, an extension or a form-id ceiling: they take them from `skyrim._protocol_generated`.
+Expected: `gen_protocol: 3 generated files are up to date`. `errors.py`, `_framing.py`, `refs.py` and `values.py` must not spell out an error code, a limit, an extension or a form-id ceiling: they take them from `skython._protocol_generated`.
 
 - [ ] **Step 7: Commit**
 

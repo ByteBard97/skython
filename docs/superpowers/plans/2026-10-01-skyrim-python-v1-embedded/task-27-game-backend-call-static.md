@@ -2,11 +2,11 @@
 
 Adapted from: branch `plan-out-of-process`, task 17a (`task-17a-dispatch-skeleton-call-static-and-game-state.md`). The IO thread, `Outbox`, `ConnId`, frames and the per-connection cap are gone from C++: core's `spy::Dispatcher` (Task 18) now owns caps, readiness, deadlines, load cancellation and exception handling. What is left here is the game side: a `spy::Backend` that turns each request into one `AddTask` on the main thread, plus the signature lookup and the primitive value conversion that `call_static` needs. ("Main thread" in Tasks 27-30 means "inside an SKSE task": see Rules below.)
 
-> Part of the [skyrim-python v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), sections 4.1, 4.3-4.5. Steps use checkbox (`- [ ]`) syntax.
+> Part of the [Skython v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), sections 4.1, 4.3-4.5. Steps use checkbox (`- [ ]`) syntax.
 
 > **Gate:** start after Task 26 is done and `spikes/RESULTS.md` shows S2 (Task 4), S9 (Task 5) and S4 (Task 6) PASS. S7 (Task 9) is needed before Tasks 28 and 29, not here; if you start before S7 exists, the signature code below is unverified and the first compile is the check (grep `plugin/extern/CommonLibSSE-NG` for each name in the Verify list).
 >
-> **Runs on:** the Windows build box plus the game, which runs on the box ([Task 1c](task-01c-part-c-on-the-box.md)); live tests run on Linux through the dev bridge and the session tunnel (`skyrim.connect()` from Linux, or the raw helpers in `livetest/support.py`).
+> **Runs on:** the Windows build box plus the game, which runs on the box ([Task 1c](task-01c-part-c-on-the-box.md)); live tests run on Linux through the dev bridge and the session tunnel (`skython.connect()` from Linux, or the raw helpers in `livetest/support.py`).
 >
 > **STOP and ask the owner (do not improvise) if:** S2, S4 or S9 is FAIL; a name in the Verify list does not exist and no obvious equivalent is found; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s; the log shows a runtime other than AE 1.6.1170.
 >
@@ -18,24 +18,24 @@ Adapted from: branch `plan-out-of-process`, task 17a (`task-17a-dispatch-skeleto
 - Create: `plugin/src/Signatures.h` (final), `plugin/src/Signatures.cpp` (`IEquals`, `FindFunction`, `BindArgs`; Task 28 adds `IsA` and `FindProperty`)
 - Create: `plugin/src/PapyrusValues.h` (final), `plugin/src/PapyrusValues.cpp` (primitives, `None`, `DescribeForm`; Tasks 28 and 29 fill in the rest)
 - Unchanged: `plugin/src/PythonHost.cpp`'s `InstallModuleHost` call (marked `// interim backend: replaced in Task 27`); it already uses `spy::game::GetDispatcher()`, which now resolves to the real backend. Only that comment is updated.
-- Modify: `plugin/CMakeLists.txt` (add the four new `.cpp` files to the `SkyrimPythonCore` target)
+- Modify: `plugin/CMakeLists.txt` (add the four new `.cpp` files to the `SkythonCore` target)
 - Modify: `livetest/support.py` (append `send_request` if Task 26 did not define it)
 - Create: `livetest/test_m1_mainmenu.py`, `livetest/test_m1_calls.py` (Tasks 28 and 29 append to `test_m1_calls.py`)
 
 **Interfaces:**
 - Consumes (core, Tasks 14-18): `spy::Value`, `FormRef`, `Fingerprint`, `form_ref_to_json`, `value_kind` (`spy/values.h`); `is_runtime_form_id`, `format_form_key` (`spy/refs.h`); `CallArgs`, `parse_call_args` (`spy/requests.h`); `ProtocolError`, `ErrorCode`, `json` (`spy/errors.h`); `OpResult`, `Done`, `Cancelled`, `Progress`, `Backend`, `Dispatcher`, `DispatcherOptions` (`spy/dispatcher.h`); `Config` (`spy/config.h`).
 - Consumes (plugin, Task 25): `spy::log::Info/Warn/Error/Debug`, `spy::settings::Get()`, and these lifecycle wrappers in `Lifecycle.h`: `spy::life::Epoch()`, `GameLoaded()`, `Loading()`, `Paused()`, `OpenMenus()`, `LoadsStarted()`, `NotReadyReason(bool require_unpaused) -> std::optional<std::string>`, `BaseState() -> json` (`LifecycleState::base_state()`). If Task 25 spelled any of these differently, use its names; do not add a second lifecycle.
-- Consumes (Task 26): `spy::InstallModuleHost(ModuleHost)` call site; `livetest/conftest.py` fixtures `session` and `game` (a `skyrim.Game` connected through the bridge); `livetest/support.py` `raw_connect(session) -> socket`, `rpc(sock, op, args=None, req_id=1, timeout=30.0) -> dict`, `encode`, `read_frame`.
+- Consumes (Task 26): `spy::InstallModuleHost(ModuleHost)` call site; `livetest/conftest.py` fixtures `session` and `game` (a `skython.Game` connected through the bridge); `livetest/support.py` `raw_connect(session) -> socket`, `rpc(sock, op, args=None, req_id=1, timeout=30.0) -> dict`, `encode`, `read_frame`.
 - Consumes from spikes: S2 (Task 4, measured; index Global Constraints, Papyrus dispatch rules): the VM never frees the `IFunctionArguments` passed to a dispatch, so the plugin owns them: the `Callback` holds the call's `DynArgs` and deletes it after reading the result, never earlier (phase D, 1000/1000); when `Dispatch*Call` returns false the args are kept, not freed, and logged once (ruling R37: unmeasured, the callback might still fire); the callback may run inside an SKSE task or on a VM thread. S7 (Task 9) and ruling R49: see the next rule list.
 - Produces:
   - `spy::game::Backend() -> spy::Backend&` (the `GameBackend` singleton) and `spy::game::GetDispatcher() -> spy::Dispatcher&` (built on first use from `settings::Get()`: `default_timeout_ms`, `max_inflight_total`, and `on_late` logging each dropped late result with `log::Warn`; reaper started; immortal).
   - `spy::ops::Run(const std::string& op, const json& args, Done, Cancelled, Progress)` (main thread only; never throws), `spy::ops::AddStateExtras(json&)` (main thread), `spy::ops::WithGameState(json detail) -> json`, `spy::ops::NotReady(const std::string& reason) -> OpResult`.
   - `spy::pv::*` and `spy::sig::*` declarations (final headers; bodies arrive in Tasks 27-29 as named in the headers). `pv::FloatToJson(float)` is core's float encoder (`value_to_json`): shortest round-trip text, a non-finite Float becomes `null` (`PROTOCOL.md`); every Float leaving the plugin goes through it. `sig::FindProperty` returns the whole `PropertyTypeInfo` (Task 30 refuses full properties).
-  - `game.state` result keys: `data_ready, game_loaded, loading, interactive, paused, menus, epoch, player, game_days_passed, diagnostics{late_results_dropped, in_flight}` (Task 31 adds `max_task_drain_ms` and `max_task_drain_count` to `diagnostics`; `player` and `game_days_passed` are `null` unless a game is loaded). `Backend::BaseState()`, which `_skyrim.state()` and every `timeout`/`not_ready` detail read, carries the same keys **without** `player` and `game_days_passed`: it never blocks, so it cannot read the engine, and it leaves the keys out rather than report a wrong `null`.
+  - `game.state` result keys: `data_ready, game_loaded, loading, interactive, paused, menus, epoch, player, game_days_passed, diagnostics{late_results_dropped, in_flight}` (Task 31 adds `max_task_drain_ms` and `max_task_drain_count` to `diagnostics`; `player` and `game_days_passed` are `null` unless a game is loaded). `Backend::BaseState()`, which `_skython.state()` and every `timeout`/`not_ready` detail read, carries the same keys **without** `player` and `game_days_passed`: it never blocks, so it cannot read the engine, and it leaves the keys out rather than report a wrong `null`.
 
 Rules this task implements (spec 4.3-4.5):
 - **"Main thread" means "inside an SKSE task"** (ruling R49, measured in S7, Task 9). `AddTask`/`AddUITask` tasks were never seen to overlap (0 overlapping in about 2800 probed tasks; about 1600 of them were spread over frames, and the strongest run, 600 tasks of mixed AddTask/AddUITask submitted at interval 0, also had none), but they run on varying BSJobs worker threads (about six distinct ids; one drain runs every queued task back to back on one thread, the next drain may use another). The game window's thread (`RE::Main::threadID`, also the plugin-load thread) ran none of them. So: **never identify "the main thread" by thread id** (no `std::this_thread::get_id()` comparisons, no stored main-thread id). Code that needs engine state runs inside an `AddTask`, and the VM callback always hops through `AddTask` when `pv::NeedsMainThread(result)` is true. The serialization of tasks is **observed, not proven**: wherever this plan relies on it (one task at a time touching forms and the VM), it is relying on R49's measurement.
-- `GameBackend::Run` never blocks the caller (a Python thread inside `_skyrim.submit`): it queues exactly one `AddTask` and returns. The queued task checks `cancelled()` first (timed out, cancelled or a load started while queued) and does nothing if so.
+- `GameBackend::Run` never blocks the caller (a Python thread inside `_skython.submit`): it queues exactly one `AddTask` and returns. The queued task checks `cancelled()` first (timed out, cancelled or a load started while queued) and does nothing if so.
 - `game.state` is answered **immediately** from `life::BaseState()` when no game is loaded or a save is loading. Only when a game is loaded does it queue one `AddTask` for `player` and `game_days_passed`, and that task rechecks `Loading()` before touching the engine.
 - In the task: recheck readiness, find the function, check every argument against the declared parameter types (no default values: the count must match), dispatch.
 - VM callback: it owns the call's `DynArgs` and deletes it after reading the result (S2); on a false `Dispatch*Call` return the dispatch site keeps the args and logs once (R37). It overrides `CanSave()` to return false (ruling R38, as SkyrimPlatform does): our functor is never written into a save. The base class already returns false at the pin (`src/RE/I/IStackCallbackFunctor.cpp:11`; the header comment reads `{ return false; }`), so the override makes the default explicit rather than changing it. **Primitives and `None` are converted on whatever thread the callback runs on** (no engine state). An object result or an array of objects needs `LookupByID`/`GetFile`, so it is converted inside an SKSE task: directly when the callback runs inside one of our own tasks (the VM can call it synchronously from `Dispatch*Call`), else through one more `AddTask`. "Inside one of our tasks" is a `thread_local bool t_inTask` that every task this plugin queues sets for its duration (RAII `InTask` guard, ruling R52), never a thread-id comparison (R49). No Python runs on any of these threads (Global Constraints).
@@ -67,7 +67,7 @@ def send_request(sock, op: str, args: dict | None = None, req_id: int = 1) -> No
 """Run with the game launched and sitting at the main menu (no save loaded)."""
 import pytest
 
-from skyrim import errors
+from skython import errors
 from support import raw_connect, rpc
 
 
@@ -116,7 +116,7 @@ import time
 
 import pytest
 
-from skyrim import errors
+from skython import errors
 from support import raw_connect, rpc
 
 PLAYER_ID = 0x14
@@ -837,13 +837,13 @@ spy::Dispatcher& GetDispatcher()
 ```
 `BaseState()` calls `GetDispatcher()` for diagnostics; that is safe because `GetDispatcher()` is fully constructed before any request can reach the backend. `life::BaseState()` already holds `data_ready, game_loaded, loading, interactive, paused, menus, epoch` (Task 17's `base_state()`).
 
-- [ ] **Step 6: Point `_skyrim` at the game dispatcher**
+- [ ] **Step 6: Point `_skython` at the game dispatcher**
 
 Task 26's `plugin/src/PythonHost.cpp` installs the module host with `.dispatcher = &spy::game::GetDispatcher()` and marks the call `// interim backend: replaced in Task 27`. Overwriting `GameBackend.{h,cpp}` in Step 5 is the whole switch: the call site needs no code change. Update only its comment:
 ```bash
 grep -n "interim backend: replaced in Task 27" plugin/src/PythonHost.cpp
 ```
-Expected: one line. Replace that comment line (and the one continuation comment line under it) with `// _skyrim talks to the game dispatcher (GameBackend, Task 27).`
+Expected: one line. Replace that comment line (and the one continuation comment line under it) with `// _skython talks to the game dispatcher (GameBackend, Task 27).`
 
 `plugin/CMakeLists.txt`: Task 26 already added `src/GameBackend.cpp src/PyModule.cpp` to `SPY_CORE_SOURCES`. Add `src/Ops.cpp src/Signatures.cpp src/PapyrusValues.cpp` to the same list. They go in the core DLL, never in the loader.
 
@@ -857,28 +857,28 @@ Expected: `no Python includes: OK`.
 
 The game runs on the Windows box ([Task 1c](task-01c-part-c-on-the-box.md)). Every wait is bounded and counts only text written since this launch's stamp, so a log from an earlier run cannot satisfy it; the save is loaded through DevBench.
 ```bash
-tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
-tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/remote_build.sh plugin Skython.dll && tools/remote_build.sh plugin SkythonCore.dll
+tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini
 tools/box/box_deploy.sh --python
 tools/box/box_deploy.sh --package
 tools/box/box_deploy.sh --scripts livetest/scripts
 tools/box/box_launch.sh
-tools/box/box_wait_log.sh SkyrimPython.log "game backend: dispatcher ready" 600 || echo "STOP: the dispatcher did not start; ask the owner"
+tools/box/box_wait_log.sh Skython.log "game backend: dispatcher ready" 600 || echo "STOP: the dispatcher did not start; ask the owner"
 # The bridge (and this run's session.json) exists only once the host reports; box_session.sh refuses a session.json
 # from an earlier launch.
-tools/box/box_wait_log.sh SkyrimPython.log "python host: (running|failed|disabled)" 600
-tools/box/box_wait_log.sh SkyrimPython.log "python host: running" 5 || echo "STOP: Python is not running; read the log"
+tools/box/box_wait_log.sh Skython.log "python host: (running|failed|disabled)" 600
+tools/box/box_wait_log.sh Skython.log "python host: running" 5 || echo "STOP: Python is not running; read the log"
 tools/box/box_session.sh up && source out/box-live.env
-tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: Main Menu open" 600
-SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_mainmenu.py -q -rs
+tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600
+SKYTHON_LIVE=1 uv run --project python pytest livetest/test_m1_mainmenu.py -q -rs
 tools/box/box_console.sh "load spikebase"     # stands in for Continue; then Task 1b block B6
-tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: interactive = true" 300
-SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_calls.py -q -rs
+tools/box/box_wait_log.sh Skython.log "lifecycle: interactive = true" 300
+SKYTHON_LIVE=1 uv run --project python pytest livetest/test_m1_calls.py -q -rs
 tools/box/box_quit.sh     # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh (Task 1b Known issue)
 ```
 (Two `remote_build.sh` calls: the script fetches one DLL per call, and `box_deploy.sh` refuses a core DLL older than the loader. `livetest/scripts` exists since Task 26.)
 
-Expected at the main menu: `test_m1_mainmenu.py`: `3 passed`. After the save is loaded: `test_m1_calls.py` passes (all tests; `test_odd_timeout_values_never_hang_or_crash` counts 6). Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure: nothing ran. The core log shows one `game backend: late result dropped: ...` warning per dropped late result (from `on_late`). This is the first time a Papyrus call travels from Linux through the dev bridge, `_skyrim`, the Dispatcher and the VM. If `StringUtil` fails, SKSE's script is not loaded: check `Scripts/StringUtil.pex` and substitute, recording which. If `Utility.RandomInt` fails with `vm_error`, read `Papyrus.0.log` (on the box: `bssh "Get-Content '$BOX_MYGAMES\\Logs\\Script\\Papyrus.0.log' -Tail 50"` after `source tools/box/box_env.sh`) and STOP: S2 saw no refused dispatch for a validated target, so a refusal here means the dispatch rules from S2 do not hold (the log has one `ops: the VM refused a dispatch` warning; the args were kept, R37). If `test_timeout_carries_game_state` fails only because `paused`/`menus` are missing from the timeout detail, the Dispatcher (Task 18) is not adding `BaseState()`'s `paused` and `menus` to timeout errors as spec 4.1 requires: fix it there, not here.
+Expected at the main menu: `test_m1_mainmenu.py`: `3 passed`. After the save is loaded: `test_m1_calls.py` passes (all tests; `test_odd_timeout_values_never_hang_or_crash` counts 6). Any skip whose reason is `live test: set SKYTHON_LIVE=1` is a failure: nothing ran. The core log shows one `game backend: late result dropped: ...` warning per dropped late result (from `on_late`). This is the first time a Papyrus call travels from Linux through the dev bridge, `_skython`, the Dispatcher and the VM. If `StringUtil` fails, SKSE's script is not loaded: check `Scripts/StringUtil.pex` and substitute, recording which. If `Utility.RandomInt` fails with `vm_error`, read `Papyrus.0.log` (on the box: `bssh "Get-Content '$BOX_MYGAMES\\Logs\\Script\\Papyrus.0.log' -Tail 50"` after `source tools/box/box_env.sh`) and STOP: S2 saw no refused dispatch for a validated target, so a refusal here means the dispatch rules from S2 do not hold (the log has one `ops: the VM refused a dispatch` warning; the args were kept, R37). If `test_timeout_carries_game_state` fails only because `paused`/`menus` are missing from the timeout detail, the Dispatcher (Task 18) is not adding `BaseState()`'s `paused` and `menus` to timeout errors as spec 4.1 requires: fix it there, not here.
 
 - [ ] **Step 8: Commit**
 

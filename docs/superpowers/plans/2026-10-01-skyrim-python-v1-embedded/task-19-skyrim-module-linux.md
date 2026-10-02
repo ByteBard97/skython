@@ -1,16 +1,16 @@
-# Task 19: The `_skyrim` module, Linux build and tests
+# Task 19: The `_skython` module, Linux build and tests
 
 New in the embedded design (no counterpart on branch `plan-out-of-process`).
 
-> Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts** (the `_skyrim` entry is this task's interface). Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.2, 4.5). Steps use checkbox (`- [ ]`) syntax for tracking.
+> Part of the [Skython v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts** (the `_skython` entry is this task's interface). Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.2, 4.5). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Depends on:** Task 18 (`Dispatcher`, `FakeBackend`), Task 16 (`parse_config`, `config_to_json`), Task 0 (pybind11 3.1.0 vendored in `third_party/pybind11/`, uv's CPython 3.14 installed). Linux only; no game.
 
-**What this is.** `_skyrim` is the only boundary between Python and the game (spec 4.2): request text in, response text out, plus the lifecycle state, the settings and a log line. `pyglue/src/pymodule.cpp` is the one source of the module; this task builds it on Linux as a real CPython 3.14 extension over core's `FakeBackend`, and the plugin core builds the same file into `SkyrimPythonCore.dll` over the game backend (Tasks 26-27). Every function that can wait releases the GIL (`py::call_guard<py::gil_scoped_release>`): arguments are converted to C++ before the release and results back to Python after the GIL is taken again, so only C++ work runs without it. That is what lets other Python threads (the bridge, player scripts, skyrim-dm's 66-second generation) run while one thread waits for the game (Review Focus 6). C++ exceptions reach Python as Python exceptions: `std::invalid_argument` as `ValueError` (a negative or NaN timeout), wrong argument types as `TypeError`, anything else as `RuntimeError`.
+**What this is.** `_skython` is the only boundary between Python and the game (spec 4.2): request text in, response text out, plus the lifecycle state, the settings and a log line. `pyglue/src/pymodule.cpp` is the one source of the module; this task builds it on Linux as a real CPython 3.14 extension over core's `FakeBackend`, and the plugin core builds the same file into `SkythonCore.dll` over the game backend (Tasks 26-27). Every function that can wait releases the GIL (`py::call_guard<py::gil_scoped_release>`): arguments are converted to C++ before the release and results back to Python after the GIL is taken again, so only C++ work runs without it. That is what lets other Python threads (the bridge, player scripts, skyrim-dm's 66-second generation) run while one thread waits for the game (Review Focus 6). C++ exceptions reach Python as Python exceptions: `std::invalid_argument` as `ValueError` (a negative or NaN timeout), wrong argument types as `TypeError`, anything else as `RuntimeError`.
 
 `call(request, timeout)` is `submit` plus `wait`. Normally the Dispatcher's own deadline (the request's `timeout_ms`) ends a slow call first, with a `timeout` response; if the caller's `timeout` (seconds) runs out before that, `call` cancels the ticket with `Dispatcher::CancelOrTake` (so a result that landed in the instant between the end of the wait and the cancel is returned, not thrown away) and otherwise returns a `timeout` response for the same id with `detail` `paused`, `menus` and `late_cancel = true` and the message `no response within <seconds, %g> s; the call was cancelled`, so a caller always sees the `Timeout` class for an expired call, never `internal`.
 
-**The fake build** (`pyglue/linux/fake_module.cpp`) adds `_fake_set_not_ready(reason | None)`, `_fake_bump_loads()` and `_fake_set_paused(flag)`, and reads two environment variables: `SKYRIM_FAKE_DIR` (the folder under which `config()` puts `python_dir`, `scripts_dir`, `site_packages_dir`, `log_dir` = `<dir>/logs` and `session_file` = `<dir>/logs/session.json`; default `<temp>/skyrim-fake`), and `SKYRIM_FAKE_INI` (ini text parsed like `SkyrimPython.ini`; `config()` reads it on every call, so a test can set `bridge_enabled = true`; the dispatcher reads `default_timeout_ms` and `max_inflight_total` from it **once, at import**, so the busy-cap test sets it for a fresh interpreter). `log(level, message)` appends `<level> <message>` to `<log_dir>/plugin.log`. The fake's backend and dispatcher are deliberately never destroyed (their threads live until the process exits), as in the game, which never finalises Python.
+**The fake build** (`pyglue/linux/fake_module.cpp`) adds `_fake_set_not_ready(reason | None)`, `_fake_bump_loads()` and `_fake_set_paused(flag)`, and reads two environment variables: `SKYTHON_FAKE_DIR` (the folder under which `config()` puts `python_dir`, `scripts_dir`, `site_packages_dir`, `log_dir` = `<dir>/logs` and `session_file` = `<dir>/logs/session.json`; default `<temp>/skyrim-fake`), and `SKYTHON_FAKE_INI` (ini text parsed like `Skython.ini`; `config()` reads it on every call, so a test can set `bridge_enabled = true`; the dispatcher reads `default_timeout_ms` and `max_inflight_total` from it **once, at import**, so the busy-cap test sets it for a fresh interpreter). `log(level, message)` appends `<level> <message>` to `<log_dir>/plugin.log`. The fake's backend and dispatcher are deliberately never destroyed (their threads live until the process exits), as in the game, which never finalises Python.
 
 **Files:**
 - Create: `pyglue/include/spy/pymodule.h`, `pyglue/src/pymodule.cpp`
@@ -21,18 +21,18 @@ New in the embedded design (no counterpart on branch `plan-out-of-process`).
 **Interfaces:**
 - Consumes: `spy::Dispatcher` (including `BaseState()` and `CancelOrTake()`), `spy::FakeBackend`, `spy::Ticket` (Task 18); `spy::parse_config`, `spy::config_to_json`, `spy::Config`, `spy::peek_request_id`, `spy::make_error`, `spy::dump_json` (Task 16); `spy::kProtocolMajor/Minor` (Task 12).
 - Produces:
-  - `pyglue/include/spy/pymodule.h`: `struct spy::ModuleHost { Dispatcher* dispatcher = nullptr; const char* backend = "game"; std::function<std::string()> config_json; std::function<void(const std::string&, const std::string&)> log; FakeBackend* fake = nullptr; }`, `void spy::InstallModuleHost(ModuleHost)` (call before the module is imported), `void spy::DefineModule(pybind11::module_&)`. Task 26 compiles `pymodule.cpp` into the plugin core with `PYBIND11_MODULE(_skyrim, m) { spy::DefineModule(m); }` and registers `PyInit__skyrim` with `PyImport_AppendInittab`.
-  - The Python-visible `_skyrim` API exactly as in the index Contracts: `BACKEND`, `PROTOCOL`, `submit`, `wait`, `wait_any`, `cancel`, `call`, `state`, `config`, `log`, `in_flight`; fake build only `_fake_set_not_ready`, `_fake_bump_loads`, `_fake_set_paused`.
-  - A built module at `pyglue/build/_skyrim.cpython-314-x86_64-linux-gnu.so`. The Python package tests (Tasks 21-24) use the pure-Python stand-in `python/tests/fake_skyrim.py` (Task 21) instead, so they need no C++ build; this module is what that stand-in imitates.
+  - `pyglue/include/spy/pymodule.h`: `struct spy::ModuleHost { Dispatcher* dispatcher = nullptr; const char* backend = "game"; std::function<std::string()> config_json; std::function<void(const std::string&, const std::string&)> log; FakeBackend* fake = nullptr; }`, `void spy::InstallModuleHost(ModuleHost)` (call before the module is imported), `void spy::DefineModule(pybind11::module_&)`. Task 26 compiles `pymodule.cpp` into the plugin core with `PYBIND11_MODULE(_skython, m) { spy::DefineModule(m); }` and registers `PyInit__skython` with `PyImport_AppendInittab`.
+  - The Python-visible `_skython` API exactly as in the index Contracts: `BACKEND`, `PROTOCOL`, `submit`, `wait`, `wait_any`, `cancel`, `call`, `state`, `config`, `log`, `in_flight`; fake build only `_fake_set_not_ready`, `_fake_bump_loads`, `_fake_set_paused`.
+  - A built module at `pyglue/build/_skython.cpython-314-x86_64-linux-gnu.so`. The Python package tests (Tasks 21-24) use the pure-Python stand-in `python/tests/fake_skython.py` (Task 21) instead, so they need no C++ build; this module is what that stand-in imitates.
 
 - [ ] **Step 1: Write the failing tests**
 
 `pyglue/tests/conftest.py`:
 ```python
-"""Shared setup for the _skyrim module tests (Task 19).
+"""Shared setup for the _skython module tests (Task 19).
 
 The module under test is the real C++ extension, built by pyglue/linux/CMakeLists.txt against uv's CPython 3.14 with
-the fake backend. Its build directory goes on sys.path; SKYRIM_PYGLUE_BUILD overrides where it is.
+the fake backend. Its build directory goes on sys.path; SKYTHON_PYGLUE_BUILD overrides where it is.
 """
 import json
 import os
@@ -43,14 +43,14 @@ import tempfile
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-BUILD = pathlib.Path(os.environ.get("SKYRIM_PYGLUE_BUILD", ROOT / "pyglue" / "build"))
+BUILD = pathlib.Path(os.environ.get("SKYTHON_PYGLUE_BUILD", ROOT / "pyglue" / "build"))
 sys.path.insert(0, str(BUILD))
 
-# _skyrim.config() and _skyrim.log() use this folder; set it before the first import.
-FAKE_DIR = pathlib.Path(tempfile.mkdtemp(prefix="skyrim-fake-"))
-os.environ["SKYRIM_FAKE_DIR"] = str(FAKE_DIR)
+# _skython.config() and _skython.log() use this folder; set it before the first import.
+FAKE_DIR = pathlib.Path(tempfile.mkdtemp(prefix="skython-fake-"))
+os.environ["SKYTHON_FAKE_DIR"] = str(FAKE_DIR)
 
-import _skyrim  # noqa: E402  (needs the path above)
+import _skython  # noqa: E402  (needs the path above)
 
 
 def request(req_id, function, *args, op="papyrus.call_static", **extra):
@@ -77,16 +77,16 @@ def code(r):
 @pytest.fixture(autouse=True)
 def ready_game():
     """Every test starts and ends with a ready, unpaused fake game."""
-    _skyrim._fake_set_not_ready(None)
-    _skyrim._fake_set_paused(False)
+    _skython._fake_set_not_ready(None)
+    _skython._fake_set_paused(False)
     yield
-    _skyrim._fake_set_not_ready(None)
-    _skyrim._fake_set_paused(False)
+    _skython._fake_set_not_ready(None)
+    _skython._fake_set_paused(False)
 ```
 
 `pyglue/tests/test_module.py`:
 ```python
-"""The _skyrim module API (index Contracts), against the fake backend."""
+"""The _skython module API (index Contracts), against the fake backend."""
 import json
 import math
 import os
@@ -96,139 +96,139 @@ import time
 
 import pytest
 
-import _skyrim
+import _skython
 from conftest import BUILD, FAKE_DIR, code, request, response
 
 
 def test_surface():
-    assert _skyrim.BACKEND == "fake"
-    assert _skyrim.PROTOCOL == (1, 0)
+    assert _skython.BACKEND == "fake"
+    assert _skython.PROTOCOL == (1, 0)
     for name in ("submit", "wait", "wait_any", "cancel", "call", "state", "config", "log", "in_flight",
                  "_fake_set_not_ready", "_fake_bump_loads", "_fake_set_paused"):
-        assert callable(getattr(_skyrim, name)), name
+        assert callable(getattr(_skython, name)), name
 
 
 def test_call_round_trip():
-    r = response(_skyrim.call(request(1, "Echo", "hello"), 5.0))
+    r = response(_skython.call(request(1, "Echo", "hello"), 5.0))
     assert r == {"type": "response", "id": 1, "ok": True, "result": "hello"}
     form = {"kind": "form", "form_id": 20}
-    assert response(_skyrim.call(request(2, "Echo", form), 5.0))["result"] == form
+    assert response(_skython.call(request(2, "Echo", form), 5.0))["result"] == form
 
 
 def test_wait_returns_none_until_done_then_the_result_once():
-    t = _skyrim.submit(request(3, "Sleep", 300))
+    t = _skython.submit(request(3, "Sleep", 300))
     assert isinstance(t, int)
-    assert _skyrim.wait(t, 0.05) is None
-    assert response(_skyrim.wait(t, 5.0))["result"] == 300
-    assert _skyrim.wait(t, 0.01) is None  # consumed
+    assert _skython.wait(t, 0.05) is None
+    assert response(_skython.wait(t, 5.0))["result"] == 300
+    assert _skython.wait(t, 0.01) is None  # consumed
 
 
 def test_wait_any_returns_only_the_finished_ones():
-    slow = _skyrim.submit(request(4, "Sleep", 2000))
-    fast = _skyrim.submit(request(5, "Echo", 5))
-    got = _skyrim.wait_any([slow, fast], 5.0)
+    slow = _skython.submit(request(4, "Sleep", 2000))
+    fast = _skython.submit(request(5, "Echo", 5))
+    got = _skython.wait_any([slow, fast], 5.0)
     assert [t for t, _ in got] == [fast]
     assert response(got[0][1])["id"] == 5
-    assert _skyrim.wait_any([slow], 0.01) == []
-    _skyrim.cancel(slow)
-    assert _skyrim.wait_any([], 0.01) == []
+    assert _skython.wait_any([slow], 0.01) == []
+    _skython.cancel(slow)
+    assert _skython.wait_any([], 0.01) == []
 
 
 def test_cancel_frees_the_slot_and_the_ticket():
-    before = _skyrim.in_flight()
-    t = _skyrim.submit(request(6, "Never"))
-    assert _skyrim.in_flight() == before + 1
-    _skyrim.cancel(t)
-    assert _skyrim.in_flight() == before
-    assert _skyrim.wait(t, 0.05) is None
-    _skyrim.cancel(t)  # twice is harmless
+    before = _skython.in_flight()
+    t = _skython.submit(request(6, "Never"))
+    assert _skython.in_flight() == before + 1
+    _skython.cancel(t)
+    assert _skython.in_flight() == before
+    assert _skython.wait(t, 0.05) is None
+    _skython.cancel(t)  # twice is harmless
 
 
 def test_call_whose_wait_expires_is_a_timeout_with_late_cancel():
-    before = _skyrim.in_flight()
+    before = _skython.in_flight()
     start = time.monotonic()
-    r = response(_skyrim.call(request(7, "Never", timeout_ms=60000), 0.2))
+    r = response(_skython.call(request(7, "Never", timeout_ms=60000), 0.2))
     assert 0.15 < time.monotonic() - start < 2.0
     assert r["id"] == 7
     assert code(r) == "timeout"
     assert "no response within 0.2 s" in r["error"]["message"]
     assert r["error"]["detail"]["late_cancel"] is True
     assert {"paused", "menus"} <= set(r["error"]["detail"])
-    assert _skyrim.in_flight() == before
+    assert _skython.in_flight() == before
 
 
 def test_the_dispatcher_times_out_a_call_by_its_timeout_ms():
-    r = response(_skyrim.call(request(8, "Never", timeout_ms=100), 5.0))
+    r = response(_skython.call(request(8, "Never", timeout_ms=100), 5.0))
     assert code(r) == "timeout"
     assert "late_cancel" not in r["error"]["detail"]
     assert {"paused", "menus"} <= set(r["error"]["detail"])
 
 
 def test_not_ready_answers_at_once_but_game_state_still_works():
-    _skyrim._fake_set_not_ready("loading")
+    _skython._fake_set_not_ready("loading")
     start = time.monotonic()
-    r = response(_skyrim.call(request(9, "Echo", 1), 5.0))
+    r = response(_skython.call(request(9, "Echo", 1), 5.0))
     assert time.monotonic() - start < 1.0
     assert code(r) == "not_ready"
     assert r["error"]["detail"]["reason"] == "loading"
-    s = response(_skyrim.call(json.dumps({"type": "request", "id": 10, "op": "game.state", "args": {}}), 5.0))
+    s = response(_skython.call(json.dumps({"type": "request", "id": 10, "op": "game.state", "args": {}}), 5.0))
     assert s["ok"] and s["result"]["backend"] == "fake" and s["result"]["loading"] is True
-    _skyrim._fake_set_not_ready(None)
-    assert code(response(_skyrim.call(request(11, "Echo", 1), 5.0))) == "ok"
+    _skython._fake_set_not_ready(None)
+    assert code(response(_skython.call(request(11, "Echo", 1), 5.0))) == "ok"
 
 
 def test_paused_only_refuses_calls_that_require_unpaused():
-    _skyrim._fake_set_paused(True)
-    r = response(_skyrim.call(request(12, "Echo", 1, require_unpaused=True), 5.0))
+    _skython._fake_set_paused(True)
+    r = response(_skython.call(request(12, "Echo", 1, require_unpaused=True), 5.0))
     assert code(r) == "not_ready" and r["error"]["detail"]["reason"] == "paused"
-    assert code(response(_skyrim.call(request(13, "Echo", 1), 5.0))) == "ok"
-    assert json.loads(_skyrim.state())["paused"] is True
+    assert code(response(_skython.call(request(13, "Echo", 1), 5.0))) == "ok"
+    assert json.loads(_skython.state())["paused"] is True
 
 
 def test_a_load_starting_ends_calls_in_flight():
-    t = _skyrim.submit(request(14, "Never"))
-    _skyrim._fake_bump_loads()
-    r = response(_skyrim.wait(t, 2.0))
+    t = _skython.submit(request(14, "Never"))
+    _skython._fake_bump_loads()
+    r = response(_skython.wait(t, 2.0))
     assert code(r) == "not_ready" and r["error"]["detail"]["reason"] == "loading"
     assert r["error"]["detail"]["dispatched"] is True  # it had reached the backend: not safe to resubmit
 
 
 def test_backend_exception_is_internal_and_errors_keep_their_codes():
-    assert code(response(_skyrim.call(request(15, "Throw"), 5.0))) == "internal"
-    r = response(_skyrim.call(request(16, "Fail", "vm_error", "no"), 5.0))
+    assert code(response(_skython.call(request(15, "Throw"), 5.0))) == "internal"
+    r = response(_skython.call(request(16, "Fail", "vm_error", "no"), 5.0))
     assert code(r) == "vm_error" and r["error"]["message"] == "no"
 
 
 def test_bad_request_text_is_bad_request_not_an_exception():
-    r = response(_skyrim.call("this is not json", 5.0))
+    r = response(_skython.call("this is not json", 5.0))
     assert code(r) == "bad_request" and r["id"] == 0
-    r = response(_skyrim.call(json.dumps({"type": "request", "id": 17, "op": "nope", "args": {}}), 5.0))
+    r = response(_skython.call(json.dumps({"type": "request", "id": 17, "op": "nope", "args": {}}), 5.0))
     assert code(r) == "bad_request" and r["id"] == 17
 
 
 @pytest.mark.parametrize("bad", [-1.0, math.nan])
 def test_bad_timeouts_are_value_errors(bad):
     with pytest.raises(ValueError):
-        _skyrim.wait(1, bad)
+        _skython.wait(1, bad)
     with pytest.raises(ValueError):
-        _skyrim.call(request(18, "Echo", 1), bad)
+        _skython.call(request(18, "Echo", 1), bad)
 
 
 def test_wrong_argument_types_are_type_errors():
     with pytest.raises(TypeError):
-        _skyrim.submit(42)
+        _skython.submit(42)
     with pytest.raises(TypeError):
-        _skyrim.wait(-1, 1.0)
+        _skython.wait(-1, 1.0)
 
 
 def test_state_is_the_base_state():
-    s = json.loads(_skyrim.state())
+    s = json.loads(_skython.state())
     assert set(s) == {"data_ready", "game_loaded", "loading", "interactive", "paused", "menus", "epoch"}
 
 
 def test_config_has_the_ini_fields_and_the_fake_paths(monkeypatch):
-    monkeypatch.setenv("SKYRIM_FAKE_INI", "bridge_enabled = true\nport = 0\n")
-    c = json.loads(_skyrim.config())
+    monkeypatch.setenv("SKYTHON_FAKE_INI", "bridge_enabled = true\nport = 0\n")
+    c = json.loads(_skython.config())
     assert c["bridge_enabled"] is True and c["port"] == 0
     assert c["python_enabled"] is True and c["default_timeout_ms"] == 5000
     assert (c["plugin_version"], c["game_version"], c["runtime"]) == ("0.0.0-fake", "0.0.0", "fake")
@@ -238,8 +238,8 @@ def test_config_has_the_ini_fields_and_the_fake_paths(monkeypatch):
 
 
 def test_log_appends_to_the_fake_plugin_log():
-    _skyrim.log("info", "hello from the test")
-    log_dir = json.loads(_skyrim.config())["log_dir"]
+    _skython.log("info", "hello from the test")
+    log_dir = json.loads(_skython.config())["log_dir"]
     with open(os.path.join(log_dir, "plugin.log"), encoding="utf-8") as f:
         assert "info hello from the test" in f.read()
 
@@ -249,13 +249,13 @@ def test_busy_cap_from_the_fake_ini():
     code_text = (
         "import json, sys\n"
         f"sys.path.insert(0, {str(BUILD)!r})\n"
-        "import _skyrim\n"
+        "import _skython\n"
         "req = lambda i: json.dumps({'type': 'request', 'id': i, 'op': 'papyrus.call_static',"
         " 'args': {'script': 'Fake', 'function': 'Never', 'args': []}})\n"
-        "a, b = _skyrim.submit(req(1)), _skyrim.submit(req(2))\n"
-        "print(json.loads(_skyrim.call(req(3), 5.0))['error']['code'])\n"
+        "a, b = _skython.submit(req(1)), _skython.submit(req(2))\n"
+        "print(json.loads(_skython.call(req(3), 5.0))['error']['code'])\n"
     )
-    env = dict(os.environ, SKYRIM_FAKE_INI="max_inflight_total = 2\n")
+    env = dict(os.environ, SKYTHON_FAKE_INI="max_inflight_total = 2\n")
     out = subprocess.run([sys.executable, "-c", code_text], env=env, capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "busy"
@@ -265,21 +265,21 @@ def test_busy_cap_from_the_fake_ini():
 
 `pyglue/tests/test_threads.py`:
 ```python
-"""The GIL is released while _skyrim waits, and many Python threads can call at once (Review Focus 6)."""
+"""The GIL is released while _skython waits, and many Python threads can call at once (Review Focus 6)."""
 import threading
 import time
 
 import pytest
 
-import _skyrim
+import _skython
 from conftest import request, response
 
 # The three functions that wait for the game. The bridge's completion thread sits in wait_any for the life of every
 # connection, so each one must release the GIL, not only call.
 WAITERS = {
-    "call": lambda text: _skyrim.call(text, 5.0),
-    "wait": lambda text: _skyrim.wait(_skyrim.submit(text), 5.0),
-    "wait_any": lambda text: _skyrim.wait_any([_skyrim.submit(text)], 5.0)[0][1],
+    "call": lambda text: _skython.call(text, 5.0),
+    "wait": lambda text: _skython.wait(_skython.submit(text), 5.0),
+    "wait_any": lambda text: _skython.wait_any([_skython.submit(text)], 5.0)[0][1],
 }
 
 
@@ -310,15 +310,15 @@ def test_other_python_threads_run_while_a_call_waits(waiter):
 
 def test_cancel_while_another_thread_waits_on_the_same_tickets():
     # The bridge's pattern: a completion thread polls wait_any while a disconnect cancels the same tickets.
-    before = _skyrim.in_flight()
-    tickets = [_skyrim.submit(request(100 + i, "Sleep", 100)) for i in range(50)]
+    before = _skython.in_flight()
+    tickets = [_skython.submit(request(100 + i, "Sleep", 100)) for i in range(50)]
     cancelled = threading.Event()
     problems = []
 
     def poller():
         try:
             while True:
-                got = _skyrim.wait_any(tickets, 0.05)
+                got = _skython.wait_any(tickets, 0.05)
                 if cancelled.is_set() and not got:
                     return
         except Exception as e:  # noqa: BLE001 - report everything from the thread
@@ -327,12 +327,12 @@ def test_cancel_while_another_thread_waits_on_the_same_tickets():
     t = threading.Thread(target=poller)
     t.start()
     for ticket in tickets:
-        _skyrim.cancel(ticket)
+        _skython.cancel(ticket)
     cancelled.set()
     t.join(1.0)
     assert not t.is_alive()
     assert problems == []
-    assert _skyrim.in_flight() == before
+    assert _skython.in_flight() == before
 
 
 def test_sixteen_threads_two_hundred_calls_each():
@@ -342,7 +342,7 @@ def test_sixteen_threads_two_hundred_calls_each():
         try:
             for k in range(200):
                 value = n * 1000 + k
-                r = response(_skyrim.call(request(value, "Echo", value), 10.0))
+                r = response(_skython.call(request(value, "Echo", value), 10.0))
                 if r["id"] != value or r["result"] != value:
                     errors.append((n, k, r))
         except Exception as e:  # noqa: BLE001 - report everything from the thread
@@ -355,13 +355,13 @@ def test_sixteen_threads_two_hundred_calls_each():
         t.join(60)
     assert not any(t.is_alive() for t in threads)
     assert errors == []
-    assert _skyrim.in_flight() == 0
+    assert _skython.in_flight() == 0
 ```
 
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `uv run --no-project --python 3.14 --with pytest python -m pytest pyglue/tests -q 2>&1 | tail -2`
-Expected: FAIL, `E   ModuleNotFoundError: No module named '_skyrim'` (from `conftest.py`).
+Expected: FAIL, `E   ModuleNotFoundError: No module named '_skython'` (from `conftest.py`).
 
 - [ ] **Step 3: Write the module**
 
@@ -375,19 +375,19 @@ Expected: FAIL, `E   ModuleNotFoundError: No module named '_skyrim'` (from `conf
 #include <pybind11/pybind11.h>
 
 namespace spy {
-// What the _skyrim module talks to. The game build (plugin core, Tasks 26-27) and the Linux fake build
+// What the _skython module talks to. The game build (plugin core, Tasks 26-27) and the Linux fake build
 // (pyglue/linux/fake_module.cpp) each fill one in and call InstallModuleHost before the module is imported.
 struct ModuleHost
 {
     Dispatcher* dispatcher = nullptr;
-    const char* backend = "game";                                               // _skyrim.BACKEND
-    std::function<std::string()> config_json;                                   // _skyrim.config()
-    std::function<void(const std::string& level, const std::string& msg)> log;  // _skyrim.log()
+    const char* backend = "game";                                               // _skython.BACKEND
+    std::function<std::string()> config_json;                                   // _skython.config()
+    std::function<void(const std::string& level, const std::string& msg)> log;  // _skython.log()
     FakeBackend* fake = nullptr;  // set only by the fake build: adds the _fake_* controls
 };
 
 void InstallModuleHost(ModuleHost host);
-// Defines every _skyrim function on `m`. Only strings, numbers and None cross the boundary; every call that can
+// Defines every _skython function on `m`. Only strings, numbers and None cross the boundary; every call that can
 // wait releases the GIL; a C++ exception reaches Python as a Python exception (ValueError, TypeError, RuntimeError).
 void DefineModule(pybind11::module_& m);
 }
@@ -417,7 +417,7 @@ ModuleHost& Host()
 
 Dispatcher& Disp()
 {
-    if (Host().dispatcher == nullptr) throw std::runtime_error("_skyrim: no dispatcher installed (InstallModuleHost was not called)");
+    if (Host().dispatcher == nullptr) throw std::runtime_error("_skython: no dispatcher installed (InstallModuleHost was not called)");
     return *Host().dispatcher;
 }
 
@@ -457,7 +457,7 @@ void InstallModuleHost(ModuleHost host)
 void DefineModule(py::module_& m)
 {
     const ModuleHost& h = Host();
-    m.doc() = "skyrim-python's boundary between Python and the game: request and response JSON text (spec 4.2).";
+    m.doc() = "Skython's boundary between Python and the game: request and response JSON text (spec 4.2).";
     m.attr("BACKEND") = std::string(h.backend != nullptr ? h.backend : "game");
     m.attr("PROTOCOL") = py::make_tuple(kProtocolMajor, kProtocolMinor);
 
@@ -510,10 +510,10 @@ void DefineModule(py::module_& m)
 
 `pyglue/linux/fake_module.cpp`:
 ```cpp
-// The Linux build of _skyrim: the real module code (pyglue/src/pymodule.cpp) over core's FakeBackend.
+// The Linux build of _skython: the real module code (pyglue/src/pymodule.cpp) over core's FakeBackend.
 // Environment, read by the tests:
-//   SKYRIM_FAKE_DIR  folder for config()'s paths and the log (default: <temp>/skyrim-fake)
-//   SKYRIM_FAKE_INI  ini text parsed like SkyrimPython.ini; read by config() on every call, and once at import for the
+//   SKYTHON_FAKE_DIR  folder for config()'s paths and the log (default: <temp>/skyrim-fake)
+//   SKYTHON_FAKE_INI  ini text parsed like Skython.ini; read by config() on every call, and once at import for the
 //                    dispatcher's default_timeout_ms and max_inflight_total
 #include "spy/config.h"
 #include "spy/pymodule.h"
@@ -533,18 +533,18 @@ std::string Env(const char* name)
 
 fs::path BaseDir()
 {
-    const std::string d = Env("SKYRIM_FAKE_DIR");
-    return d.empty() ? fs::temp_directory_path() / "skyrim-fake" : fs::path(d);
+    const std::string d = Env("SKYTHON_FAKE_DIR");
+    return d.empty() ? fs::temp_directory_path() / "skython-fake" : fs::path(d);
 }
 
-spy::Config FakeConfig() { return spy::parse_config(Env("SKYRIM_FAKE_INI")); }
+spy::Config FakeConfig() { return spy::parse_config(Env("SKYTHON_FAKE_INI")); }
 
 std::string ConfigJson()
 {
     const spy::Config cfg = FakeConfig();
     spy::json j = spy::config_to_json(cfg);
     const fs::path base = BaseDir();
-    const fs::path logs = base / "logs";  // holds python.log and session.json, like .../SKSE/SkyrimPython/ in the game
+    const fs::path logs = base / "logs";  // holds python.log and session.json, like .../SKSE/Skython/ in the game
     j["python_dir"] = (base / "python").string();
     j["scripts_dir"] = (base / "scripts").string();
     j["site_packages_dir"] = (base / "site-packages").string();
@@ -567,7 +567,7 @@ void Log(const std::string& level, const std::string& message)
 }
 }
 
-PYBIND11_MODULE(_skyrim, m)
+PYBIND11_MODULE(_skython, m)
 {
     // Leaked on purpose: the fake's worker and the dispatcher's reaper live until the process exits, as in the game,
     // which never finalises Python. Destroying them during interpreter shutdown would join threads at a bad time.
@@ -585,10 +585,10 @@ PYBIND11_MODULE(_skyrim, m)
 
 `pyglue/linux/CMakeLists.txt`:
 ```cmake
-# Linux build of the _skyrim extension module with the fake backend (Task 19). The game build of the same module
+# Linux build of the _skython extension module with the fake backend (Task 19). The game build of the same module
 # source is part of the plugin core (Task 26).
 cmake_minimum_required(VERSION 3.21)
-project(skyrim_pyglue_linux LANGUAGES CXX)
+project(skython_pyglue_linux LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
@@ -598,18 +598,18 @@ find_package(Python 3.14 REQUIRED COMPONENTS Interpreter Development.Module)
 set(SPY_CORE_TESTS OFF CACHE BOOL "core unit tests are built from core/ itself" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../core ${CMAKE_CURRENT_BINARY_DIR}/core)
 
-Python_add_library(_skyrim MODULE WITH_SOABI ../src/pymodule.cpp fake_module.cpp)
-target_include_directories(_skyrim PRIVATE
+Python_add_library(_skython MODULE WITH_SOABI ../src/pymodule.cpp fake_module.cpp)
+target_include_directories(_skython PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/pybind11/include)
-target_link_libraries(_skyrim PRIVATE spy_core)
-set_target_properties(_skyrim PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
+target_link_libraries(_skython PRIVATE spy_core)
+set_target_properties(_skython PROPERTIES CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN ON)
 ```
 
 - [ ] **Step 5: Build the module**
 
 Run: `cmake -S pyglue/linux -B pyglue/build -DCMAKE_BUILD_TYPE=Release -DPython_EXECUTABLE="$(uv python find 3.14)" | grep "Found Python" && cmake --build pyglue/build -j 2>&1 | tail -1 && ls pyglue/build/*.so`
-Expected: `-- Found Python: .../cpython-3.14.../bin/python3.14 (found suitable version "3.14.x", minimum required is "3.14") found components: Interpreter Development.Module`, then `[100%] Built target _skyrim` and `pyglue/build/_skyrim.cpython-314-x86_64-linux-gnu.so`. (The configure also builds `spy_core` from `core/`, with its unit tests switched off; they run from `core/build` as before.)
+Expected: `-- Found Python: .../cpython-3.14.../bin/python3.14 (found suitable version "3.14.x", minimum required is "3.14") found components: Interpreter Development.Module`, then `[100%] Built target _skython` and `pyglue/build/_skython.cpython-314-x86_64-linux-gnu.so`. (The configure also builds `spy_core` from `core/`, with its unit tests switched off; they run from `core/build` as before.)
 
 - [ ] **Step 6: Run to verify it passes**
 
@@ -625,5 +625,5 @@ Expected: `0`. (`pyglue/build/warn/` sits inside the ignored build directory, li
 git status --short pyglue        # only the seven files below; no build directories
 git add pyglue/include/spy/pymodule.h pyglue/src/pymodule.cpp pyglue/linux/CMakeLists.txt pyglue/linux/fake_module.cpp \
         pyglue/tests/conftest.py pyglue/tests/test_module.py pyglue/tests/test_threads.py
-git commit -m "feat(pyglue): _skyrim module over the dispatcher, Linux build with the fake backend"
+git commit -m "feat(pyglue): _skython module over the dispatcher, Linux build with the fake backend"
 ```

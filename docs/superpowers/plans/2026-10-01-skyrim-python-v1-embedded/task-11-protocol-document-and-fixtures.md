@@ -2,11 +2,11 @@
 
 Adapted from: branch `plan-out-of-process`, task 7 (`task-07-protocol-v1-document-and-golden-fixtures.md`).
 
-> Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.2-4.4). Steps use checkbox (`- [ ]`) syntax for tracking.
+> Part of the [Skython v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, sections 4.2-4.4). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Depends on:** nothing; this Linux task may run in parallel with the M0 spikes. **Task 12 depends on this task** (it generates `protocol/PROTOCOL.generated.md`, which the document below links, and its tests read these fixtures); Tasks 13-24 depend on Task 12.
 
-**What changed from the out-of-process plan.** The message format is unchanged, but it now serves two modes: in-process, the `skyrim` package hands request text to the built-in `_skyrim` module; over the dev bridge, the Python bridge server (Task 23) forwards the same text from a TCP connection. Framing, handshake, token and session file are therefore described as dev-bridge-only. New rules: ops that need a game answer `not_ready` at once (with `detail.reason`, `detail.paused`, `detail.menus`); a call in flight when a save starts loading ends with `not_ready`; `timeout` may carry `detail.late_cancel`; arrays hold at most the `max_array_items` limit (128) items, with a fixture on each side of it; request ids are checked for duplicates per bridge connection only.
+**What changed from the out-of-process plan.** The message format is unchanged, but it now serves two modes: in-process, the `skython` package hands request text to the built-in `_skython` module; over the dev bridge, the Python bridge server (Task 23) forwards the same text from a TCP connection. Framing, handshake, token and session file are therefore described as dev-bridge-only. New rules: ops that need a game answer `not_ready` at once (with `detail.reason`, `detail.paused`, `detail.menus`); a call in flight when a save starts loading ends with `not_ready`; `timeout` may carry `detail.late_cancel`; arrays hold at most the `max_array_items` limit (128) items, with a fixture on each side of it; request ids are checked for duplicates per bridge connection only.
 
 **Files:**
 - Create: `protocol/PROTOCOL.md` (the rules in prose; every number, name and table lives in `protocol/PROTOCOL.generated.md`, generated in Task 12)
@@ -16,7 +16,7 @@ Adapted from: branch `plan-out-of-process`, task 7 (`task-07-protocol-v1-documen
 - Produces: `protocol/PROTOCOL.md`, which links `protocol/PROTOCOL.generated.md` (created by Task 12; until then the link dangles) and says "the `max_frame_bytes` limit" wherever it means a number. Task 12's test fails if this file repeats a limit's value (32 or more) or carries its own error-code table, so a number can live in `protocol.json` only.
 - Produces: fixture files with the exact JSON shapes below, loaded from `protocol/v1/fixtures/` by:
   - C++ (core): Task 14 (`values.json`), Task 15 (`form_keys.json`), Task 16 (`requests.json`, `responses.json`, the fixture sweep), Task 18 (replays `requests.json` through `FakeBackend`, optional).
-  - Python: Task 20 (`values.json`, `form_keys.json`, `responses.json`, agreement tests), Task 22 (`skyrim.remote` replays `hello.json`, `requests.json`, `responses.json`), Task 23 (the bridge server checks every `hello.json` `invalid` entry and every `check` case).
+  - Python: Task 20 (`values.json`, `form_keys.json`, `responses.json`, agreement tests), Task 22 (`skython.remote` replays `hello.json`, `requests.json`, `responses.json`), Task 23 (the bridge server checks every `hello.json` `invalid` entry and every `check` case).
   - Fixture file format: every file is an object with `"valid"` and/or `"invalid"` arrays. Additive keys (readers that do not know them must ignore them): in `values.json`, a `valid` entry may carry `"canonical"`, the exact JSON the plugin must emit for `wire` when that differs from `wire` (for example `1` in a Float array is emitted as `1.0`); in `hello.json`, a top-level `"check"` array of `{"name","hello","expected_token","result"}` cases for the token-then-major check order (the bridge's hello check, Task 23).
   - C++ compares serialised text, not `json ==`, so `1` and `1.0` are different values; a reader in any language must compare type as well as value for numbers.
 - **Decision: the protocol artifact is these fixtures plus `PROTOCOL.md`; there are no JSON Schema files in v1** (spec 4.2 says "exact shapes and golden fixtures live in `protocol/`").
@@ -25,14 +25,14 @@ Adapted from: branch `plan-out-of-process`, task 7 (`task-07-protocol-v1-documen
 
 `protocol/PROTOCOL.md`:
 ````markdown
-# skyrim-python protocol v1
+# Skython protocol v1
 
 Every number and name below is in [PROTOCOL.generated.md](PROTOCOL.generated.md), which is generated from `protocol.json` (error codes, ops and their arguments, limits, defaults). This file explains the rules and says "the `max_frame_bytes` limit" where it means a number. If this text and a generated table seem to disagree, the table is right: report the sentence here.
 
 ## Two modes, one message format
 The same request and response objects are used in both modes:
-- **In-process** (a Python script running inside the game): the `skyrim` package serialises a request object to JSON text and hands it to the built-in `_skyrim` module (`_skyrim.call` or `_skyrim.submit`); it gets the response object back as JSON text. There is no framing, handshake or token.
-- **Dev bridge** (an external process, development only): a Python server inside the game (`skyrim.bridge`) accepts TCP connections, checks the handshake below, and forwards each request text unchanged to `_skyrim`; the response text comes back unchanged in a frame. The client is `skyrim.remote`.
+- **In-process** (a Python script running inside the game): the `skython` package serialises a request object to JSON text and hands it to the built-in `_skython` module (`_skython.call` or `_skython.submit`); it gets the response object back as JSON text. There is no framing, handshake or token.
+- **Dev bridge** (an external process, development only): a Python server inside the game (`skython.bridge`) accepts TCP connections, checks the handshake below, and forwards each request text unchanged to `_skython`; the response text comes back unchanged in a frame. The client is `skython.remote`.
 
 So the C++ request parser, op-argument checks and response builders serve both modes, and the golden fixtures in `v1/fixtures/` pin both.
 
@@ -55,7 +55,7 @@ The bridge writes a session file (fields in the generated Discovery table) so a 
 `{"type":"request","id":<uint64>,"op":"<op>","args":{...}}`
 `{"type":"response","id":<same>,"ok":true,"result":<value or object>}`
 `{"type":"response","id":<same>,"ok":false,"error":{"code":"<code>","message":"...","detail":{...}}}`
-Responses may arrive in any order. On a bridge connection, a request whose id is still in flight on that connection is refused with `bad_request`; in-process, the `skyrim` package numbers its own requests and the plugin does not check ids. A request whose text cannot be parsed gets an error response with the id read from the text when one can be found, else id 0. Error messages are truncated to `max_error_message_bytes` and never echo a whole request, so a response cannot exceed the frame limit. Every field of the wrong JSON type (`{"type":5}`, `"op":5`, `"kind":5`, `"client":5`) is `bad_request`; the plugin never answers with anything but a typed error. The error codes and what each means are in the generated tables.
+Responses may arrive in any order. On a bridge connection, a request whose id is still in flight on that connection is refused with `bad_request`; in-process, the `skython` package numbers its own requests and the plugin does not check ids. A request whose text cannot be parsed gets an error response with the id read from the text when one can be found, else id 0. Error messages are truncated to `max_error_message_bytes` and never echo a whole request, so a response cannot exceed the frame limit. Every field of the wrong JSON type (`{"type":5}`, `"op":5`, `"kind":5`, `"client":5`) is `bad_request`; the plugin never answers with anything but a typed error. The error codes and what each means are in the generated tables.
 
 A `not_ready` error carries `detail.reason`, one of the reasons listed there, plus `detail.paused` and `detail.menus`. Ops marked as needing a game get `not_ready` at once, without waiting, while no game is loaded or a save is loading; `game.state` is always answered. When a save starts loading, every call still in flight that needs a game ends with `not_ready` (reason `loading`). A `timeout` error's detail also carries `detail.paused` and `detail.menus`, and may carry `detail.late_cancel: true`, meaning the caller stopped waiting before the plugin's own deadline; the call may still run in the game either way.
 
@@ -122,7 +122,7 @@ The ops, their arguments (names, types, which are required, defaults), whether t
     {"type": "request", "id": 4, "op": "form.resolve", "args": {"form_key": "Skyrim.esm|0x012EB7"}},
     {"type": "request", "id": 5, "op": "papyrus.batch", "args": {"calls": [{"op": "papyrus.call_static", "args": {"script": "Utility", "function": "RandomInt", "args": [1, 6]}}], "stop_on_error": true}},
     {"type": "request", "id": 18446744073709551615, "op": "game.state", "args": {}},
-    {"type": "request", "id": 30, "op": "papyrus.get_property", "args": {"object": {"kind": "form", "form_id": 83888128}, "script": "SkyrimPythonTestScript", "property": "Counter"}},
+    {"type": "request", "id": 30, "op": "papyrus.get_property", "args": {"object": {"kind": "form", "form_id": 83888128}, "script": "SkythonTestScript", "property": "Counter"}},
     {"type": "request", "id": 31, "op": "papyrus.set_property", "args": {"object": {"kind": "alias", "quest": {"kind": "form", "form_id": 83888128}, "alias_id": 0, "alias_type": "ReferenceAlias"}, "script": "ReferenceAlias", "property": "Tag", "value": 7}},
     {"type": "request", "id": 32, "op": "form.resolve", "args": {"editor_id": "IronSword"}},
     {"type": "request", "id": 33, "op": "form.resolve", "args": {"form_id": 20}}
@@ -160,7 +160,7 @@ The ops, their arguments (names, types, which are required, defaults), whether t
 }
 ```
 
-The `requests.json` fixtures include a valid request for every op (Task 12's coverage test fails for an op that no fixture exercises), and Task 22 replays them through `skyrim.remote`.
+The `requests.json` fixtures include a valid request for every op (Task 12's coverage test fails for an op that no fixture exercises), and Task 22 replays them through `skython.remote`.
 
 `values.json` has one long line on each side of the array limit: a valid `Int` array of exactly 128 items (0..127) and an invalid one of 129 items (0..128, `type_mismatch`). Task 12's limit test checks both lengths against `max_array_items`.
 
@@ -182,9 +182,9 @@ The `requests.json` fixtures include a valid request for every op (Task 12's cov
     {"wire": {"kind": "form", "form_id": 20, "form_key": "Skyrim.esm|0x000014", "type": "Actor", "epoch": 1}, "kind": "form"},
     {"wire": {"kind": "form", "form_id": 4278190082, "type": "ObjectReference", "epoch": 2, "fingerprint": {"base": "Skyrim.esm|0x012EB7", "type": "ObjectReference"}}, "kind": "form"},
     {"wire": {"kind": "form", "form_key": "Skyrim.esm|0x01A69F"}, "kind": "form"},
-    {"wire": {"kind": "form", "form_id": 83888128, "form_key": "SkyrimPythonTest.esp|0x000800"}, "kind": "form"},
+    {"wire": {"kind": "form", "form_id": 83888128, "form_key": "SkythonTest.esp|0x000800"}, "kind": "form"},
     {"wire": {"kind": "form", "form_id": 4261415612, "form_key": "Light Mod.esl|0x000ABC"}, "kind": "form"},
-    {"wire": {"kind": "alias", "quest": {"kind": "form", "form_id": 83888128, "form_key": "SkyrimPythonTest.esp|0x000800", "type": "Quest", "epoch": 1}, "alias_id": 0, "alias_type": "ReferenceAlias", "epoch": 1}, "kind": "alias"},
+    {"wire": {"kind": "alias", "quest": {"kind": "form", "form_id": 83888128, "form_key": "SkythonTest.esp|0x000800", "type": "Quest", "epoch": 1}, "alias_id": 0, "alias_type": "ReferenceAlias", "epoch": 1}, "kind": "alias"},
     {"wire": {"kind": "alias", "quest": {"kind": "form", "form_id": 83888128}, "alias_id": 2147483647, "alias_type": "LocationAlias"}, "kind": "alias"},
     {"wire": {"array": "Int", "items": [1, 2, 3]}, "kind": "array"},
     {"wire": {"array": "Float", "items": [1, 2.5]}, "canonical": {"array": "Float", "items": [1.0, 2.5]}, "kind": "array"},
@@ -231,7 +231,7 @@ The `requests.json` fixtures include a valid request for every op (Task 12's cov
     {"text": "Skyrim.esm|0x01A69F", "plugin": "Skyrim.esm", "local_id": 108191, "canonical": "Skyrim.esm|0x01A69F"},
     {"text": "Skyrim.esm|0x14", "plugin": "Skyrim.esm", "local_id": 20, "canonical": "Skyrim.esm|0x000014"},
     {"text": "Skyrim.esm|0xFFFFFF", "plugin": "Skyrim.esm", "local_id": 16777215, "canonical": "Skyrim.esm|0xFFFFFF"},
-    {"text": "SkyrimPythonTest.esp|0x000800", "plugin": "SkyrimPythonTest.esp", "local_id": 2048, "canonical": "SkyrimPythonTest.esp|0x000800"},
+    {"text": "SkythonTest.esp|0x000800", "plugin": "SkythonTest.esp", "local_id": 2048, "canonical": "SkythonTest.esp|0x000800"},
     {"text": "Light Mod.esl|0xabc", "plugin": "Light Mod.esl", "local_id": 2748, "canonical": "Light Mod.esl|0x000ABC"},
     {"text": "Light Mod.esl|0xFFF", "plugin": "Light Mod.esl", "local_id": 4095, "canonical": "Light Mod.esl|0x000FFF"}
   ],

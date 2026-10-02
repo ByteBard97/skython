@@ -2,7 +2,7 @@
 
 Adapted from: branch `plan-out-of-process`, task 17c (`task-17c-call-method-aliases-and-form-resolve.md`). The C++ is unchanged apart from task numbers (compiled and linked on the build box at the pin). Live tests run through the dev bridge.
 
-> Part of the [skyrim-python v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), sections 4.3-4.4. Steps use checkbox (`- [ ]`) syntax.
+> Part of the [Skython v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), sections 4.3-4.4. Steps use checkbox (`- [ ]`) syntax.
 
 > **Gate:** start only after Task 28 is done, **spike S7 has passed** (Task 9) and **spike S4 has passed** (Task 6), per `spikes/RESULTS.md`. S7's PASS must include the S7c row with **`bound_by_class_name=true` and `dispatch_ok=true`**: a quest's own attached script (a non-native class, spec 4.3) was found by `FindBoundObject(handle, "<AttachedScript>")` and both dispatch overloads worked on that bound object. That is not the whole gate: S7c's function (`GetAliases`) is a native inherited from `Quest`, so it does not show that a **Papyrus-bytecode member function declared on the script itself** dispatches. `ResolveTarget` relies on exactly that for every call on a mod's own script (skyrim-dm's `SetupContract` path), so this task's `test_own_script_bytecode_member_function` is the rest of the gate: it must pass before Task 30. **If S4 is FAIL, STOP and ask the owner**: aliases then depend on a pre-authored Papyrus helper from the M1.5 test ESP, which invalidates the alias code below; the non-alias half (`call_method` on forms, `form.resolve`) can still go ahead if the owner says so.
 >
@@ -191,7 +191,7 @@ def test_own_script_bytecode_member_function(game):
     assert game.call_method(quest, script, function) == first  # a side-effect-free getter answers the same twice
 
 ```
-Change the file's `from skyrim.values import Form` (Task 28) to `from skyrim.values import Alias, Form`, add `import os`, and import `log_text` from `support`. **Picking `SPY_OWN_*`:** a quest whose attached script is not a native class and not a `QF_` fragment script (S7c's `QF_TGTQ01Handler_001093E4` declares only `Fragment_N` functions, which run quest-stage code), declaring on itself a member function with **no parameters, no `native` keyword and no side effects** (it only returns a value). Confirm all three from that script's source (the mod's `.psc`, or a decompile of its `.pex`) and record the quest, script, function and source line in `spikes/RESULTS.md`. If no such function can be found among the loaded scripts, STOP and ask the owner (M1.5's test ESP will declare one). `SPY_PLAIN_*` is S7g's plain alias (quest `0x0010FDD5`, alias 0, on the S7 save `s4test`). No vanilla function takes an alias as a *parameter*, so the argument path (`ToVariable` with an `AliasRef` through `BindObject`) has no live test in this plan; M1.5's test ESP script declares one and gets the test. Record that in `spikes/RESULTS.md`.
+Change the file's `from skython.values import Form` (Task 28) to `from skython.values import Alias, Form`, add `import os`, and import `log_text` from `support`. **Picking `SPY_OWN_*`:** a quest whose attached script is not a native class and not a `QF_` fragment script (S7c's `QF_TGTQ01Handler_001093E4` declares only `Fragment_N` functions, which run quest-stage code), declaring on itself a member function with **no parameters, no `native` keyword and no side effects** (it only returns a value). Confirm all three from that script's source (the mod's `.psc`, or a decompile of its `.pex`) and record the quest, script, function and source line in `spikes/RESULTS.md`. If no such function can be found among the loaded scripts, STOP and ask the owner (M1.5's test ESP will declare one). `SPY_PLAIN_*` is S7g's plain alias (quest `0x0010FDD5`, alias 0, on the S7 save `s4test`). No vanilla function takes an alias as a *parameter*, so the argument path (`ToVariable` with an `AliasRef` through `BindObject`) has no live test in this plan; M1.5's test ESP script declares one and gets the test. Record that in `spikes/RESULTS.md`.
 
 - [ ] **Step 2: Alias support in `PapyrusValues.cpp`**
 
@@ -368,25 +368,25 @@ In `Run`, add before the `unsupported` fallthrough:
 
 The game runs on the Windows box ([Task 1c](task-01c-part-c-on-the-box.md)); waits count only this launch's log text.
 ```bash
-tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
-tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/remote_build.sh plugin Skython.dll && tools/remote_build.sh plugin SkythonCore.dll
+tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini
 tools/box/box_deploy.sh --package
 tools/box/box_launch.sh
-tools/box/box_wait_log.sh SkyrimPython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
+tools/box/box_wait_log.sh Skython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
 tools/box/box_session.sh up && source out/box-live.env
-tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
-SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_mainmenu.py -q -rs
+tools/box/box_wait_log.sh Skython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
+SKYTHON_LIVE=1 uv run --project python pytest livetest/test_m1_mainmenu.py -q -rs
 # Load (not Continue) the named save S4 recorded its values from (spikes/RESULTS.md, e.g. s4test): the most recent
 # save may be another one after Tasks 27-28, and the alias tests would then fail. Then Task 1b block B6.
 tools/box/box_console.sh "load <the S4 save>"
-tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: interactive = true" 300
+tools/box/box_wait_log.sh Skython.log "lifecycle: interactive = true" 300
 export SPY_S4_QUEST=0x... SPY_S4_ALIAS=... SPY_S4_REF=0x...   # from spikes/RESULTS.md; the alias tests skip when unset
 export SPY_PLAIN_QUEST=0x0010FDD5 SPY_PLAIN_ALIAS=0              # S7g's plain alias on s4test
 export SPY_OWN_QUEST=0x... SPY_OWN_SCRIPT=... SPY_OWN_FUNCTION=...   # picked in Step 1; the gate test skips when unset
-SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_calls.py -q -rs -s
+SKYTHON_LIVE=1 uv run --project python pytest livetest/test_m1_calls.py -q -rs -s
 tools/box/box_quit.sh     # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh (Task 1b Known issue)
 ```
-Expected: `test_m1_mainmenu.py` passes; everything in `test_m1_calls.py` passes. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. The alias tests are skipped with a message when the `SPY_S4_*` (or `SPY_PLAIN_*`) variables are unset, and the gate test when `SPY_OWN_*` is unset; a skip is not a pass, so run them once with the variables set before committing. If S4 failed, STOP (see the gate) rather than marking them `xfail`. **If `test_form_argument_arrives` fails (the count does not change) or crashes the game, STOP**: form arguments do not reach the game as the form (the `PackHandle`/`BindObject` route S7 recorded differs from Task 28's code); do not go on to Task 30. If `test_alias_result_is_an_alias_not_its_quest` gets a Quest back (alias 0 is the likely case: its handle equals the quest's FormID), the form check in `ObjectToJson` (Task 28) accepted an alias handle, contrary to S7g: STOP and ask the owner; do not swap the order without a ruling. Record `test_quest_result_is_a_quest_not_an_alias`'s printed line (run with `-s`) in `spikes/RESULTS.md`. If `test_skse_native_with_form_argument` fails, check whether `IsEquipped` simply lags (raise the sleep once) before concluding the form did not arrive. `test_own_script_bytecode_member_function` and the alias tests must run (not skip) before commit; a failure of the first is a STOP (gate). If `test_method_call_on_cold_base_form` crashes or fails with `vm_error`, the `PackHandle` route differs from S7's record: STOP.
+Expected: `test_m1_mainmenu.py` passes; everything in `test_m1_calls.py` passes. Any skip whose reason is `live test: set SKYTHON_LIVE=1` is a failure. The alias tests are skipped with a message when the `SPY_S4_*` (or `SPY_PLAIN_*`) variables are unset, and the gate test when `SPY_OWN_*` is unset; a skip is not a pass, so run them once with the variables set before committing. If S4 failed, STOP (see the gate) rather than marking them `xfail`. **If `test_form_argument_arrives` fails (the count does not change) or crashes the game, STOP**: form arguments do not reach the game as the form (the `PackHandle`/`BindObject` route S7 recorded differs from Task 28's code); do not go on to Task 30. If `test_alias_result_is_an_alias_not_its_quest` gets a Quest back (alias 0 is the likely case: its handle equals the quest's FormID), the form check in `ObjectToJson` (Task 28) accepted an alias handle, contrary to S7g: STOP and ask the owner; do not swap the order without a ruling. Record `test_quest_result_is_a_quest_not_an_alias`'s printed line (run with `-s`) in `spikes/RESULTS.md`. If `test_skse_native_with_form_argument` fails, check whether `IsEquipped` simply lags (raise the sleep once) before concluding the form did not arrive. `test_own_script_bytecode_member_function` and the alias tests must run (not skip) before commit; a failure of the first is a STOP (gate). If `test_method_call_on_cold_base_form` crashes or fails with `vm_error`, the `PackHandle` route differs from S7's record: STOP.
 
 - [ ] **Step 5: Commit**
 

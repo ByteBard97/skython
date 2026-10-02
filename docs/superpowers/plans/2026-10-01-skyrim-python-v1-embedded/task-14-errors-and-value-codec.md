@@ -2,7 +2,7 @@
 
 Adapted from: branch `plan-out-of-process`, task 10 (`task-10-errors-and-the-value-codec.md`).
 
-> Part of the [skyrim-python v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, section 4.4). Steps use checkbox (`- [ ]`) syntax for tracking.
+> Part of the [Skython v1 plan](README.md). Before starting, read the plan index's **Global Constraints**, **File Structure** and **Contracts**; they apply to this task. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4, section 4.4). Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **Depends on:** Task 13 (and through it Tasks 0 and 12). Linux only; no game.
 
