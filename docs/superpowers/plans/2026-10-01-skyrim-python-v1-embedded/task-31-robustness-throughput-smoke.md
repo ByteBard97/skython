@@ -21,7 +21,7 @@ Adapted from: branch `plan-out-of-process`, task 19 (`task-19-robustness-and-thr
 **Interfaces:**
 - Consumes: the live plugin from Task 30; `skyrim` (Tasks 20-22: `Game`, `errors`, `values.Form`, `values.Fingerprint`); `_skyrim.config()["log_dir"]` and `_skyrim.log(level, msg)` (Task 19 contract); `skyrim._host` loads each package in `scripts/` and calls `setup(game)` on the host thread, `teardown()` on reload (Task 24); `tools/box/box_deploy.sh --scripts DIR` (Task 1b); `livetest/support.py` (`raw_connect`, `rpc`, `read_frame`, `send_request`, `fresh`, and the box mode `BOX`, `REPO`, `box_pull`) and fixtures `session`, `game` (Tasks 26-27); `out/box-live.env` (Task 1c) sets `SKYRIM_PYTHON_LOG` to the local mirror of the box's `python.log` (the smoke files live in the same folder on the box: index Fixed paths); `tools/box/box_files.sh pull`/`put-control` and `tools/box/box_saves.sh count` (Task 1b); `skyrim._host.status()["scripts"]` (Task 24); Task 27's `GameBackend.cpp` and its VM callback (`CanSave()` false); `tools/box/box_console.sh` and `box_quit.sh` (Task 1b: DevBench `save`/`load`, crash-log check).
 - Produces:
-  - In the game's Python log folder (`.../SKSE/SkyrimPython/`): `livetest_smoke.json` (`{status: "pass"|"fail", checks: [{name, ok, error?}], backend, transport, scripts, thread, switch_interval_s, time}`; `backend` is `_skyrim.BACKEND`, `transport` the class name of the script's `game.transport`, `scripts` the host's `status()["scripts"]` for this run), and the control pair `livetest_control.json` (`{seq, cmd, ...}`, written by Linux) / `livetest_reply.json` (`{seq, result}`, written by the script). Commands: `spin_on`, `spin_off` (reply carries `spin_loops`), `bench` (`calls`; reply `{calls, seconds, per_s, p50_ms, p99_ms, spinning}`).
+  - In the game's Python log folder (`.../SKSE/SkyrimPython/`): `livetest_smoke.json` (`{status: "pass"|"fail", checks: [{name, ok, error?}], backend, transport, scripts, thread, switch_interval_s, time}`; `backend` is `_skyrim.BACKEND`, `transport` the class name of the script's `game.transport`, `scripts` the host's `status()["scripts"]` for this run), and the control pair `livetest_control.json` (`{seq, cmd, ...}`, written by Linux; `seq` is `time.time_ns()`, so it grows across launches) / `livetest_reply.json` (`{seq, result}`, written by the script). Commands: `spin_on`, `spin_off` (reply carries `spin_loops`), `bench` (`calls`; reply `{calls, seconds, per_s, p50_ms, p99_ms, spinning}`).
   - `livetest/results/throughput.json`: `date`, `game_version`, `runtime`, `sequential_calls`, `sequential_seconds`, `sequential_per_s`, `p50_ms`, `p99_ms`, `curve` of `{depth, calls, seconds, per_s, busy}` for depths 1, 8, 32, 128, 256, plus `spin`: `{switch_interval_s, calls, remote: {no_spin: {per_s, p50_ms, p99_ms}, spin: {...}}, inprocess: {no_spin: {...}, spin: {...}}, spin_loops, fps_observed_spin}` (both `no_spin`/`spin` pairs use the same number of calls, measured back to back). The throughput test does not measure frame time (frame stalls under a spinning thread are pinned by spike S9, Task 5); the burst test does, for our own tasks.
   - `game.state` `diagnostics` gains `max_task_drain_ms` (float) and `max_task_drain_count` (int): since launch, the longest run of our queued task bodies within one frame and the most bodies in one run (Step 3b). Task 27's `late_results_dropped` and `in_flight` are unchanged.
   - `livetest/results/burst.json`: `date`, `requested`, `per_connection`, `connections`, `ok`, `busy`, `seconds`, `max_task_drain_ms`, `max_task_drain_count`, `max_task_drain_ms_before`, `s9_frame_ms`, `worst_frame_ms_estimate` (= `s9_frame_ms` + `max_task_drain_ms`), `per_task_drain_ms` (= `max_task_drain_ms` / `max_task_drain_count`), and, when `max_task_drain_count` is below `requested` (the cap), `drain_ms_at_cap_extrapolated` (= `per_task_drain_ms` × `requested`) and `worst_frame_ms_estimate_at_cap` (= `s9_frame_ms` + that); `unmeasured` names the object-conversion `AddTask` (Task 27) that the meter does not wrap.
@@ -269,7 +269,9 @@ def wait_smoke(timeout: float = 180.0) -> dict:
 
 
 def command(cmd: str, timeout: float = 300.0, **kw) -> dict:
-    seq = 1 + max((_read("livetest_control.json") or {}).get("seq", 0), (_read("livetest_reply.json") or {}).get("seq", 0))
+    # Monotonic across launches: the game's control loop starts from the highest seq it finds on disk, and in box mode
+    # the mirror holds only this launch's text, so a seq derived from the mirror could restart below it.
+    seq = time.time_ns()
     path = py_dir() / "livetest_control.json"
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps({"seq": seq, "cmd": cmd, **kw}))
@@ -323,7 +325,8 @@ BOX = os.environ.get("SPY_BOX") == "1"
 box = pytest.mark.skipif(not BOX, reason="box test: run with SPY_BOX=1 (game on the Windows box, DevBench answering)")
 BOX_CONSOLE = pathlib.Path(__file__).resolve().parent.parent / "tools" / "box" / "box_console.sh"
 BOX_SAVES = pathlib.Path(__file__).resolve().parent.parent / "tools" / "box" / "box_saves.sh"
-SAVE_DURING_CALL = "skypy_r38_savecall"  # a new save of our own; never an existing one (Task 1b deploy safety)
+# A new save of our own per run, never an existing one (Task 1b deploy safety); list.ps1 lists the prefix.
+SAVE_DURING_CALL = f"skypy_r38_savecall_{time.strftime('%Y%m%d%H%M%S')}"
 
 
 @pytest.fixture(autouse=True)
@@ -415,6 +418,18 @@ def box_console(command: str) -> str:
     return r.stdout
 
 
+def steady_late_count(session, settle: float = 1.0, tries: int = 10) -> int:
+    """late_results_dropped once two readings `settle` seconds apart agree (Task 27's steady_late_count, via support)."""
+    prev = diagnostics(session)["late_results_dropped"]
+    for _ in range(tries):
+        time.sleep(settle)
+        now = diagnostics(session)["late_results_dropped"]
+        if now == prev:
+            return now
+        prev = now
+    raise AssertionError("late_results_dropped kept changing after the load")
+
+
 def box_save_count(name: str) -> int:
     r = subprocess.run([str(BOX_SAVES), "count", name], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, f"box_saves.sh count {name} failed: {r.stdout}{r.stderr}"
@@ -440,18 +455,20 @@ def test_save_during_a_latent_call_then_load(session, game):
     t = threading.Thread(target=call, name="latent-call", daemon=True)
     t.start()
     time.sleep(0.5)
-    before = diagnostics(session)
-    assert before["in_flight"] >= 1, "the 5 s wait is not in flight"
+    assert diagnostics(session)["in_flight"] >= 1, "the 5 s wait is not in flight"
     box_console(f"save {SAVE_DURING_CALL}")
     box_console(f"load {SAVE_DURING_CALL}")
     t.join(60)
     assert not t.is_alive(), "the call neither returned nor raised within 60 s"
     assert "result" not in outcome, ("the 5 s wait finished before the load started (two DevBench round trips took too "
-                                     "long): a setup problem, not a product result. Retry; do not reinterpret it.")
+                                     "long): a setup problem, not a product result; do not reinterpret it.")
     assert isinstance(outcome["error"], (errors.NotReady, errors.Timeout)), outcome
     game.wait_ready(timeout=180)  # the loaded game is up
+    # The baseline is taken after the load, once it is steady: the cancelled call's own late result (if the VM still
+    # delivers one) is not what this test is about.
+    baseline = steady_late_count(session)
     time.sleep(6)  # longer than the 5 s wait: a callback restored from the save would have fired by now
-    assert diagnostics(session)["late_results_dropped"] == before["late_results_dropped"], \
+    assert diagnostics(session)["late_results_dropped"] == baseline, \
         "a late result arrived after the load: the save recorded our callback"
     assert box_save_count(SAVE_DURING_CALL) == 1, f"{SAVE_DURING_CALL}.ess was not written: no save was tested"
     assert 1 <= game.call("Utility", "RandomInt", 1, 6) <= 6
@@ -467,7 +484,7 @@ def test_inflight_call_is_failed_when_a_save_starts_loading(session):
     assert r["ok"] is False and r["error"]["code"] == "not_ready" and r["error"]["detail"]["reason"] == "loading", r
     s.close()
 ```
-(Task 27 already pins an out-of-range Int and a timed-out call's late result; they are not repeated here.) `test_save_during_a_latent_call_then_load` differs from the manual load test: its point is a **save** taken while our callback is suspended in the VM (`CanSave()` false, Task 27), then a load of that save. It runs only with `SPY_BOX=1`, through `tools/box/box_console.sh` (DevBench, Task 1b). The window is tight: both DevBench round trips must start the load within the 5 s wait; if the call returns `None` the test fails with a setup message: retry, never reinterpret. Before the call starts, the test checks that no save named `skypy_r38_savecall*` exists (`tools/box/box_saves.sh count`; never save over another save). After the load it checks that `late_results_dropped` has not changed 6 s later (more than the 5 s wait), and that the `.ess` was written. A retry after a failed run therefore stops at the first check, because the save from that run exists: ask the owner before going on. The save `skypy_r38_savecall` (`.ess` and `.skse`) is a new file on the box. `tools/box/win/list.ps1`'s save pattern already includes it (Task 1b, ruling R42), so `tools/box/box_teardown_list.sh` lists it. The two manual tests meet the spec's `require_unpaused` and load-cancellation checks without blocking an unattended run. If `paused` is stale or wrong, `life::Paused()` (Task 25) is read at the wrong moment: record that in `spikes/RESULTS.md` and read `RE::UI::GameIsPaused()` where it is used.
+(Task 27 already pins an out-of-range Int and a timed-out call's late result; they are not repeated here.) `test_save_during_a_latent_call_then_load` differs from the manual load test: its point is a **save** taken while our callback is suspended in the VM (`CanSave()` false, Task 27), then a load of that save. It runs only with `SPY_BOX=1`, through `tools/box/box_console.sh` (DevBench, Task 1b). The window is tight: both DevBench round trips must start the load within the 5 s wait. If the call returns `None`, the test fails with a setup message: never reinterpret it as a product result. Each run saves under a new name, `skypy_r38_savecall_<timestamp>`, and first checks that no save with that name exists (`tools/box/box_saves.sh count`; never save over another save). After the load and `wait_ready`, it takes the `late_results_dropped` baseline once two readings 1 s apart agree. That keeps the cancelled call's own late result out of the comparison. The cost (ruling R44): a callback restored from the save that fired before the baseline settled (within about 1-2 s of `wait_ready`) would be missed. It then checks that the count has not changed 6 s later (longer than the 5 s wait), and that the `.ess` was written. Every run leaves one new save (`.ess` and `.skse`) on the box. `tools/box/win/list.ps1`'s pattern `skypy_r38_savecall` is a prefix, so `tools/box/box_teardown_list.sh` lists them all (Task 1b, ruling R42). The two manual tests meet the spec's `require_unpaused` and load-cancellation checks without blocking an unattended run. If `paused` is stale or wrong, `life::Paused()` (Task 25) is read at the wrong moment: record that in `spikes/RESULTS.md` and read `RE::UI::GameIsPaused()` where it is used.
 
 - [ ] **Step 3: The throughput baseline, with and without a spinning Python thread**
 
