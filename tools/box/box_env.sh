@@ -30,6 +30,13 @@ box_stubbed() { [ "${BOX_OFFLINE:-0}" = 1 ] && [ -n "${BOX_SSH_STUB:-}" ]; }
 # The deploy record. An override (BOX_DEPLOYED=...) is honoured only with BOX_DEPLOY_PRINT_TARGET=1 or under
 # box_stubbed (offline tests): a real deploy always records in out/box-deployed.txt.
 if { [ "${BOX_DEPLOY_PRINT_TARGET:-0}" != 1 ] && ! box_stubbed; } || [ -z "${BOX_DEPLOYED:-}" ]; then BOX_DEPLOYED="$BOX_ROOT/out/box-deployed.txt"; fi
+# Gate 0 (owner decision 7, Task 45): out/gate0-accepted holds the owner's words and date; Task 45 Step 10 writes it
+# only after decision 7 is accepted. --esp, --test-pex and box_plugins.sh backup/add refuse without it. An override
+# (BOX_GATE0_FILE=...) is honoured only under box_stubbed (offline tests).
+if ! box_stubbed || [ -z "${BOX_GATE0_FILE:-}" ]; then BOX_GATE0_FILE="$BOX_ROOT/out/gate0-accepted"; fi
+need_gate0() {
+  [ -s "$BOX_GATE0_FILE" ] || box_die "Gate 0 is not recorded ($BOX_GATE0_FILE is missing): owner decision 7 must be accepted first (Task 45 Step 10)"
+}
 SKYTHON_STATE="${SKYTHON_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/skython}"
 BOX_TUNNEL_SOCK="$SKYTHON_STATE/box-tunnel.sock"
 BOX_SESSION_SOCK="$SKYTHON_STATE/box-session.sock"   # the dev-bridge tunnel (box_session.sh)
