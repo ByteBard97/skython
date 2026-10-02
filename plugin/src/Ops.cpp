@@ -36,18 +36,29 @@ private:
     std::vector<Variable> v_;
 };
 
+// For catch handlers: a `done` that throws there must not escape a VM callback or an SKSE task. The Dispatcher's Done
+// is idempotent per ticket, so calling it after an earlier call threw is safe (that call either won or did nothing).
+void DoneNoThrow(const Done& done, OpResult r) noexcept
+{
+    try {
+        done(std::move(r));
+    } catch (...) {
+        try { log::Error("ops: a done callback threw inside an error handler"); } catch (...) {}
+    }
+}
+
 void Convert(const Done& done, const Variable& result)
 {
     try {
         done(OpResult::Ok(pv::FromVariable(result)));
     } catch (const ProtocolError& e) {
-        done(OpResult::Err(e.code, e.what()));
+        DoneNoThrow(done, OpResult::Err(e.code, e.what()));
     } catch (const std::exception& e) {
-        log::Error(std::string("ops: converting a result threw: ") + e.what());
-        done(OpResult::Err(ErrorCode::internal, "internal error converting the result"));
+        try { log::Error(std::string("ops: converting a result threw: ") + e.what()); } catch (...) {}
+        DoneNoThrow(done, OpResult::Err(ErrorCode::internal, "internal error converting the result"));
     } catch (...) {
-        log::Error("ops: converting a result threw an unknown exception");
-        done(OpResult::Err(ErrorCode::internal, "internal error converting the result"));
+        try { log::Error("ops: converting a result threw an unknown exception"); } catch (...) {}
+        DoneNoThrow(done, OpResult::Err(ErrorCode::internal, "internal error converting the result"));
     }
 }
 
@@ -68,16 +79,26 @@ public:
     Callback(Done d, DynArgs* args) : done_(std::move(d)), args_(args) {}
     void operator()(Variable result) override
     {
-        // This call's arguments (S2: the VM never frees them). Freed when this scope ends, after the result was read
-        // and converted or queued; `result` is our own copy. The destructor does not free them (see Known limits).
-        std::unique_ptr<DynArgs> owned{std::exchange(args_, nullptr)};
-        // Primitives and None touch no engine state: convert here, on whatever thread the VM called us on.
-        // Objects (forms, aliases, arrays of them) need LookupByID/GetFile, so they are converted inside an SKSE task:
-        // here if the VM called us synchronously from inside one of our tasks (t_inTask), else one more AddTask. Never
-        // test the thread id instead: tasks run on varying job threads (R49). R52.
-        if (!pv::NeedsMainThread(result) || t_inTask) return Convert(done_, result);
-        auto done = done_;
-        SKSE::GetTaskInterface()->AddTask([done, result] { ops::InTask in; ops::Measured measured; Convert(done, result); });
+        // Nothing may escape into the VM: AddTask, the copies or the unique_ptr could still throw (bad_alloc).
+        try {
+            // This call's arguments (S2: the VM never frees them). Freed when this scope ends, after the result was
+            // read and converted or queued; `result` is our own copy. The destructor does not free them (Known limits).
+            std::unique_ptr<DynArgs> owned{std::exchange(args_, nullptr)};
+            // Primitives and None touch no engine state: convert here, on whatever thread the VM called us on.
+            // Objects and arrays (forms, aliases, any array: copying its elements reads engine-owned storage) are
+            // converted inside an SKSE task: here if the VM called us synchronously from inside one of our tasks
+            // (t_inTask), else one more AddTask. Never test the thread id instead: tasks run on varying job threads
+            // (R49). R52.
+            if (!pv::NeedsMainThread(result) || t_inTask) return Convert(done_, result);
+            auto done = done_;
+            SKSE::GetTaskInterface()->AddTask([done, result] { ops::InTask in; ops::Measured measured; Convert(done, result); });
+        } catch (const std::exception& e) {
+            try { log::Error(std::string("ops: a call's result callback threw: ") + e.what()); } catch (...) {}
+            DoneNoThrow(done_, OpResult::Err(ErrorCode::internal, "internal error handling the call's result"));
+        } catch (...) {
+            try { log::Error("ops: a call's result callback threw an unknown exception"); } catch (...) {}
+            DoneNoThrow(done_, OpResult::Err(ErrorCode::internal, "internal error handling the call's result"));
+        }
     }
     void SetObject(const RE::BSTSmartPointer<RE::BSScript::Object>&) override {}
     // Never written into a save (as SkyrimPlatform does): a save during a latent call does not record this functor,
@@ -303,19 +324,26 @@ void BatchStep(const std::shared_ptr<BatchState>& st)
         if (st->next == st->args.calls.size()) return st->done(OpResult::Ok({{"results", st->results}}));
         const auto step = st->args.calls[st->next++];
         Run(step.op, step.args, [st](OpResult r) {
-            st->results.push_back(r.ok ? json{{"ok", true}, {"result", r.result}}
-                                       : json{{"ok", false}, {"error", {{"code", to_string(r.code)}, {"message", r.message}, {"detail", r.detail}}}});
-            // Tell the Dispatcher (Task 18) how far we got, so a timeout can report it (the steps' side effects already happened).
-            if (st->progress) st->progress(json{{"completed", st->results.size()}, {"results", st->results}});
-            if (!r.ok && st->args.stop_on_error) return st->done(OpResult::Ok({{"results", st->results}}));
-            QueueBatchStep(st);
+            // Never throws: a throw here would reach the caller's catch (Convert, Run), which calls this lambda again
+            // with an error, recording a second result for the step and queueing a second next step.
+            try {
+                st->results.push_back(r.ok ? json{{"ok", true}, {"result", r.result}}
+                                           : json{{"ok", false}, {"error", {{"code", to_string(r.code)}, {"message", r.message}, {"detail", r.detail}}}});
+                // Tell the Dispatcher (Task 18) how far we got, so a timeout can report it (the steps' side effects already happened).
+                if (st->progress) st->progress(json{{"completed", st->results.size()}, {"results", st->results}});
+                if (!r.ok && st->args.stop_on_error) return st->done(OpResult::Ok({{"results", st->results}}));
+                QueueBatchStep(st);
+            } catch (...) {
+                try { log::Error("ops: a batch step's result handler threw; the batch ends with internal"); } catch (...) {}
+                DoneNoThrow(st->done, OpResult::Err(ErrorCode::internal, "internal error in a batch step"));
+            }
         }, st->cancelled, Progress{});
     } catch (const std::exception& e) {
-        log::Error(std::string("ops: batch step threw: ") + e.what());
-        st->done(OpResult::Err(ErrorCode::internal, "internal error in a batch step"));
+        try { log::Error(std::string("ops: batch step threw: ") + e.what()); } catch (...) {}
+        DoneNoThrow(st->done, OpResult::Err(ErrorCode::internal, "internal error in a batch step"));
     } catch (...) {  // a main-thread task never lets an exception escape (Global Constraints)
-        log::Error("ops: batch step threw an unknown exception");
-        st->done(OpResult::Err(ErrorCode::internal, "internal error in a batch step"));
+        try { log::Error("ops: batch step threw an unknown exception"); } catch (...) {}
+        DoneNoThrow(st->done, OpResult::Err(ErrorCode::internal, "internal error in a batch step"));
     }
 }
 }
@@ -361,13 +389,13 @@ void Run(const std::string& op, const json& args, Done done, Cancelled cancelled
         }
         done(OpResult::Err(ErrorCode::unsupported, "op " + op + " is not available in this build"));
     } catch (const ProtocolError& e) {
-        done(OpResult::Err(e.code, e.what()));
+        DoneNoThrow(done, OpResult::Err(e.code, e.what()));
     } catch (const std::exception& e) {
-        log::Error("ops: " + op + " threw: " + e.what());
-        done(OpResult::Err(ErrorCode::internal, "internal error"));
+        try { log::Error("ops: " + op + " threw: " + e.what()); } catch (...) {}
+        DoneNoThrow(done, OpResult::Err(ErrorCode::internal, "internal error"));
     } catch (...) {
-        log::Error("ops: " + op + " threw an unknown exception");
-        done(OpResult::Err(ErrorCode::internal, "internal error"));
+        try { log::Error("ops: " + op + " threw an unknown exception"); } catch (...) {}
+        DoneNoThrow(done, OpResult::Err(ErrorCode::internal, "internal error"));
     }
 }
 }

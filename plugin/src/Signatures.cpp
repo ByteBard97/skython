@@ -27,7 +27,7 @@ RE::BSTSmartPointer<RE::BSScript::ObjectTypeInfo> TypeOf(const std::string& scri
 bool IEquals(std::string_view a, std::string_view b)
 {
     return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
-        return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
+        return spy::ascii_lower(x) == spy::ascii_lower(y);  // locale-independent
     });
 }
 
@@ -100,10 +100,5 @@ PropertySlot FindPropertySlot(const std::string& script, const std::string& prop
                 return slot;
             }
     throw ProtocolError(ErrorCode::not_found, "script " + script + " has no property " + property);
-}
-
-RE::BSScript::PropertyTypeInfo FindProperty(const std::string& script, const std::string& property)
-{
-    return FindPropertySlot(script, property).info;
 }
 }

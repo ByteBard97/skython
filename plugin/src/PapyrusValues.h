@@ -24,7 +24,7 @@ Target ResolveTarget(const Value& object, const std::string& script);
 
 void ToVariable(const Value& v, const RE::BSScript::TypeInfo& declared, const std::string& param, RE::BSScript::Variable& out);  // 27 primitives; 28 forms, arrays; 29 aliases
 json FromVariable(const RE::BSScript::Variable& v);      // 27 primitives and None; 28 forms and arrays; 29 aliases
-bool NeedsMainThread(const RE::BSScript::Variable& v);   // Task 27. true for an object or an array of objects
+bool NeedsMainThread(const RE::BSScript::Variable& v);   // Task 27. true for a non-None object or any array
 std::string TypeName(const RE::BSScript::TypeInfo& t);   // Task 27
 json FloatToJson(float f);                               // Task 27. core's encoder: shortest round-trip text; non-finite -> null
 }

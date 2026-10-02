@@ -15,10 +15,8 @@ RE::BSTSmartPointer<RE::BSScript::IFunction> FindFunction(const std::string& scr
 // Converts positional arguments to the declared parameter types. Throws type_mismatch naming the parameter and its
 // position (natives report names param1..N, S7a; there are no named arguments in v1).
 std::vector<RE::BSScript::Variable> BindArgs(const RE::BSScript::IFunction& fn, const std::vector<Value>& args, const std::string& qualified);
-// The property `property` of `script` or its parents (its declared `type`; `getFunction`/`setFunction` set means a
-// full property). Throws not_found. (Task 28)
-RE::BSScript::PropertyTypeInfo FindProperty(const std::string& script, const std::string& property);
-// FindProperty plus where an auto property's value lives in a bound Object (Task 30). `variableIndex` indexes
+// The property `property` of `script` or its parents (`info`: its declared `type`; `getFunction`/`setFunction` set
+// means a full property), plus where an auto property's value lives in a bound Object (Task 30). `variableIndex` indexes
 // Object::variables, which hold the root parent's variables first and the most derived class's last (CommonLib's
 // Object::GetVariable), so it is the property's autoVarIndex in its declaring class plus the variable counts of that
 // class's parents. `variableName` is the auto variable's name in the declaring class (empty if the index is out of

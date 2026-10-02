@@ -9,7 +9,7 @@
 #include <mutex>
 
 // RE/Skyrim.h pulls in windows.h, whose GetObject macro (-> GetObjectA) breaks Variable::GetObject() (compile error C2039).
-// Every plugin .cpp that calls GetObject() needs this line after its includes; Task 29's Ops.cpp edits and Task 30 too.
+// Any plugin .cpp that calls Variable::GetObject() needs this line after its includes (today only this file does).
 #undef GetObject
 
 namespace spy::pv {
@@ -20,16 +20,20 @@ using Raw = TypeInfo::RawType;
 
 RE::BSScript::Internal::VirtualMachine* VM() { return RE::BSScript::Internal::VirtualMachine::GetSingleton(); }
 
-// The plugin a non-runtime form comes from. GetFile(0) is null for some forms (the player, 0x14, on the box:
-// Task 27's first live run), so fall back to the load-order index in the FormID.
+// The plugin that owns a non-runtime form's load-order index, so a form key names the plugin its FormID belongs to.
+// The index comes first: GetFile(0) is the first file that defines the record, which for a record another plugin
+// injects into a master's index (or overrides) is not the plugin of the index. GetFile(0) is only the fallback when the
+// index has no loaded file. (GetFile(0) is also null for some forms, the player 0x14, Task 27.) Runtime ids: null.
 const RE::TESFile* SourceFile(const RE::TESForm* form)
 {
-    if (const auto* file = form->GetFile(0)) return file;
     const auto id = form->GetFormID();
-    auto* dh = RE::TESDataHandler::GetSingleton();
-    if (!dh || is_runtime_form_id(id)) return nullptr;
-    if (is_light_form_id(id)) return dh->LookupLoadedLightModByIndex(static_cast<std::uint16_t>((id >> 12) & 0xFFF));
-    return dh->LookupLoadedModByIndex(static_cast<std::uint8_t>(id >> 24));
+    if (is_runtime_form_id(id)) return nullptr;
+    const RE::TESFile* file = nullptr;
+    if (auto* dh = RE::TESDataHandler::GetSingleton()) {
+        if (is_light_form_id(id)) file = dh->LookupLoadedLightModByIndex(static_cast<std::uint16_t>((id >> 12) & 0xFFF));
+        else file = dh->LookupLoadedModByIndex(static_cast<std::uint8_t>(id >> 24));
+    }
+    return file ? file : form->GetFile(0);
 }
 
 // local_form_id(id), not the form's own local id accessor: that one also depends on GetFile(0).
@@ -166,11 +170,14 @@ json ObjectToJson(const RE::BSScript::Object& obj)
     // (naive_form_check_selects_a_form=false), so this check does not mistake an alias for its quest.
     if (auto* form = RE::TESForm::LookupByID(static_cast<RE::FormID>(handle & 0xFFFFFFFF));
         form && policy->HandleIsType(static_cast<RE::VMTypeID>(form->GetFormType()), handle)) {
-        if (form->Is(RE::FormType::Quest)) {  // measurement for Task 29: would alias-first misread a Quest's handle?
+        // Answered (Task 28 RESULTS): a Quest's own handle has high32 = 0xFFFF, not the Quest type id (0x4D), and
+        // HandleIsType(RefAlias/LocAlias, quest handle) is false, so only an alias with id 0xFFFF could pass this check
+        // and decode as its quest (alias handles are (aliasID << 32) | questFormID, S4). Form-first stands (R52). The
+        // line below is still logged once per launch because livetest/test_m1_calls.py
+        // (test_quest_result_is_a_quest_not_an_alias) asserts it; drop both together.
+        if (form->Is(RE::FormType::Quest)) {
             static std::once_flag once;
             std::call_once(once, [&] {
-                // high32 vs quest_vmtype: if they are equal, an alias whose id equals the Quest type id would pass the
-                // form check above and decode as its quest (R52; S4: alias handles are (aliasID << 32) | questFormID).
                 const auto high32 = static_cast<std::uint32_t>(handle >> 32);
                 const auto questType = static_cast<std::uint32_t>(RE::FormType::Quest);
                 log::Info(std::format("values: quest handle {:016X} high32={:08X} quest_vmtype={:08X} high32_is_quest_vmtype={} "
@@ -340,8 +347,9 @@ std::string TypeName(const TypeInfo& t)
 bool NeedsMainThread(const Variable& v)
 {
     const auto t = v.GetType();
-    if (t.IsObjectArray()) return true;  // conservative: any array of objects
-    return t.IsObject() && !v.IsNoneObject();
+    // Any array, primitive ones too: copying the elements reads engine-owned storage without the Array's lock (private
+    // in the pinned CommonLib), which is only safe inside an SKSE task. Primitives and None stay on the VM thread.
+    return t.IsArray() || (t.IsObject() && !v.IsNoneObject());
 }
 
 void ToVariable(const Value& v, const TypeInfo& t, const std::string& param, Variable& out)
@@ -365,10 +373,9 @@ void ToVariable(const Value& v, const TypeInfo& t, const std::string& param, Var
         if (!a) mismatch();
         const auto elem = ElementType(t);
         // Second line of defence only: core already refused a longer argument while parsing the request (type_mismatch,
-        // kMaxArrayItems). Papyrus arrays hold at most 128 elements (Array::MAX_SIZE is private, so it is repeated here).
-        constexpr std::size_t kMaxPapyrusArray = 128;
-        if (a->items.size() > kMaxPapyrusArray)
-            throw ProtocolError(ErrorCode::type_mismatch, std::format("parameter {}: a Papyrus array holds at most {} items, got {}", param, kMaxPapyrusArray, a->items.size()));
+        // kMaxArrayItems, the Papyrus limit of 128 elements; Array::MAX_SIZE is private in CommonLib).
+        if (a->items.size() > kMaxArrayItems)
+            throw ProtocolError(ErrorCode::type_mismatch, std::format("parameter {}: a Papyrus array holds at most {} items, got {}", param, kMaxArrayItems, a->items.size()));
         RE::BSTSmartPointer<RE::BSScript::Array> arr;
         if (!VM()->CreateArray(elem, static_cast<std::uint32_t>(a->items.size()), arr) || !arr)
             throw ProtocolError(ErrorCode::vm_error, "could not create an array for parameter " + param);
@@ -421,8 +428,9 @@ json FromVariable(const Variable& v)
         auto arr = v.GetArray();
         if (!arr) return nullptr;
         // Results are not capped at 128 (index Contracts): SKSE and PapyrusUtil natives can return longer arrays.
-        // Copied without the Array's BSSpinLock, which is private in the pinned CommonLib. Acceptable because this
-        // conversion runs inside an SKSE task (R49).
+        // Copied without the Array's BSSpinLock, which is private in the pinned CommonLib. Acceptable because every
+        // array result is converted inside an SKSE task (NeedsMainThread is true for any array, R49), never on the
+        // VM's callback thread.
         json items = json::array();
         for (std::uint32_t i = 0; i < arr->size(); ++i) items.push_back(FromVariable((*arr)[i]));
         std::string elem;
