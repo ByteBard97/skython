@@ -12,6 +12,8 @@ Status: M1 (embedded dispatcher). Verified on Skyrim AE 1.6.1170, Windows-native
 
 ## Install
 
+To build from source and install on Windows, see [docs/BUILDING.md](docs/BUILDING.md): `plugin\build.ps1` builds both DLLs, fetches and checks the CPython runtime and stages the files below in `out\stage`; `tools\install.ps1 <game folder>` checks for SKSE and Address Library and copies them into the game.
+
 There is no packaged release yet (that is M4), and no PyPI package: the `skython` Python package ships inside the mod, in `lib/skython/`. You need SKSE64 (tested with 2.2.6) and Address Library for SKSE Plugins (required: CommonLibSSE-NG uses it to find game addresses). Build the two DLLs (see Build and test), then lay the files out like this:
 ```
 Data/SKSE/Plugins/Skython.dll          loader                  out/Skython.dll from the build
@@ -87,11 +89,13 @@ Code that works through the bridge works unchanged as a script in `scripts/`. Ru
 
 ## Build and test
 
+Building on a Windows PC: [docs/BUILDING.md](docs/BUILDING.md). The notes below are for this project's own Linux plus Windows-over-ssh setup.
+
 - Core (Linux): `cmake -S core -B core/build && cmake --build core/build -j && ctest --test-dir core/build`.
 - The `_skython` module over a fake backend (Linux): `cmake -S pyglue/linux -B pyglue/build -DCMAKE_BUILD_TYPE=Release -DPython_EXECUTABLE="$(uv python find 3.14)" && cmake --build pyglue/build -j`, then `uv run --no-project --python 3.14 --with pytest python -m pytest pyglue/tests`.
 - The `skython` package (Python 3.12 and 3.14): `cd python && uv run pytest`.
 - CPython runtime and headers: `tools/fetch_python.sh` (checks SHA-256s against `docs/PINS.md`).
-- Plugin (built on a Windows machine over ssh), one DLL per call: `tools/remote_build.sh plugin Skython.dll && tools/remote_build.sh plugin SkythonCore.dll`. It syncs the repository to the build machine and runs `plugin/build.ps1` there. That script is used by `tools/remote_build.sh`; it can be run on a Windows machine with Visual Studio 2022 and vcpkg (`C:\vcpkg`, or pass `-VcpkgRoot`; triplet `x64-windows-static-md`), given the CommonLibSSE-NG submodule checked out and `third_party/cpython/nuget/tools/` from `tools/fetch_python.sh`. Run standalone it is untested.
+- Plugin (built on a Windows machine over ssh), one DLL per call: `tools/remote_build.sh plugin Skython.dll && tools/remote_build.sh plugin SkythonCore.dll`. It syncs the repository to the build machine and runs `plugin/build.ps1` there. That script is used by `tools/remote_build.sh`; it can be run on a Windows machine with Visual Studio 2022 and vcpkg (`C:\vcpkg`, or pass `-VcpkgRoot`; triplet `x64-windows-static-md`), given the CommonLibSSE-NG submodule checked out and `third_party/cpython/nuget/tools/` from `tools/fetch_python.sh`. Run on its own it also fetches CPython and stages an install folder; see docs/BUILDING.md.
 - On the project's Windows test machine: deploy with `tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini`, then `tools/box/box_deploy.sh --package` (and `--python`, `--scripts livetest/scripts` when the runtime or the scripts changed); launch with `tools/box/box_launch.sh`; stop with `tools/box/box_stop.sh` (the test machine's game hangs on `qqq` exit with or without Skython, so the tools end it instead).
 - Live tests (game running on the test machine, save loaded): `tools/box/box_session.sh up && source out/box-live.env && source livetest/s4test.env && SKYTHON_LIVE=1 uv run --project python pytest livetest -q -rs` (an ssh tunnel, loopback on both ends; the session file with the token stays in `out/`). `livetest/s4test.env` holds the form ids and script names the alias, property and own-script tests use on the test machine's `s4test` save; under `SKYTHON_LIVE=1` a missing one fails the test. Without `SKYTHON_LIVE=1` every live test is skipped.
 - Protocol: `protocol/PROTOCOL.md`, fixtures in `protocol/v1/fixtures/`. Design: `docs/specs/2026-09-30-skyrim-python-design.md`. Spike results: `spikes/RESULTS.md`.

@@ -7,13 +7,13 @@ This builds the two plugin DLLs, fetches the embedded Python runtime, and stages
 Tested with the versions in brackets. Older patch releases of the same major version probably work; they were not tried.
 
 - Windows 10 or 11, x64.
-- Visual Studio 2022 or Visual Studio Build Tools 2022 with the "Desktop development with C++" workload (MSVC v143 and a Windows 10/11 SDK). [Build Tools 17.14.34, MSVC 14.44]
-- CMake 3.21 or newer on PATH. The one Visual Studio installs with the C++ workload is fine. [3.31.6]
-- Git. [2.49.0]
-- vcpkg as a git clone, with `VCPKG_ROOT` pointing at it. `plugin/vcpkg.json` pins a vcpkg baseline commit, so the clone needs its full history (no `--depth`).
+- Visual Studio 2022 or Visual Studio Build Tools 2022 with the "Desktop development with C++" workload (MSVC v143 and a Windows 10/11 SDK). [Build Tools 17.14.34, MSVC toolset 14.44.35207 (cl 19.44.35228), Windows SDK 10.0.26100.0]
+- CMake 3.21 or newer on PATH: the installer from cmake.org, or the "C++ CMake tools for Windows" component of Visual Studio. [3.31.6 from cmake.org]
+- Git for Windows. [2.49.0]
+- vcpkg as a git clone, with `VCPKG_ROOT` pointing at it. `plugin/vcpkg.json` pins a vcpkg baseline commit, so the clone needs its full history (no `--depth`). [vcpkg tool 2026-09-26]
 - Internet access for the first build: vcpkg downloads and builds spdlog, fmt, DirectXTK and friends, and the build script downloads CPython 3.14.8 from python.org and nuget.org.
 
-Ninja is not needed; the build uses the Visual Studio generator.
+Ninja is not needed; the build uses the Visual Studio generator. The first build took about 10 minutes on the test machine, most of it vcpkg building its packages.
 
 ## Get vcpkg
 
@@ -54,7 +54,7 @@ What it does:
 
 Options: `-Config Debug`, `-VcpkgRoot <dir>` (instead of `VCPKG_ROOT`), `-Stage <dir>`, `-NoStage`.
 
-The DLLs land in `plugin\build\Release\`, the build log in `plugin\build\build-Release.log`. You can also open `plugin` as a CMake folder in Visual Studio once `build.ps1` has fetched CPython, or run `cmake --preset vs2022` and `cmake --build --preset release` from `plugin`.
+The DLLs land in `plugin\build\Release\`, the build log in `plugin\build\build-Release.log`. Once `build.ps1` has fetched CPython you can also rebuild from `plugin` with `cmake --preset vs2022` and `cmake --build --preset release` (no staging), or open `plugin` as a CMake folder in Visual Studio.
 
 The staged folder:
 
@@ -74,10 +74,12 @@ out\stage\Data\
 The plugin itself is tested in a running game, which needs more setup than this page covers. The core library's unit tests build and run on Windows with no game:
 
 ```
-cmake -S core -B core\build-win -G "Visual Studio 17 2022" -A x64
+cmake -S core -B core\build-win -G "Visual Studio 17 2022" -A x64 -DCMAKE_CXX_FLAGS_INIT=/Zc:preprocessor
 cmake --build core\build-win --config Release --parallel
 ctest --test-dir core\build-win -C Release --output-on-failure
 ```
+
+`/Zc:preprocessor` is needed because one test file puts raw string literals inside doctest macros, which MSVC's old preprocessor cannot parse. The flag only applies to a fresh build folder.
 
 ## Install
 
