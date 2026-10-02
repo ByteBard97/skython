@@ -162,5 +162,9 @@ def test_the_fake_refuses_bad_arguments_of_the_new_ops_like_core(fake, case):
 
 @pytest.mark.parametrize("req", [r for r in REQUESTS["valid"] if r["op"] in NEW_OPS], ids=lambda r: r["op"])
 def test_the_fake_accepts_valid_requests_of_the_new_ops(fake, req):
-    resp = json.loads(fake.call(json.dumps(req), 5.0))
+    consumer = fake.open_consumer()  # events.* travel with a consumer beside the text (Task 36a); other ops ignore it
+    resp = json.loads(fake.call(json.dumps(req), 5.0, consumer))
     assert resp["ok"] is True or resp["error"]["code"] != "bad_request", resp
+    noconsumer = json.loads(fake.call(json.dumps(req), 5.0))
+    if req["op"] in ("events.subscribe", "events.unsubscribe"):
+        assert noconsumer["error"]["code"] == "bad_request" and noconsumer["error"]["message"] == "no event consumer"
