@@ -23,7 +23,7 @@
 | `filter_required_any_of` not named | `bad_request` | `<e> needs a filter on <a or b>` / `<a, b or c>` |
 | a consumer's 257th subscription (hub, R61) | `busy` | `consumer <n> has 256 subscriptions (max_subscriptions_per_consumer)` |
 | too many subscriptions of all consumers | `busy` | `too many event subscriptions (1024)` |
-| form field value whose `form_id` is not a u32, or whose `form_key` is malformed or names another form | `bad_request` | `filter value for <e>.<f>: form_id must be an unsigned 32-bit integer` / `...: form_key must look like Plugin.esp\|0x0012AB` / `...: form_id and form_key do not name the same form` |
+| form field value whose `form_id` is not a u32, or whose `form_key` is malformed or names another form, or with neither | `bad_request` | core's own value-codec texts, with no `filter value for <e>.<f>` prefix: `form_id must be an unsigned 32-bit integer` / `form_key must look like Plugin.esp\|0x0012AB` / `form_id and form_key do not name the same form` / `a form reference needs form_id or form_key` (core/src/values.cpp; corrected in Task 36a's implementation) |
 | `game.save` of an existing name | `bad_request` | `a save named <name> already exists`, `detail.reason = "save_exists"` |
 | `game.load` of an unknown name | `not_found` | `no save named <name>` |
 | `game.load` while starting / loading (FakeBackend) | `not_ready` | `the game is still starting` / `a game is loading`, detail `reason`, `paused`, `menus` |
