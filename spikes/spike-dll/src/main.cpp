@@ -836,6 +836,88 @@ std::string S5()
 }
 }
 
+namespace spike {
+std::atomic_int g_postLoadOk{0}, g_postLoadFail{0}, g_loadingClosed{0};
+std::atomic_int g_preLoad{0}, g_loadingOpened{0};  // a load STARTED (kPreLoadGame / Loading Menu opened)
+std::atomic_bool g_loadingMenuOpen{false};
+std::atomic_int g_seq{0}, g_postLoadSeq{0}, g_loadingClosedSeq{0};  // which event came first in the last load
+
+struct MenuSink : RE::BSTEventSink<RE::MenuOpenCloseEvent>
+{
+    RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* e, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
+    {
+        if (e && e->menuName == RE::LoadingMenu::MENU_NAME) {
+            Log(std::format("spike: Loading Menu {}", e->opening ? "opened" : "closed"));
+            g_loadingMenuOpen = e->opening;
+            if (e->opening) {
+                g_loadingOpened.fetch_add(1);
+            } else {
+                g_loadingClosedSeq = ++g_seq;
+                g_loadingClosed.fetch_add(1);
+            }
+        }
+        return RE::BSEventNotifyControl::kContinue;
+    }
+};
+
+// Empty string when no load is in progress: the Loading Menu is not open (sink state and UI::IsMenuOpen on the
+// main thread) and the kPreLoadGame count stays unchanged for 10 s. Otherwise the reason.
+std::string LoadInProgress()
+{
+    const int pre0 = g_preLoad;
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (std::chrono::steady_clock::now() < end) {
+        if (g_loadingMenuOpen) return "loading_menu_open";
+        if (g_preLoad != pre0) return std::format("kPreLoadGame_fired_during_10s_check(delta={})", g_preLoad - pre0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+    auto menu = std::make_shared<std::atomic_bool>(false);
+    const auto r = OnMainThread([menu](std::function<void(std::string)> finish) {
+        auto* ui = RE::UI::GetSingleton();
+        *menu = ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
+        finish("ok");
+    }, std::chrono::seconds(10));
+    if (r != "ok") return "main_thread_check_" + r;
+    return *menu ? "loading_menu_open(UI)" : "";
+}
+
+// viaUi = true: AddUITask (the design). viaUi = false: AddTask, the CONTROL run (DevBench's AddTask load
+// silently does nothing under Proton; the control shows whether that is still true here). The control counts a
+// load as STARTED when kPreLoadGame or Loading Menu opened fires, so a slow load still in flight after its 30 s
+// is never mistaken for "did nothing"; the AddUITask run refuses to start while any load is in progress, so the
+// control's late events cannot satisfy it.
+std::string S6(const std::string& save, bool viaUi)
+{
+    if (viaUi) {
+        if (const auto busy = LoadInProgress(); !busy.empty())
+            return "S6 REFUSED load in progress (" + busy + "): wait for it to finish (the control may have started one), then retry";
+    }
+    const int ok0 = g_postLoadOk, fail0 = g_postLoadFail, lc0 = g_loadingClosed, pre0 = g_preLoad, lo0 = g_loadingOpened;
+    g_seq = 0; g_postLoadSeq = 0; g_loadingClosedSeq = 0;
+    auto body = [save, viaUi] {
+        Log(std::format("spike: S6 calling BGSSaveLoadManager::Load({}) via {}", save, viaUi ? "AddUITask" : "AddTask"));
+        // Verified in plugin/extern/CommonLibSSE-NG (39f9d07, v10.1.0) include/RE/B/BGSSaveLoadManager.h: both
+        // Load(const char*) and Load(const char*, bool a_checkForMods) exist; the one-argument form calls
+        // Load_Impl(a_fileName, -1, 0, true) (src/RE/B/BGSSaveLoadManager.cpp).
+        RE::BGSSaveLoadManager::GetSingleton()->Load(save.c_str());
+    };
+    if (viaUi) SKSE::GetTaskInterface()->AddUITask(body); else SKSE::GetTaskInterface()->AddTask(body);
+    const bool landed = WaitUntil([&] { return g_loadingClosed > lc0 && (g_postLoadOk + g_postLoadFail) > (ok0 + fail0); },
+                                  std::chrono::seconds(viaUi ? 120 : 30));
+    const int okD = g_postLoadOk - ok0, failD = g_postLoadFail - fail0, lcD = g_loadingClosed - lc0;
+    const int preD = g_preLoad - pre0, loD = g_loadingOpened - lo0;
+    const bool pass = landed && okD >= 1 && failD == 0 && lcD >= 1;
+    const bool started = preD > 0 || loD > 0;
+    const int pls = g_postLoadSeq, lcs = g_loadingClosedSeq;
+    const char* first = (pls == 0 && lcs == 0) ? "none" : pls == 0 ? "LoadingMenuClosed" : lcs == 0 ? "kPostLoadGame"
+                      : pls < lcs ? "kPostLoadGame" : "LoadingMenuClosed";
+    const char* verdict = viaUi ? (pass ? "PASS" : "FAIL")
+                        : pass ? "CONTROL_LOADED" : started ? "CONTROL_STARTED_LOAD" : "CONTROL_DID_NOTHING";
+    return std::format("S6 {} via={} save={} preLoadGame_delta={} loadingOpened_delta={} postLoadGame_ok_delta={} postLoadGame_fail_delta={} loadingClosed_delta={} first={}",
+        verdict, viaUi ? "AddUITask" : "AddTask", save, preD, loD, okD, failD, lcD, first);
+}
+}
+
 // Handle has a namespace block of its own: Tasks 3-9 add their code as new `namespace spike { ... }` blocks
 // directly above this one, after Log and ParseInt, which they use.
 namespace spike {
@@ -852,6 +934,8 @@ std::string Handle(const std::string& line)
         return "PY_ARM_RT OK";
     }
     if (line == "s5") return S5();
+    if (line.rfind("s6 ", 0) == 0) return S6(line.substr(3), true);
+    if (line.rfind("s6task ", 0) == 0) return S6(line.substr(7), false);
     if (line == "s4") return S4();
     if (line == "s4loc") return S4Loc();
     if (line.rfind("s4bound ", 0) == 0) return S4Bound(static_cast<std::size_t>(ParseInt(line.substr(8), 0)));
@@ -893,9 +977,24 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
         spike::Log("kDataLoaded");
         spike::g_dataLoaded.store(true);
         { static spike::ModSink sink; SKSE::GetModCallbackEventSource()->AddEventSink(&sink); }
+        { static spike::MenuSink menuSink; RE::UI::GetSingleton()->AddEventSink<RE::MenuOpenCloseEvent>(&menuSink); }
         if (spike::py::AutostartRequested())  // run B (Step 7): the real plugin's timing; py::Load ran in SKSEPluginLoad
             spike::Log("spike: autostart at kDataLoaded " + spike::py::Init(true));
         break;
+    case SKSE::MessagingInterface::kPostLoadGame: {
+        // data is a packed bool, not a pointer (SKSE64 PluginAPI.h: "data: bool, true if game successfully loaded");
+        // the raw value is logged either way.
+        const auto raw = reinterpret_cast<std::uintptr_t>(m->data);
+        spike::Log(std::format("kPostLoadGame data={:#x} ({})", raw, raw ? "success" : "FAILED load"));
+        spike::g_postLoadSeq = ++spike::g_seq;
+        (raw ? spike::g_postLoadOk : spike::g_postLoadFail).fetch_add(1);
+        break;
+    }
+    case SKSE::MessagingInterface::kPreLoadGame:
+        spike::Log("kPreLoadGame");
+        spike::g_preLoad.fetch_add(1);
+        break;
+    case SKSE::MessagingInterface::kNewGame: spike::Log("kNewGame"); break;
     default:
         break;
     }
