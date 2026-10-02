@@ -618,7 +618,8 @@ def test_mod_event_fields_and_case_insensitive_name_filter(game, session):
         f = read_event(s, 10.0)
         assert f and f["sub"] == sub, f
         d = f["data"]
-        assert (d["name"], d["str_arg"], d["num_arg"]) == ("skython_live", "s", 4.5)
+        # Strings come back in the casing the engine's string pool holds (R56): compare name and str_arg ignoring case.
+        assert (d["name"].lower(), d["str_arg"].lower(), d["num_arg"]) == ("skython_live", "s", 4.5)
         assert d["sender"]["form_id"] == 0x14
         game.call_method(PLAYER, "Form", "SendModEvent", "someone_else", "", 0.0)  # filtered out
         assert read_event(s, 3.0) is None
@@ -663,7 +664,7 @@ def test_in_process_mod_event():
     r = command("mod_event", event="skython_smoke")
     assert len(r["received"]) == 1, r
     got = r["received"][0]
-    assert (got["name"], got["str_arg"], got["num_arg"], got["sender"], got["seq"]) == ("skython_smoke", "in-process", 2.5, 0x14, 1)
+    assert (got["name"].lower(), got["str_arg"].lower(), got["num_arg"], got["sender"], got["seq"]) == ("skython_smoke", "in-process", 2.5, 0x14, 1)
 
 
 ```
