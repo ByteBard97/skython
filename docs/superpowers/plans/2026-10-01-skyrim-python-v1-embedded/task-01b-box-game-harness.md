@@ -1209,7 +1209,7 @@ cat out/box-deployed.txt
 mkdir -p out/refuse-test && printf 'MZfake' > out/refuse-test/devbench.dll
 tools/box/box_deploy.sh out/refuse-test/devbench.dll; echo "rc=$? (expect 1)"
 ```
-Expected: `parsed <name>.ps1` for all ten scripts, `INSTALLED`, `REGISTERED SkyrimPythonGame -> powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\dev\skyrim-python-box\launch.ps1 as geoff Interactive` (or `EXISTS SkyrimPythonGame -> ...` on a re-run); three `deployed ...` lines (the runtime as `PLACED 38 files`); `out/box-deployed.txt` holds `...\Plugins\SkyrimPythonSpike.dll`, `...\Plugins\SkyrimPython\python`, `...\Plugins\SkyrimPython\SpikePyCore.dll`; then `box: C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\devbench.dll exists on the box but is not in out/box-deployed.txt; not overwriting it. Ask the owner.` and `rc=1`.
+Expected: `parsed <name>.ps1` for all ten scripts (eleven since ruling R42 added `files.ps1`), `INSTALLED`, `REGISTERED SkyrimPythonGame -> powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File C:\dev\skyrim-python-box\launch.ps1 as geoff Interactive` (or `EXISTS SkyrimPythonGame -> ...` on a re-run); three `deployed ...` lines (the runtime as `PLACED 38 files`); `out/box-deployed.txt` holds `...\Plugins\SkyrimPythonSpike.dll`, `...\Plugins\SkyrimPython\python`, `...\Plugins\SkyrimPython\SpikePyCore.dll`; then `box: C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\devbench.dll exists on the box but is not in out/box-deployed.txt; not overwriting it. Ask the owner.` and `rc=1`.
 
 - [ ] **Step 6: Launch, S1 from Linux through the tunnel, make `spikebase`, clean exit**
 

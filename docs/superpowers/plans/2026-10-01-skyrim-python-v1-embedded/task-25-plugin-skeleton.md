@@ -6,7 +6,7 @@ Adapted from: branch `plan-out-of-process`, task 15 (`task-15-plugin-skeleton-bu
 
 > **Gate:** start only after `spikes/RESULTS.md` shows S2, S4, S8 and S9 PASS (Tasks 3-6). S8's record says whether the two-DLL load resolved `python314.dll` to the copy loaded by full path; if it did not, STOP and ask the owner.
 >
-> **Depends on:** Tasks 16 (`Config`, `parse_config`), 17 (`LifecycleState`), 19 (`pyglue/` sources). **Runs on:** Step 1 on Linux; Steps 2-9 on the Windows build box plus the game.
+> **Depends on:** Tasks 16 (`Config`, `parse_config`), 17 (`LifecycleState`), 19 (`pyglue/` sources). **Runs on:** Step 1 on Linux; Steps 2-10 on the Windows build box plus the game, which runs on the box ([Task 1c](task-01c-part-c-on-the-box.md)); everything is driven from Linux.
 >
 > **STOP and ask the owner (do not improvise) if:** a gating spike is FAIL; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s; the log shows a runtime other than AE 1.6.1170; a CommonLibSSE-NG name below does not compile and `plugin/extern/CommonLibSSE-NG` shows no obvious equivalent; `tools/fetch_python.sh --check` fails; **the first live launch (Step 9) is a gate:** if the loader log says `SpyCore_Load returned true` but the core log has no `SkyrimPython core: data loaded` line, `SKSE::Init` called from the core or the core's messaging listener does not work. Do not work around it (for example by moving the listener into the loader): STOP and ask the owner.
 
@@ -14,10 +14,10 @@ Adapted from: branch `plan-out-of-process`, task 15 (`task-15-plugin-skeleton-bu
 - Create: `plugin/CMakeLists.txt`, `plugin/vcpkg.json`, `plugin/build.ps1`, `plugin/config/SkyrimPython.ini`, `plugin/config/SkyrimPython.dev.ini`, `plugin/config/variants/python-off.ini`
 - Create: `plugin/loader/main.cpp`, `plugin/loader/Win.h`, `plugin/loader/Win.cpp` (loader DLL `SkyrimPython.dll`)
 - Create: `plugin/src/main.cpp`, `plugin/src/Log.{h,cpp}`, `plugin/src/Settings.{h,cpp}`, `plugin/src/Lifecycle.{h,cpp}`, `plugin/src/PythonHost.{h,cpp}` (core DLL `SkyrimPythonCore.dll`; `PythonHost` holds only `LinkedPythonVersion()` until Task 26)
-- Modify: `tools/deploy.sh` (full replacement: routes the core DLL into `SkyrimPython/`, keeps `--python` and Task 10's `--site-packages DIR`), `.gitignore` (append `plugin/build-options.local`), `docs/PINS.md` (append the Step 2 notes)
+- Modify: `.gitignore` (append `plugin/build-options.local`), `docs/PINS.md` (append the Step 2 notes)
 
 **Interfaces:**
-- Consumes: `spy::Config`, `spy::parse_config`, `spy::config_to_json` (Task 16); `spy::LifecycleState` with `set_paused`, `not_ready_reason(bool)`, `base_state()` (Task 17); `pyglue/src/pymodule.cpp` and `pyglue/include` (Task 19, compiled into the core); `tools/remote_build.sh`, `tools/launch_game.sh`, `tools/wait_for_log.sh`, `tools/env.sh` (Task 1; `env.sh` exports `SKSE_LOG_DIR`, `SIMPLESKYRIM_DATA`, `SKYRIM_PYTHON_STATE`); `third_party/cpython/{embed,nuget}` (Task 0).
+- Consumes: `spy::Config`, `spy::parse_config`, `spy::config_to_json` (Task 16); `spy::LifecycleState` with `set_paused`, `not_ready_reason(bool)`, `base_state()` (Task 17); `pyglue/src/pymodule.cpp` and `pyglue/include` (Task 19, compiled into the core); `tools/remote_build.sh` (Task 1); the box harness `tools/box/` (Task 1b: `box_deploy.sh`, `box_launch.sh [--env]`, `box_wait_log.sh`, `box_files.sh`, `box_session.sh`, `box_console.sh`, `box_quit.sh`, `box_stop.sh`) through [Task 1c](task-01c-part-c-on-the-box.md); `third_party/cpython/{embed,nuget}` (Task 0).
 - Produces:
   - Loader export `SKSEPlugin_Load` (plus `SKSEPlugin_Version`/`SKSEPlugin_Query` from `SKSEPluginInfo`); loader log `SKSE/SkyrimPythonLoader.log` with the lines listed in Step 3.
   - Core export `extern "C" __declspec(dllexport) bool SpyCore_Load(const SKSE::LoadInterface*)`.
@@ -25,7 +25,7 @@ Adapted from: branch `plan-out-of-process`, task 15 (`task-15-plugin-skeleton-bu
   - `spy::settings::Load()`, `Get() -> const Config&`, `PluginsDir()`, `OwnDir()`, `SessionFile(skseDir) -> std::optional<path>`, and **`struct Runtime { std::string plugin_version, game_version, runtime; std::optional<std::filesystem::path> skse_dir; }`, `SetRuntime(Runtime)`, `GetRuntime() -> const Runtime&`** (filled by `main.cpp`, read by Task 26's `_skyrim.config()`, so `PythonHost.cpp` needs no CommonLib header).
   - `spy::life::OnMessage(Message*)`, `DataReady()`, `GameLoaded()`, `Loading()`, `Interactive()`, `Paused()`, `Epoch()`, `LoadsStarted()`, `NotReadyReason(bool require_unpaused = false) -> std::optional<std::string>`, `OpenMenus()`, `BaseState() -> json`.
   - `spy::host::LinkedPythonVersion() -> std::string` (Task 26 adds `Start`/`State` to the same files).
-  - `tools/deploy.sh out/SkyrimPython.dll [ini] [--python]`: copies the loader to `Plugins/`, and `out/SkyrimPythonCore.dll` (required, must not be older than the loader) to `Plugins/SkyrimPython/`. `tools/deploy.sh --site-packages DIR` (Task 10's block, unchanged) still works.
+  - Deploying uses Task 1b's `tools/box/box_deploy.sh out/SkyrimPython.dll [ini]` (loader to `Plugins\`, `out/SkyrimPythonCore.dll`, required and not older than the loader, to `Plugins\SkyrimPython\`, the ini to `Plugins\SkyrimPython.ini`) and `--python`; the game runs on the Windows box ([Task 1c](task-01c-part-c-on-the-box.md), ruling R42). `tools/deploy.sh` is not changed.
   - Test hooks (only in a loader built with `SPY_TEST_HOOKS=ON`): `SKYRIM_PYTHON_TEST_PRELOAD=<path>` (Task 26's collision variant) and `SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1` (Step 10). Such a loader logs one `TEST HOOK:` line per hook, also when its variable is not set.
   - Build: run `tools/remote_build.sh plugin SkyrimPython.dll` **and** `tools/remote_build.sh plugin SkyrimPythonCore.dll` (the script fetches one DLL per call; the second call is an incremental no-op build plus the copy).
 
@@ -755,107 +755,39 @@ extern "C" __declspec(dllexport) bool SpyCore_Load(const SKSE::LoadInterface* sk
 ```
 (The loader has already refused unsupported runtimes, so the core does not check again.)
 
-- [ ] **Step 8: Deploy script (full replacement of `tools/deploy.sh`)**
+- [ ] **Step 8: Deploy script: none (ruling R42)**
 
-Task 10's `--site-packages DIR` block is kept unchanged, right after `source tools/env.sh` (it handles its own arguments and exits).
-
+The game runs on the Windows box, and `tools/box/box_deploy.sh` (Task 1b) already deploys the two-DLL layout: `out/SkyrimPython.dll` to `Plugins\SkyrimPython.dll`, `out/SkyrimPythonCore.dll` (required, not older than the loader) to `Plugins\SkyrimPython\SkyrimPythonCore.dll`, the ini to `Plugins\SkyrimPython.ini`; `--python` deploys the runtime. Check the targets offline:
 ```bash
-cat > tools/deploy.sh <<'EOF'
-#!/usr/bin/env bash
-# Usage: tools/deploy.sh out/<Dll>.dll [path/to/ini] [--python]
-#        tools/deploy.sh --site-packages DIR
-#   SkyrimPython.dll (the loader) also deploys out/SkyrimPythonCore.dll into Plugins/SkyrimPython/.
-#   --python  copies the embeddable CPython (third_party/cpython/embed) to Plugins/SkyrimPython/python/.
-# Every copied path is appended to out/deployed.txt (tools/teardown_list.sh lists them; nothing is ever removed).
-# A *Spike* DLL needs CONFIRM_THROWAWAY_SAVE=1.
-set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-source "$ROOT/tools/env.sh"
-# --site-packages DIR (Task 10): copy a staged site-packages into Data/SKSE/Plugins/SkyrimPython/site-packages/
-# and exit. Handled before any other argument, so it works whatever other options deploy.sh has.
-if [ "${1:-}" = "--site-packages" ]; then
-  SP_SRC="${2:?usage: tools/deploy.sh --site-packages DIR}"
-  [ -d "$SP_SRC" ] || { echo "deploy: no such directory: $SP_SRC" >&2; exit 1; }
-  SP_DEST="$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython/site-packages"
-  mkdir -p "$SP_DEST" "$ROOT/out"
-  # Never mix versions: an entry in the game's site-packages that the new one lacks stops the copy (nothing is deleted).
-  stale="$(comm -23 <(ls -A "$SP_DEST" | sort) <(ls -A "$SP_SRC" | sort))"
-  if [ -n "$stale" ]; then
-    echo "deploy: $SP_DEST holds entries the new site-packages does not have:" >&2
-    echo "$stale" >&2
-    echo "deploy: ask the owner to approve moving exactly these to the trash (gio trash), then re-run" >&2
-    exit 1
-  fi
-  cp -r "$SP_SRC"/. "$SP_DEST"/
-  ls -A "$SP_SRC" | while IFS= read -r e; do echo "$SP_DEST/$e" >> "$ROOT/out/deployed.txt"; done
-  echo "deploy: $(ls -A "$SP_SRC" | wc -l) entries copied to $SP_DEST"
-  exit 0
-fi
-DLL="${1:-}"; shift || true
-[ -f "$DLL" ] || { echo "deploy: no such file: ${DLL:-<none>}" >&2; exit 1; }
-INI=""; PYTHON=0
-if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then INI="$1"; shift; fi
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --python) PYTHON=1 ;;
-    *) echo "deploy: unknown option $1" >&2; exit 1 ;;
-  esac; shift
-done
-case "$(basename "$DLL")" in
-  *Spike*) [ "${CONFIRM_THROWAWAY_SAVE:-0}" = 1 ] || {
-      echo "deploy: $DLL is a spike DLL; use a throwaway save and re-run with CONFIRM_THROWAWAY_SAVE=1." >&2; exit 1; } ;;
-esac
-DEST="$SIMPLESKYRIM_DATA/SKSE/Plugins"; OWN="$DEST/SkyrimPython"
-[ -d "$DEST" ] || { echo "deploy: $DEST does not exist" >&2; exit 1; }
-mkdir -p "$ROOT/out"
-rec() { echo "$1" >> "$ROOT/out/deployed.txt"; }
-cp -v "$DLL" "$DEST/"; rec "$DEST/$(basename "$DLL")"
-if [ "$(basename "$DLL")" = SkyrimPython.dll ]; then
-  CORE="$(dirname "$DLL")/SkyrimPythonCore.dll"
-  [ -f "$CORE" ] || { echo "deploy: $CORE missing: run tools/remote_build.sh plugin SkyrimPythonCore.dll" >&2; exit 1; }
-  if [ "$DLL" -nt "$CORE" ]; then
-    echo "deploy: $CORE is older than $DLL: run tools/remote_build.sh plugin SkyrimPythonCore.dll" >&2; exit 1
-  fi
-  mkdir -p "$OWN"; cp -v "$CORE" "$OWN/"; rec "$OWN/SkyrimPythonCore.dll"
-fi
-if [ -n "$INI" ]; then
-  cp -v "$INI" "$DEST/$(basename "${DLL%.dll}").ini"; rec "$DEST/$(basename "${DLL%.dll}").ini"
-fi
-if [ "$PYTHON" = 1 ]; then
-  EMBED="$ROOT/third_party/cpython/embed"
-  [ -f "$EMBED/python314.dll" ] || { echo "deploy: $EMBED has no python314.dll: run tools/fetch_python.sh" >&2; exit 1; }
-  mkdir -p "$OWN/python" "$OWN/site-packages" "$OWN/lib" "$OWN/scripts"
-  cp -rv "$EMBED/." "$OWN/python/"; rec "$OWN/python"
-  rec "$OWN/site-packages"; rec "$OWN/lib"; rec "$OWN/scripts"
-fi
-EOF
-chmod +x tools/deploy.sh && bash -n tools/deploy.sh
+tools/box/test_box_tools.sh | grep -E 'two-DLL|older than the loader|without SkyrimPythonCore|OFFLINE'
 ```
-Expected: `bash -n` prints nothing.
+Expected: `ok   two-DLL targets: loader, core in SkyrimPython\, ini`, the two refusals, `BOX TOOLS OFFLINE PASS`. `tools/deploy.sh` (the Linux game) is not changed.
 
 - [ ] **Step 9: Build, deploy, launch, check both logs (STOP gate)**
 
-Every wait is bounded. Loading a save is manual (the owner presses Continue); if nobody is at the keyboard, STOP and ask.
+Every wait is bounded. The game runs on the box ([Task 1c](task-01c-part-c-on-the-box.md)); the save is loaded through DevBench.
 ```bash
 tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
 objdump -p out/SkyrimPython.dll | grep -i "DLL Name" | grep -ci python    # expect 0: the loader imports no Python
 objdump -p out/SkyrimPythonCore.dll | grep -i "DLL Name: python314.dll"   # expect one line
-source tools/env.sh
-mkdir -p "$SIMPLESKYRIM_DATA/SKSE/Plugins-disabled"
-for f in "$SIMPLESKYRIM_DATA"/SKSE/Plugins/*Spike*.dll; do [ -e "$f" ] && mv -v "$f" "$SIMPLESKYRIM_DATA/SKSE/Plugins-disabled/"; done
-tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --python
-tools/launch_game.sh
-SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPythonLoader.log" "SpyCore_Load returned true|Python disabled" 600
-cat "$SKSE_LOG_DIR/SkyrimPythonLoader.log"
+source tools/box/box_env.sh
+tools/box/box_deploy.sh --move SkyrimPythonSpike.dll SkyrimPython/spike-off/SkyrimPythonSpike.dll   # SKSE loads only Plugins\*.dll
+tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/box/box_deploy.sh --python
+tools/box/box_launch.sh
+tools/box/box_wait_log.sh SkyrimPythonLoader.log "SpyCore_Load returned true|Python disabled" 600
+tools/box/box_session.sh env && source out/box-live.env
+tools/box/box_files.sh pull SkyrimPythonLoader.log >/dev/null && cat "$SKSE_LOG_DIR/SkyrimPythonLoader.log"
 # GATE: SKSE::Init from the core and the core's messaging listener must work. No line here within 10 minutes: STOP.
-SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "SkyrimPython core: data loaded" 600 \
+tools/box/box_wait_log.sh SkyrimPython.log "SkyrimPython core: data loaded" 600 \
   || echo "STOP: the core never saw kDataLoaded; ask the owner"
-SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: Main Menu open" 600
-# Manual: press Continue in the game. Then:
-SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: interactive = true" 300
-cat "$SKSE_LOG_DIR/SkyrimPython.log"
+tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: Main Menu open" 600
+tools/box/box_console.sh "load spikebase"     # stands in for Continue; then Task 1b block B6 (wait for gameplay)
+tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: interactive = true" 300
+tools/box/box_files.sh pull SkyrimPython.log >/dev/null && cat "$SKSE_LOG_DIR/SkyrimPython.log"
+tools/box/box_quit.sh     # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh (Task 1b Known issue)
 ```
-(The spike DLLs are moved, not deleted; move them back for spike re-runs.)
+(The spike DLL is moved, not deleted (recorded in `out/box-moves.txt`); move it back for spike re-runs: `tools/box/box_deploy.sh --move SkyrimPython/spike-off/SkyrimPythonSpike.dll SkyrimPythonSpike.dll`.)
 
 **STOP gate.** This is the first launch where `SKSE::Init` runs in a second DLL (the core) and the core registers the messaging listener with the loader's plugin handle. If the loader log ends with `SpyCore_Load returned true` but the core log has no `SkyrimPython core: data loaded` line (or no core log exists), STOP and ask the owner with both logs attached; do not move the listener into the loader or call `SKSE::Init` differently on your own.
 
@@ -867,22 +799,22 @@ Expected loader log: `SkyrimPython loader 0.1.0 on Skyrim 1.6.1170.0 (AE)`, `loa
 ```bash
 echo "SPY_TEST_HOOKS=ON" > plugin/build-options.local
 tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll   # build log ends with SPY_TEST_HOOKS=ON
-tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
-source tools/env.sh
-SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1 tools/launch_game.sh
-SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPythonLoader.log" "runtime check:|TEST HOOK: SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME not set" 600
-cat "$SKSE_LOG_DIR/SkyrimPythonLoader.log"
+tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/box/box_launch.sh --env SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1   # launch.log shows "env SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1"
+tools/box/box_wait_log.sh SkyrimPythonLoader.log "runtime check:|TEST HOOK: SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME not set" 600
+tools/box/box_files.sh pull SkyrimPythonLoader.log >/dev/null && cat out/box-skse/SkyrimPythonLoader.log
+tools/box/box_quit.sh     # or box_stop.sh on NOT_CLEAN
 ```
-Expected: `TEST HOOK: SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1: treating this runtime as unverified`, then `runtime check: Skyrim 1.6.1170.0 is not a verified runtime; Python and SkyrimPython stay off`, no `loaded python314.dll` line, and the game reaches the main menu normally. If the log shows `TEST HOOK: SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME not set`, the variable did not reach the game through `launch_game.sh`: STOP and ask the owner. Afterwards quit the game, turn the hooks off and rebuild:
+Expected: `TEST HOOK: SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME=1: treating this runtime as unverified`, then `runtime check: Skyrim 1.6.1170.0 is not a verified runtime; Python and SkyrimPython stay off`, no `loaded python314.dll` line, and the game reaches the main menu normally. If the log shows `TEST HOOK: SKYRIM_PYTHON_TEST_UNVERIFIED_RUNTIME not set`, the variable did not reach the game through `box_launch.sh --env` (check `launch.log`, Task 1b block B10, for the `env` line; `box_setup.sh` must have installed the R42 `launch.ps1`): STOP and ask the owner. Afterwards quit the game, turn the hooks off and rebuild:
 ```bash
 : > plugin/build-options.local    # empty: hooks off
 tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll   # build log ends with SPY_TEST_HOOKS=OFF
-tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
 git status --short plugin    # no source file changed
 ```
 
 - [ ] **Step 11: Commit**
 
 ```bash
-git add plugin tools/deploy.sh .gitignore docs/PINS.md && git commit -m "feat(plugin): loader and core DLLs with logging, settings and lifecycle"
+git add plugin .gitignore docs/PINS.md && git commit -m "feat(plugin): loader and core DLLs with logging, settings and lifecycle"
 ```

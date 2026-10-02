@@ -4,7 +4,7 @@ New in the embedded design (it replaces the C++ loopback server of branch `plan-
 
 > Part of the [skyrim-python v1 plan](README.md). Read the index's **Global Constraints**, **Fixed paths** and **Contracts** first. Spec: `docs/specs/2026-09-30-skyrim-python-design.md` (draft 4), sections 4.1, 4.2, 4.5, 4.10, 6. Steps use checkbox (`- [ ]`) syntax.
 
-> **Depends on:** Task 25 (loader, core, settings, lifecycle, `deploy.sh`), Task 24 (`skyrim._host`), Tasks 19-23 (`_skyrim` module source, `skyrim` package, bridge). **Runs on:** the Windows build box plus the game; live tests run on Linux.
+> **Depends on:** Task 25 (loader, core, settings, lifecycle), Task 1b/1c (the box harness), Task 24 (`skyrim._host`), Tasks 19-23 (`_skyrim` module source, `skyrim` package, bridge). **Runs on:** the Windows build box plus the game, which runs on the box ([Task 1c](task-01c-part-c-on-the-box.md)); live tests run on Linux through the session tunnel.
 >
 > **STOP and ask the owner (do not improvise) if:** the game does not reach the main menu within 10 minutes; the game crashes or freezes at any point in this task (record the last lines of both logs first); the build box does not answer `ssh` within 10 s; `python host: failed:` appears in the default run and the traceback does not point at an obvious packaging mistake.
 
@@ -13,7 +13,6 @@ New in the embedded design (it replaces the C++ loopback server of branch `plan-
 - Create: `plugin/src/PyModule.cpp` (`PYBIND11_MODULE(_skyrim, m)` for the game build)
 - Create: `plugin/src/GameBackend.h`, `plugin/src/GameBackend.cpp` (**interim**: `game.state` only; Task 27 overwrites both files with the real backend)
 - Modify: `plugin/src/main.cpp` (start the host thread at `kDataLoaded`), `plugin/CMakeLists.txt` (two sources)
-- Modify: `tools/deploy.sh` (full replacement: adds `--package` and `--scripts DIR`; Task 10's `--site-packages DIR` block is kept unchanged)
 - Create: `livetest/support.py`, `livetest/conftest.py`, `livetest/test_m1_bridge.py`, `livetest/test_m1_startup_variants.py`
 - Create: `livetest/scripts/livetest_broken/__init__.py` (a player script whose `setup` raises; deployed with every `--scripts livetest/scripts` from here on, so every live run also proves a failing script is harmless)
 
@@ -23,8 +22,8 @@ New in the embedded design (it replaces the C++ loopback server of branch `plan-
   - `spy::host::Start(const Config&)` (call once at `kDataLoaded`; returns at once; never throws) and `spy::host::State() -> std::string` (`"disabled: <why>"`, `"starting"`, `"running"`, `"failed: <why>"`).
   - Core log phrases: `python host: disabled: python_enabled=false`, `python host: starting (CPython 3.14.8)`, `python host: initialised; sys.executable = <...\python\python.exe>; sys.path = [...]`, `python host: running`, `python host: failed: <why>` (followed by the traceback when there is one; a failed `Py_InitializeFromConfig` reads `python host: failed: Py_InitializeFromConfig: <CPython's message>`).
   - `spy::game::Backend()` and `spy::game::GetDispatcher()` with the interim behaviour (Task 27 replaces the implementation, same names). Interim log line: `game backend: interim dispatcher ready (game.state only)`.
-  - `tools/deploy.sh out/SkyrimPython.dll [ini] [--python] [--package] [--scripts DIR]`; `tools/deploy.sh --site-packages DIR` (Task 10) unchanged.
-  - `livetest/support.py` (stdlib only): `Session(port, token)`, `load_session()`, `encode`, `read_frame`, `hello(session, **override)`, `raw_connect`, `rpc(sock, op, args=None, req_id=1, timeout=30.0)`, `send_request(sock, op, args=None, req_id=1)`, `send_raw`, `closed_by_server`, `frame_header`, `read_frame_or_none`, `still_serving`, `log_text(name="SkyrimPython.log")`, `python_log_text()`, `fresh(path)`, `refused(port=45977)`. `livetest/conftest.py`: fixtures `session` and `game` (`skyrim.connect(...)` over the bridge); skips everything unless `SKYRIM_LIVE=1`.
+  - Deploying uses Task 1b's `tools/box/box_deploy.sh` (`out/SkyrimPython.dll [ini]`, `--python`, `--package`, `--scripts DIR`, `--move`); the game runs on the Windows box ([Task 1c](task-01c-part-c-on-the-box.md), ruling R42). `tools/deploy.sh` is not changed.
+  - `livetest/support.py` (stdlib only): `Session(port, token)`, `load_session()`, `encode`, `read_frame`, `hello(session, **override)`, `raw_connect`, `rpc(sock, op, args=None, req_id=1, timeout=30.0)`, `send_request(sock, op, args=None, req_id=1)`, `send_raw`, `closed_by_server`, `frame_header`, `read_frame_or_none`, `still_serving`, `log_text(name="SkyrimPython.log")`, `python_log_text()`, `fresh(path)`, `refused(port=45977)`; box mode (`SKYRIM_PYTHON_BOX=1`, from `out/box-live.env`): `BOX`, `REPO`, `box_pull(*names)`; `log_text`/`python_log_text` pull the log from the box first, and `refused` asks the box (`tools/box/box_session.sh probe`). `livetest/conftest.py`: fixtures `session` and `game` (`skyrim.connect(...)` over the bridge); skips everything unless `SKYRIM_LIVE=1`.
 
 Rules (Global Constraints, spec 4.5):
 - `PyImport_AppendInittab("_skyrim", PyInit__skyrim)` and `InstallModuleHost` happen on the host thread **before** `Py_InitializeFromConfig`. Nothing Python-related runs at DLL load time.
@@ -393,103 +392,9 @@ void OnMessage(SKSE::MessagingInterface::Message* m)
 
 `plugin/CMakeLists.txt`: add `src/GameBackend.cpp src/PyModule.cpp` to `SPY_CORE_SOURCES`.
 
-- [ ] **Step 3: Deploy script (full replacement of `tools/deploy.sh`)**
+- [ ] **Step 3: Deploy script: none (ruling R42)**
 
-Task 25's script (including Task 10's `--site-packages DIR` block, unchanged) plus `--package` and `--scripts DIR` (both skip `__pycache__`):
-```bash
-cat > tools/deploy.sh <<'EOF'
-#!/usr/bin/env bash
-# Usage: tools/deploy.sh out/<Dll>.dll [path/to/ini] [--python] [--package] [--scripts DIR]
-#        tools/deploy.sh --site-packages DIR
-#   SkyrimPython.dll (the loader) also deploys out/SkyrimPythonCore.dll into Plugins/SkyrimPython/.
-#   --python   embeddable CPython (third_party/cpython/embed) -> Plugins/SkyrimPython/python/
-#   --package  python/src/skyrim -> Plugins/SkyrimPython/lib/skyrim/
-#   --scripts  every entry of DIR -> Plugins/SkyrimPython/scripts/
-# Every copied path is appended to out/deployed.txt (tools/teardown_list.sh lists them; nothing is ever removed).
-# A *Spike* DLL needs CONFIRM_THROWAWAY_SAVE=1.
-set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-source "$ROOT/tools/env.sh"
-# --site-packages DIR (Task 10): copy a staged site-packages into Data/SKSE/Plugins/SkyrimPython/site-packages/
-# and exit. Handled before any other argument, so it works whatever other options deploy.sh has.
-if [ "${1:-}" = "--site-packages" ]; then
-  SP_SRC="${2:?usage: tools/deploy.sh --site-packages DIR}"
-  [ -d "$SP_SRC" ] || { echo "deploy: no such directory: $SP_SRC" >&2; exit 1; }
-  SP_DEST="$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython/site-packages"
-  mkdir -p "$SP_DEST" "$ROOT/out"
-  # Never mix versions: an entry in the game's site-packages that the new one lacks stops the copy (nothing is deleted).
-  stale="$(comm -23 <(ls -A "$SP_DEST" | sort) <(ls -A "$SP_SRC" | sort))"
-  if [ -n "$stale" ]; then
-    echo "deploy: $SP_DEST holds entries the new site-packages does not have:" >&2
-    echo "$stale" >&2
-    echo "deploy: ask the owner to approve moving exactly these to the trash (gio trash), then re-run" >&2
-    exit 1
-  fi
-  cp -r "$SP_SRC"/. "$SP_DEST"/
-  ls -A "$SP_SRC" | while IFS= read -r e; do echo "$SP_DEST/$e" >> "$ROOT/out/deployed.txt"; done
-  echo "deploy: $(ls -A "$SP_SRC" | wc -l) entries copied to $SP_DEST"
-  exit 0
-fi
-DLL="${1:-}"; shift || true
-[ -f "$DLL" ] || { echo "deploy: no such file: ${DLL:-<none>}" >&2; exit 1; }
-INI=""; PYTHON=0; PACKAGE=0; SCRIPTS=""
-if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then INI="$1"; shift; fi
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --python) PYTHON=1 ;;
-    --package) PACKAGE=1 ;;
-    --scripts) shift; SCRIPTS="${1:?deploy: --scripts needs a directory}" ;;
-    *) echo "deploy: unknown option $1" >&2; exit 1 ;;
-  esac; shift
-done
-case "$(basename "$DLL")" in
-  *Spike*) [ "${CONFIRM_THROWAWAY_SAVE:-0}" = 1 ] || {
-      echo "deploy: $DLL is a spike DLL; use a throwaway save and re-run with CONFIRM_THROWAWAY_SAVE=1." >&2; exit 1; } ;;
-esac
-DEST="$SIMPLESKYRIM_DATA/SKSE/Plugins"; OWN="$DEST/SkyrimPython"
-[ -d "$DEST" ] || { echo "deploy: $DEST does not exist" >&2; exit 1; }
-mkdir -p "$ROOT/out"
-rec() { echo "$1" >> "$ROOT/out/deployed.txt"; }
-copy_tree() {  # copy_tree <src-dir> <dest-dir>: files only, no __pycache__
-  local src="$1" dst="$2"
-  (cd "$src" && find . -name __pycache__ -prune -o -type f -print) | while IFS= read -r f; do
-    install -D -m 644 "$src/$f" "$dst/$f"
-  done
-}
-cp -v "$DLL" "$DEST/"; rec "$DEST/$(basename "$DLL")"
-if [ "$(basename "$DLL")" = SkyrimPython.dll ]; then
-  CORE="$(dirname "$DLL")/SkyrimPythonCore.dll"
-  [ -f "$CORE" ] || { echo "deploy: $CORE missing: run tools/remote_build.sh plugin SkyrimPythonCore.dll" >&2; exit 1; }
-  if [ "$DLL" -nt "$CORE" ]; then
-    echo "deploy: $CORE is older than $DLL: run tools/remote_build.sh plugin SkyrimPythonCore.dll" >&2; exit 1
-  fi
-  mkdir -p "$OWN"; cp -v "$CORE" "$OWN/"; rec "$OWN/SkyrimPythonCore.dll"
-fi
-if [ -n "$INI" ]; then
-  cp -v "$INI" "$DEST/$(basename "${DLL%.dll}").ini"; rec "$DEST/$(basename "${DLL%.dll}").ini"
-fi
-if [ "$PYTHON" = 1 ]; then
-  EMBED="$ROOT/third_party/cpython/embed"
-  [ -f "$EMBED/python314.dll" ] || { echo "deploy: $EMBED has no python314.dll: run tools/fetch_python.sh" >&2; exit 1; }
-  mkdir -p "$OWN/python" "$OWN/site-packages" "$OWN/lib" "$OWN/scripts"
-  cp -rv "$EMBED/." "$OWN/python/"; rec "$OWN/python"
-  rec "$OWN/site-packages"; rec "$OWN/lib"; rec "$OWN/scripts"
-fi
-if [ "$PACKAGE" = 1 ]; then
-  [ -f "$ROOT/python/src/skyrim/__init__.py" ] || { echo "deploy: python/src/skyrim is missing" >&2; exit 1; }
-  copy_tree "$ROOT/python/src/skyrim" "$OWN/lib/skyrim"; rec "$OWN/lib/skyrim"
-  echo "deploy: skyrim package -> $OWN/lib/skyrim"
-fi
-if [ -n "$SCRIPTS" ]; then
-  [ -d "$SCRIPTS" ] || { echo "deploy: no such directory: $SCRIPTS" >&2; exit 1; }
-  copy_tree "$SCRIPTS" "$OWN/scripts"
-  for e in "$SCRIPTS"/*; do [ -e "$e" ] && [ "$(basename "$e")" != __pycache__ ] && rec "$OWN/scripts/$(basename "$e")"; done
-  echo "deploy: scripts from $SCRIPTS -> $OWN/scripts"
-fi
-EOF
-chmod +x tools/deploy.sh && bash -n tools/deploy.sh
-```
-Deploying never removes anything: a module deleted from `python/src/skyrim` stays in the game until the owner approves removing it (`tools/teardown_list.sh` lists the folders).
+The game runs on the Windows box; `tools/box/box_deploy.sh` (Task 1b) already has `--package` (`python/src/skyrim` → `Plugins\SkyrimPython\lib\skyrim`) and `--scripts DIR` (each entry → `Plugins\SkyrimPython\scripts\`), both without `__pycache__`, one mode per call. `tools/deploy.sh` is not changed. Deploying never removes anything: a module deleted from `python/src/skyrim` stays on the box until the owner approves removing it (`tools/box/box_teardown_list.sh` lists the folders).
 
 - [ ] **Step 4: Live-test helpers**
 
@@ -500,10 +405,15 @@ import os
 import pathlib
 import socket
 import struct
+import subprocess
 import time
 from dataclasses import dataclass
 
 MAX_FRAME = 16 * 1024 * 1024
+REPO = pathlib.Path(__file__).resolve().parent.parent
+# The game runs on the Windows box (Task 1c): out/box-live.env sets SKYRIM_PYTHON_BOX=1, SKSE_LOG_DIR and
+# SKYRIM_PYTHON_LOG to the local mirror out/box-skse, and SKYRIM_PYTHON_SESSION to the tunnel's session file.
+BOX = os.environ.get("SKYRIM_PYTHON_BOX") == "1"
 
 
 @dataclass
@@ -515,7 +425,7 @@ class Session:
 def load_session() -> Session:
     path = os.environ.get("SKYRIM_PYTHON_SESSION")
     if not path:
-        raise RuntimeError("SKYRIM_PYTHON_SESSION is not set (source tools/env.sh)")
+        raise RuntimeError("SKYRIM_PYTHON_SESSION is not set (tools/box/box_session.sh up && source out/box-live.env)")
     data = json.loads(pathlib.Path(path).read_text())
     if data.get("active") is False:
         raise RuntimeError(f"the bridge is not serving: {data.get('reason')}")
@@ -605,30 +515,53 @@ def still_serving(session: Session) -> bool:
     return True
 
 
+def _box_tool(script: str, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([str(REPO / "tools" / "box" / script), *args], capture_output=True, text=True, timeout=180)
+
+
+def box_pull(*names: str) -> None:
+    """Box mode: refresh out/box-skse/<name> with the text written on the box since the last launch (empty if none)."""
+    r = _box_tool("box_files.sh", "pull", *names)
+    if r.returncode != 0:
+        raise RuntimeError(f"box_files.sh pull {' '.join(names)} failed: {r.stderr.strip()}")
+
+
 def _skse_dir() -> pathlib.Path | None:
     d = os.environ.get("SKSE_LOG_DIR")
     return pathlib.Path(d) if d else None
 
 
 def fresh(path: pathlib.Path) -> bool:
-    """True when the file was written after the last tools/launch_game.sh (so it belongs to this run)."""
+    """True when the file was written after the last launch stamp (so it belongs to this run). In box mode the mirror
+    out/box-skse holds only text the box wrote since its launch stamp (box_files.sh pull), and is newer than any stamp."""
     stamp = pathlib.Path(os.environ.get("SKYRIM_PYTHON_STATE", "")) / "launch.stamp"
     return path.exists() and (not stamp.exists() or path.stat().st_mtime >= stamp.stat().st_mtime)
 
 
 def log_text(name: str = "SkyrimPython.log") -> str:
     """A log in SKSE_LOG_DIR from this run, or '' (log assertions then fail with a clear message)."""
+    if BOX:
+        box_pull(name)
     d = _skse_dir()
     p = d / name if d else None
     return p.read_text(errors="replace") if p and fresh(p) else ""
 
 
 def python_log_text() -> str:
+    if BOX:
+        box_pull("SkyrimPython/python.log")
     p = pathlib.Path(os.environ.get("SKYRIM_PYTHON_LOG", ""))
     return p.read_text(errors="replace") if p.name and fresh(p) else ""
 
 
 def refused(port: int = 45977) -> bool:
+    if BOX:  # through the ssh tunnel a port nobody listens on is accepted locally, then closed: ask the box
+        r = _box_tool("box_session.sh", "probe", str(port))
+        if "NO_LISTENER" in r.stdout:
+            return True
+        if r.stdout.startswith("LISTEN"):
+            return False
+        raise RuntimeError(f"box_session.sh probe {port} failed: {r.stdout}{r.stderr}")
     try:
         socket.create_connection(("127.0.0.1", port), timeout=3).close()
     except (ConnectionRefusedError, socket.timeout, OSError):
@@ -639,7 +572,8 @@ def refused(port: int = 45977) -> bool:
 `livetest/conftest.py`:
 ```python
 """Live tests: the game runs with SkyrimPython (loader + core), the embedded Python and the dev ini.
-Run from the repo root:  source tools/env.sh && SKYRIM_LIVE=1 uv run --project python pytest livetest -q
+Run from the repo root, the game on the Windows box (Task 1c):
+  tools/box/box_session.sh up && source out/box-live.env && SKYRIM_LIVE=1 uv run --project python pytest livetest -q
 Without SKYRIM_LIVE=1 every test is skipped (so a plain pytest run on a machine without the game is clean).
 """
 import os
@@ -893,66 +827,57 @@ def setup(game):
 
 - [ ] **Step 6: Build, deploy, run the default live tests**
 
-Nothing here needs a save loaded; the main menu is enough. Every wait is bounded.
+Nothing here needs a save loaded; the main menu is enough. Every wait is bounded. The game runs on the box ([Task 1c](task-01c-part-c-on-the-box.md)).
 ```bash
 tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
-tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --python --package --scripts livetest/scripts
-tools/launch_game.sh
-source tools/env.sh
-SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "python host: (running|failed|disabled)" 600 \
+tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/box/box_deploy.sh --python
+tools/box/box_deploy.sh --package
+tools/box/box_deploy.sh --scripts livetest/scripts
+tools/box/box_launch.sh
+tools/box/box_wait_log.sh SkyrimPython.log "python host: (running|failed|disabled)" 600 \
   || echo "STOP: Python did not report within 10 minutes; ask the owner"
-grep -E "python host:|game backend:|py: " "$SKSE_LOG_DIR/SkyrimPython.log"
+tools/box/box_session.sh up && source out/box-live.env
+tools/box/box_files.sh pull SkyrimPython.log >/dev/null && grep -E "python host:|game backend:|py: " "$SKSE_LOG_DIR/SkyrimPython.log"
 SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_bridge.py -q -rs
 ```
-Expected log lines: `game backend: interim dispatcher ready (game.state only)`, `python host: starting (CPython 3.14.8)`, `python host: initialised; sys.executable = ...\SkyrimPython\python\python.exe; sys.path = [...\python\python314.zip, ...\python, ...\site-packages, ...\lib, ...\scripts]`, `python host: running`. If `sys.executable` names `SkyrimSE.exe` instead of `python.exe`, `PyConfig.executable` was not applied: fix that before going on. Expected tests: 14 passed. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure (the run did not test anything). The log also shows the `livetest_broken` traceback (expected: it fails on purpose). If `python host: failed:` appears, the traceback follows it in the log; a `ModuleNotFoundError` for a stdlib module means `python314.zip` is not on `sys.path` (check the deployed `python/` folder). The game stays responsive throughout (open and close the console once to check).
+Expected log lines: `game backend: interim dispatcher ready (game.state only)`, `python host: starting (CPython 3.14.8)`, `python host: initialised; sys.executable = ...\SkyrimPython\python\python.exe; sys.path = [...\python\python314.zip, ...\python, ...\site-packages, ...\lib, ...\scripts]`, `python host: running`. If `sys.executable` names `SkyrimSE.exe` instead of `python.exe`, `PyConfig.executable` was not applied: fix that before going on. Expected tests: 14 passed. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure (the run did not test anything). The log also shows the `livetest_broken` traceback (expected: it fails on purpose). If `python host: failed:` appears, the traceback follows it in the log; a `ModuleNotFoundError` for a stdlib module means `python314.zip` is not on `sys.path` (check the deployed `python/` folder). The game stays responsive throughout (`tools/box/box_console.sh --tool inspect '{"kind":"state"}'` answers).
 
 - [ ] **Step 7: Startup variants (one game start each)**
 
-Quit the game from its main menu between runs; if it will not exit, STOP and ask the owner before killing anything. Each variant changes the deployed files by **moving** them, never deleting, and moves them back afterwards. `OWN="$SIMPLESKYRIM_DATA/SKSE/Plugins/SkyrimPython"`. For each, launch with `tools/launch_game.sh`, wait with `SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh <log> <phrase> 600`, then run `SKYRIM_LIVE=1 SPY_VARIANT=<name> uv run --project python pytest livetest/test_m1_startup_variants.py -q -rs` (expected: 1 passed, 7 skipped, every skip naming another `SPY_VARIANT`; a skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure) and check the game reached the main menu normally.
+The game runs on the box: stage, wait, restore and quit exactly as [Task 1c](task-01c-part-c-on-the-box.md)'s "Startup variants" table says. Every staging change is a recorded move (`tools/box/box_deploy.sh --move`, listed in `out/box-moves.txt`), never a delete, and is moved back afterwards. Quit between runs with `tools/box/box_quit.sh` (`box_stop.sh` on `NOT_CLEAN`; `STILL_RUNNING` after it: STOP and ask the owner). For each variant: `tools/box/box_launch.sh`, `tools/box/box_wait_log.sh <log> "<phrase>" 600`, `source out/box-live.env` (`tools/box/box_session.sh env` writes it), then `SKYRIM_LIVE=1 SPY_VARIANT=<name> uv run --project python pytest livetest/test_m1_startup_variants.py -q -rs`. Expected: 1 passed and 7 skipped, every skip naming another `SPY_VARIANT`. A skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. Then check that the game reached the main menu normally (`box_wait_log.sh SkyrimPython.log "lifecycle: Main Menu open" 600`; for `no-python`/`no-core`, DevBench's `inspect` answers). `refused()` asks the box whether 45977 listens (`box_session.sh probe`), because through the tunnel a closed port looks open.
 
-| Variant | Stage | Wait for (log, phrase) | Restore |
-|---|---|---|---|
-| `no-python` | `mv "$OWN/python" "$OWN/python.off"` | loader log, `Python disabled` | `mv "$OWN/python.off" "$OWN/python"` |
-| `no-core` | `mv "$OWN/SkyrimPythonCore.dll" "$OWN/SkyrimPythonCore.dll.off"` | loader log, `Python disabled` | move it back |
-| `no-package` | `mv "$OWN/lib/skyrim" "$OWN/lib/skyrim.off"` | core log, `python host: failed` | move it back |
-| `python-off` | `tools/deploy.sh out/SkyrimPython.dll plugin/config/variants/python-off.ini` | core log, `python host: disabled` | redeploy the dev ini |
-| `bridge-off` | `tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.ini` | core log, `python host: running` | redeploy the dev ini |
-| `collision` | see below | loader log, `Python disabled` | see below |
-| `no-stdlib` | `mv "$OWN/python/python314.zip" "$OWN/python/python314.zip.off"` | core log, `python host: failed` | `mv "$OWN/python/python314.zip.off" "$OWN/python/python314.zip"` |
-| `relaunch` | see below | core log, `python host: (running\|failed)` | nothing to restore |
+`no-stdlib` stands in for a partial or corrupt `python/` folder. CPython cannot find its codecs, `Py_InitializeFromConfig` returns an error status, and the host must log one `python host: failed: Py_InitializeFromConfig: ...` line and leave the game running. If instead the game process exits or hangs at startup: record the last lines of both logs (`tools/box/box_files.sh pull SkyrimPython.log SkyrimPythonLoader.log`), move the zip back, and STOP and ask the owner (a fatal CPython init error is a finding, not something to fix in place).
 
-`no-stdlib` stands in for a partial or corrupt `python/` folder: CPython cannot find its codecs, `Py_InitializeFromConfig` returns an error status, and the host must log one `python host: failed: Py_InitializeFromConfig: ...` line and leave the game running. If instead the game process exits or hangs at startup, record the last lines of both logs, restore the zip, and STOP and ask the owner (a fatal CPython init error is a finding, not something to fix in place).
-
-`relaunch` checks that the bridge's port is free again right after a quick restart (the bridge binds with `SO_EXCLUSIVEADDRUSE` on Windows, Task 23). With the normal dev set deployed and the game at the main menu:
+`relaunch` checks that the bridge's port is free again right after a quick restart (the bridge binds with `SO_EXCLUSIVEADDRUSE` on Windows, Task 23). With the normal dev set deployed, the game at the main menu and `tools/box/box_session.sh up` done:
 ```bash
-source tools/env.sh
+source out/box-live.env
 (cd livetest && python3 -c "import support; s = support.raw_connect(support.load_session()); s.settimeout(None); s.recv(1)") &
-# Quit the game from its main menu now (the client above stays connected until the game is gone, then exits).
-for i in $(seq 1 60); do pgrep -x SkyrimSE.exe >/dev/null || break; sleep 1; done
-tools/launch_game.sh   # within 60 s of quitting
-SINCE="$SKYRIM_PYTHON_STATE/launch.stamp" tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "python host: (running|failed)" 600
-cat "$SKYRIM_PYTHON_SESSION"
+QUIT_WAIT=50 tools/box/box_quit.sh      # the client above stays connected until the game is gone
+tools/box/box_launch.sh                 # within 60 s of the quit
+tools/box/box_wait_log.sh SkyrimPython.log "python host: (running|failed)" 600
+tools/box/box_session.sh up             # prints the session path; an inactive file is reported, not tunnelled
+python3 -c "import json; d = json.load(open('out/box-session.json')); print({k: d[k] for k in d if k != 'token'})"
 ```
-If the game has not exited within 60 s, STOP and ask the owner before killing anything. If the session file shows `"active": false` with an address-in-use reason, Wine does not free the port as Windows would: record it in `spikes/RESULTS.md` and STOP and ask the owner (a finding for Task 23's bind options, not something to work around here).
+If `box_quit.sh` prints `NOT_CLEAN` (the box's exit hang, Task 1b Known issue), the 60 s window cannot be met without killing the game. Run `tools/box/box_stop.sh` and record `relaunch` as **not staged on the box (exit hang)** in `spikes/RESULTS.md`; do not loop. If the session file shows `"active": false` with an address-in-use reason, the port was not freed: record it in `spikes/RESULTS.md` and STOP and ask the owner (a finding for Task 23's bind options, not something to work around here).
 
 The `collision` variant stands in for another mod that loaded its own CPython 3.14 first:
 ```bash
 echo "SPY_TEST_HOOKS=ON" > plugin/build-options.local
 tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll   # build log ends with SPY_TEST_HOOKS=ON
-tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
-source tools/env.sh
-OTHER="$SIMPLESKYRIM_DATA/SKSE/SpyCollideTest"; mkdir -p "$OTHER"
-cp -v third_party/cpython/embed/python314.dll third_party/cpython/embed/vcruntime140*.dll "$OTHER/" && echo "$OTHER" >> out/deployed.txt
-export SKYRIM_PYTHON_TEST_PRELOAD="Z:$(printf '%s' "$OTHER/python314.dll" | tr '/' '\\')"
-tools/launch_game.sh
-unset SKYRIM_PYTHON_TEST_PRELOAD
+tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+for f in third_party/cpython/embed/python314.dll third_party/cpython/embed/vcruntime140*.dll; do
+  tools/box/box_deploy.sh --file "$f" "collide-test/$(basename "$f")"
+done
+tools/box/box_launch.sh --env 'SKYRIM_PYTHON_TEST_PRELOAD=C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\SkyrimPython\collide-test\python314.dll'
+tools/box/box_wait_log.sh SkyrimPythonLoader.log "Python disabled" 600
 ```
-After the test: quit the game, `: > plugin/build-options.local` (empty: hooks off), rebuild both DLLs (the build log ends with `SPY_TEST_HOOKS=OFF`) and redeploy the dev ini. `SpyCollideTest/` stays until the owner approves removing it (it is listed in `out/deployed.txt`). If the loader log shows `TEST HOOK: SKYRIM_PYTHON_TEST_PRELOAD not set` (the variable did not reach the game) or `TEST HOOK: preloaded ... (failed)` (the second copy did not load), record the collision row as "not staged" in `spikes/RESULTS.md` with that line, instead of a pass. No `TEST HOOK` line at all means the loader was not built with the hooks: check the build log said `SPY_TEST_HOOKS=ON` and redeploy.
+After the test: `tools/box/box_quit.sh`, `: > plugin/build-options.local` (empty: hooks off), rebuild both DLLs (the build log ends with `SPY_TEST_HOOKS=OFF`) and redeploy the dev ini. `collide-test/` stays until the owner approves removing it (it is in `out/box-deployed.txt`). If the loader log shows `TEST HOOK: SKYRIM_PYTHON_TEST_PRELOAD not set` (the variable did not reach the game; check `launch.log`'s `env` line, Task 1b block B10) or `TEST HOOK: preloaded ... (failed)` (the second copy did not load), record the collision row as "not staged" in `spikes/RESULTS.md` with that line, instead of a pass. No `TEST HOOK` line at all means the loader was not built with the hooks: check that the build log said `SPY_TEST_HOOKS=ON` and redeploy.
 
-Finally redeploy the normal set (`tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package`), relaunch, wait as in Step 6, and rerun Step 6's tests once (`SKYRIM_LIVE=1`, 14 passed).
+Finally redeploy the normal set (`tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini`, then `tools/box/box_deploy.sh --package`), relaunch, wait as in Step 6, run `tools/box/box_session.sh up`, and rerun Step 6's tests once (`SKYRIM_LIVE=1`, 14 passed). Quit with `tools/box/box_quit.sh`.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add plugin tools/deploy.sh livetest && git commit -m "feat(plugin): embedded CPython host thread, _skyrim in the game, startup failure handling"
+git add plugin livetest && git commit -m "feat(plugin): embedded CPython host thread, _skyrim in the game, startup failure handling"
 ```

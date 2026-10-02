@@ -6,7 +6,7 @@ Adapted from: branch `plan-out-of-process`, task 17c (`task-17c-call-method-alia
 
 > **Gate:** start only after Task 28 is done, **spike S7 has passed** (Task 9) and **spike S4 has passed** (Task 6), per `spikes/RESULTS.md`. S7's PASS must include the S7c row with **`bound_by_class_name=true` and `dispatch_ok=true`**: a quest's own attached script (a non-native class, spec 4.3) was found by `FindBoundObject(handle, "<AttachedScript>")` and one of its member functions dispatched. `ResolveTarget` below relies on exactly that for every call on a mod's own script (skyrim-dm's `SetupContract` path). **If S4 is FAIL, STOP and ask the owner**: aliases then depend on a pre-authored Papyrus helper from the M1.5 test ESP, which invalidates the alias code below; the non-alias half (`call_method` on forms, `form.resolve`) can still go ahead if the owner says so.
 >
-> **Runs on:** the Windows build box plus the game; live tests run on Linux through the dev bridge.
+> **Runs on:** the Windows build box plus the game, which runs on the box ([Task 1c](task-01c-part-c-on-the-box.md)); live tests run on Linux through the dev bridge and the session tunnel.
 >
 > **STOP and ask the owner (do not improvise) if:** S4 or S7 is missing or FAIL; S7c's record lacks `bound_by_class_name=true` or `dispatch_ok=true` (or either is `false`); the cold-form route S7 recorded (`FindBoundObject` or `PackHandle`) differs from the code below by more than a rename; a live test crashes the game; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s.
 >
@@ -298,21 +298,23 @@ In `Run`, add before the `unsupported` fallthrough:
 
 - [ ] **Step 4: Build, deploy, run**
 
+The game runs on the Windows box ([Task 1c](task-01c-part-c-on-the-box.md)); waits count only this launch's log text.
 ```bash
 tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
-tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package
-tools/launch_game.sh
-source tools/env.sh
-export SINCE="$SKYRIM_PYTHON_STATE/launch.stamp"   # every wait ignores logs from an earlier run
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
+tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/box/box_deploy.sh --package
+tools/box/box_launch.sh
+tools/box/box_wait_log.sh SkyrimPython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
+tools/box/box_session.sh up && source out/box-live.env
+tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
 SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_mainmenu.py -q -rs
-# Manual: in the game, Load (not Continue) the named save S4 recorded its values from (spikes/RESULTS.md). Continue
-# loads the most recent save, which after Tasks 27-28 may be another one, and the alias tests would then fail. Then:
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: interactive = true" 300
+# Load (not Continue) the named save S4 recorded its values from (spikes/RESULTS.md, e.g. s4test): the most recent
+# save may be another one after Tasks 27-28, and the alias tests would then fail. Then Task 1b block B6.
+tools/box/box_console.sh "load <the S4 save>"
+tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: interactive = true" 300
 export SPY_S4_QUEST=0x... SPY_S4_ALIAS=... SPY_S4_REF=0x...   # from spikes/RESULTS.md; the alias tests skip when unset
 SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_calls.py -q -rs
-unset SINCE
+tools/box/box_quit.sh     # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh (Task 1b Known issue)
 ```
 Expected: `test_m1_mainmenu.py` passes; everything in `test_m1_calls.py` passes. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. The two alias tests are skipped with a message when the `SPY_S4_*` variables are unset; a skip is not a pass, so run them once with the variables set before committing. If S4 failed, STOP (see the gate) rather than marking them `xfail`. **If `test_form_argument_arrives` fails (the count does not change) or crashes the game, STOP**: form arguments do not reach the game as the form (the `PackHandle`/`BindObject` route S7 recorded differs from Task 28's code); do not go on to Task 30. If `test_alias_result_is_an_alias_not_its_quest` gets a Quest back, `AliasObjectToJson` is not reached: re-check the order in `ObjectToJson` (Task 28). If `test_method_call_on_cold_base_form` crashes or fails with `vm_error`, the `PackHandle` route differs from S7's record: STOP.
 

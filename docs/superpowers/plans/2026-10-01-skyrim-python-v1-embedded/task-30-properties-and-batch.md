@@ -6,7 +6,7 @@ Adapted from: branch `plan-out-of-process`, task 18 (`task-18-properties-batch-a
 
 > **Gate:** start only after Task 29 is done (which needs S2, S4, S7, S8 and S9 PASS). S5 and S6 gate the M2 plan only.
 >
-> **Runs on:** the Windows build box plus the game; live tests run on Linux through the dev bridge.
+> **Runs on:** the Windows build box plus the game, which runs on the box ([Task 1c](task-01c-part-c-on-the-box.md)); live tests run on Linux through the dev bridge and the session tunnel.
 >
 > **STOP and ask the owner (do not improvise) if:** a live test crashes the game; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s; the log shows a runtime other than AE 1.6.1170; `get_property` on the auto property S7c enumerated is refused `unsupported` (the engine then sets `getFunction` on auto properties too, and the full-property check below is wrong: record it and STOP).
 >
@@ -279,28 +279,33 @@ and delete the two `(void)cancelled; (void)progress;` lines in `Run`. Note: the 
 
 - [ ] **Step 3: Build, deploy, run**
 
-Loading a save is manual; every wait is bounded and ignores logs from an earlier run (`SINCE=`). The cap test needs the low-cap ini, so the run is in two parts. The property happy path needs the quest S7c used, so load the named save S7 ran on (spikes/RESULTS.md) from the Load menu, not Continue.
+The game runs on the Windows box ([Task 1c](task-01c-part-c-on-the-box.md)); the save is loaded through DevBench; every wait is bounded and counts only this launch's log text. The cap test needs the low-cap ini, so the run is in two parts. The property happy path needs the quest S7c used, so load the named save S7 ran on (spikes/RESULTS.md), not the most recent one.
 ```bash
 tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
-tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package
-tools/launch_game.sh
-source tools/env.sh
-export SINCE="$SKYRIM_PYTHON_STATE/launch.stamp"
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
-# Manual: Load the save S7 ran on. Then:
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: interactive = true" 300
+tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/box/box_deploy.sh --package
+tools/box/box_launch.sh
+tools/box/box_wait_log.sh SkyrimPython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
+tools/box/box_session.sh up && source out/box-live.env
+tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
+tools/box/box_console.sh "load <the S7 save>"     # then Task 1b block B6
+tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: interactive = true" 300
 export SPY_S7C_QUEST=0x... SPY_S7C_SCRIPT=... SPY_S7C_PROPERTY=... SPY_S7C_KIND=...   # from the S7c row of spikes/RESULTS.md
 export SPY_S4_QUEST=0x... SPY_S4_ALIAS=... SPY_S4_REF=0x...                          # as in Task 29
 SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_batch_props.py livetest/test_m1_calls.py -q -rs
 # test_per_connection_cap_returns_busy reports a skip here. Quit the game, then:
-tools/deploy.sh out/SkyrimPython.dll plugin/config/variants/low-cap.ini
-tools/launch_game.sh   # Continue, then wait as above (SINCE is still exported, and the stamp is new)
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: interactive = true" 600
+tools/box/box_quit.sh     # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh
+tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/variants/low-cap.ini
+tools/box/box_launch.sh
+tools/box/box_wait_log.sh SkyrimPython.log "python host: (running|failed|disabled)" 600
+tools/box/box_session.sh up && source out/box-live.env     # new launch, new token
+tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: Main Menu open" 600
+tools/box/box_console.sh "load <the S7 save>"     # then Task 1b block B6
+tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: interactive = true" 600
 SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_batch_props.py -q -rs -k per_connection_cap
-unset SINCE
+tools/box/box_quit.sh
 # Put the dev ini back afterwards:
-tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
 ```
 Expected: the first run passes except the one skip (`test_per_connection_cap_returns_busy`); the second run passes it (at most 16 ok, the rest busy). A skip is not a pass: run the second part before committing, and a skip of `test_get_property_reads_an_auto_property` (missing `SPY_S7C_*`) or of the alias tests means they did not run. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. The 100-step batch takes about 3-7 s, the 150-step one with no timeout about 5-10 s. If `test_get_property_reads_an_auto_property` gets `Unsupported` ("is a full property"), STOP (see the STOP list).
 

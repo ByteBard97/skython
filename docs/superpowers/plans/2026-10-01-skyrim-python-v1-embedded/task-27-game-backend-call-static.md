@@ -6,7 +6,7 @@ Adapted from: branch `plan-out-of-process`, task 17a (`task-17a-dispatch-skeleto
 
 > **Gate:** start after Task 26 is done and `spikes/RESULTS.md` shows S2 (Task 4), S9 (Task 5) and S4 (Task 6) PASS. S7 (Task 9) is needed before Tasks 28 and 29, not here; if you start before S7 exists, the signature code below is unverified and the first compile is the check (grep `plugin/extern/CommonLibSSE-NG` for each name in the Verify list).
 >
-> **Runs on:** the Windows build box plus the game; live tests run on Linux through the dev bridge (`skyrim.connect()` from Linux, or the raw helpers in `livetest/support.py`).
+> **Runs on:** the Windows build box plus the game, which runs on the box ([Task 1c](task-01c-part-c-on-the-box.md)); live tests run on Linux through the dev bridge and the session tunnel (`skyrim.connect()` from Linux, or the raw helpers in `livetest/support.py`).
 >
 > **STOP and ask the owner (do not improvise) if:** S2, S4 or S9 is FAIL; a name in the Verify list does not exist and no obvious equivalent is found; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s; the log shows a runtime other than AE 1.6.1170.
 >
@@ -37,13 +37,13 @@ Rules this task implements (spec 4.3-4.5):
 - `GameBackend::Run` never blocks the caller (a Python thread inside `_skyrim.submit`): it queues exactly one `AddTask` and returns. The queued task checks `cancelled()` first (timed out, cancelled or a load started while queued) and does nothing if so.
 - `game.state` is answered **immediately** from `life::BaseState()` when no game is loaded or a save is loading. Only when a game is loaded does it queue one `AddTask` for `player` and `game_days_passed`, and that task rechecks `Loading()` before touching the engine.
 - Main thread: recheck readiness, find the function, check every argument against the declared parameter types (no default values: the count must match), dispatch.
-- VM callback: it owns the call's `DynArgs` and deletes it after reading the result (S2); on a false `Dispatch*Call` return the dispatch site keeps the args and logs once (R37). It overrides `CanSave()` to return false (ruling R38, as SkyrimPlatform does): our functor is never written into a save. **Primitives and `None` are converted on the VM thread** (no engine state). An object result or an array of objects costs one more `AddTask`, because turning a Form into a reference calls `LookupByID`/`GetFile`. No Python runs on any of these threads (Global Constraints).
+- VM callback: it owns the call's `DynArgs` and deletes it after reading the result (S2); on a false `Dispatch*Call` return the dispatch site keeps the args and logs once (R37). It overrides `CanSave()` to return false (ruling R38, as SkyrimPlatform does): our functor is never written into a save. The base class already returns false at the pin (`src/RE/I/IStackCallbackFunctor.cpp:11`; the header comment reads `{ return false; }`), so the override makes the default explicit rather than changing it. **Primitives and `None` are converted on the VM thread** (no engine state). An object result or an array of objects costs one more `AddTask`, because turning a Form into a reference calls `LookupByID`/`GetFile`. No Python runs on any of these threads (Global Constraints).
 - Readiness at submit, deadlines, `busy`, load cancellation and late-result counting are the Dispatcher's (Task 18); this task does not duplicate them.
 - Member functions are looked up in the script's empty state only.
 
 **Known limits (Task 32 puts them in the README):**
 - Papyrus runtime errors are invisible: the VM callback gets only a result `Variable`. A script error inside the called function is logged by the game to `Papyrus.0.log`; the caller sees `None` or, if no callback fires, `Timeout`. `VmError` means only "the VM refused to dispatch".
-- The functor returns false from `CanSave()`: a save made while a call is in flight does not record our callback. After loading that save the call never completes in the loaded game; the caller sees `NotReady` (the load cancels it) or `Timeout`. Task 31's live test "save during a latent call" pins this.
+- The functor returns false from `CanSave()`: a save made while a call is in flight does not record our callback. After loading that save the call never completes in the loaded game; the caller sees `NotReady` (the load cancels it) or `Timeout`. Task 31's live test "save during a latent call" pins the behaviour (not the override: the base already returns false).
 - A `DynArgs` whose callback never fires (the VM dropped the call, or a refused dispatch whose callback never comes) is never freed: about 100 bytes each (Task 4's estimate). Freeing it in the `Callback` destructor instead is unmeasured (SkyrimPlatform comparison, Top 3, deferred).
 - A call made while the game is paused waits: Papyrus does not advance. Use `require_unpaused` or a generous timeout.
 
@@ -814,28 +814,30 @@ Expected: `no Python includes: OK`.
 
 - [ ] **Step 7: Build, deploy, run the live tests**
 
-Every wait is bounded and starts from this launch (`SINCE=`), so a log from an earlier run cannot satisfy it; loading a save is a manual step (the owner presses Continue). If nobody is at the keyboard, STOP and ask.
+The game runs on the Windows box ([Task 1c](task-01c-part-c-on-the-box.md)). Every wait is bounded and counts only text written since this launch's stamp, so a log from an earlier run cannot satisfy it; the save is loaded through DevBench.
 ```bash
 tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
-tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --python --package --scripts livetest/scripts
-tools/launch_game.sh
-source tools/env.sh
-export SINCE="$SKYRIM_PYTHON_STATE/launch.stamp"
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "game backend: dispatcher ready" 600 || echo "STOP: the dispatcher did not start; ask the owner"
-# The bridge (and this run's session.json) exists only once the host reports; before that the tests would read the
-# previous run's port and token.
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "python host: (running|failed|disabled)" 600
-grep -q "python host: running" "$SKSE_LOG_DIR/SkyrimPython.log" || echo "STOP: Python is not running; read the log"
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: Main Menu open" 600
+tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/box/box_deploy.sh --python
+tools/box/box_deploy.sh --package
+tools/box/box_deploy.sh --scripts livetest/scripts
+tools/box/box_launch.sh
+tools/box/box_wait_log.sh SkyrimPython.log "game backend: dispatcher ready" 600 || echo "STOP: the dispatcher did not start; ask the owner"
+# The bridge (and this run's session.json) exists only once the host reports; box_session.sh refuses a session.json
+# from an earlier launch.
+tools/box/box_wait_log.sh SkyrimPython.log "python host: (running|failed|disabled)" 600
+tools/box/box_wait_log.sh SkyrimPython.log "python host: running" 5 || echo "STOP: Python is not running; read the log"
+tools/box/box_session.sh up && source out/box-live.env
+tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: Main Menu open" 600
 SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_mainmenu.py -q -rs
-# Manual: press Continue in the game. Then:
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: interactive = true" 300
+tools/box/box_console.sh "load spikebase"     # stands in for Continue; then Task 1b block B6
+tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: interactive = true" 300
 SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_calls.py -q -rs
-unset SINCE
+tools/box/box_quit.sh     # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh (Task 1b Known issue)
 ```
-(Two `remote_build.sh` calls: the script fetches one DLL per call, and `deploy.sh` refuses a core DLL older than the loader. `livetest/scripts` exists since Task 26.)
+(Two `remote_build.sh` calls: the script fetches one DLL per call, and `box_deploy.sh` refuses a core DLL older than the loader. `livetest/scripts` exists since Task 26.)
 
-Expected at the main menu: `test_m1_mainmenu.py`: `3 passed`. After the save is loaded: `test_m1_calls.py` passes (all tests; `test_odd_timeout_values_never_hang_or_crash` counts 6). Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure: nothing ran. The core log shows one `game backend: late result dropped: ...` warning per dropped late result (from `on_late`). This is the first time a Papyrus call travels from Linux through the dev bridge, `_skyrim`, the Dispatcher and the VM. If `StringUtil` fails, SKSE's script is not loaded: check `Scripts/StringUtil.pex` and substitute, recording which. If `Utility.RandomInt` fails with `vm_error`, read `Papyrus.0.log` and STOP: S2 saw no refused dispatch for a validated target, so a refusal here means the dispatch rules from S2 do not hold (the log has one `ops: the VM refused a dispatch` warning; the args were kept, R37). If `test_timeout_carries_game_state` fails only because `paused`/`menus` are missing from the timeout detail, the Dispatcher (Task 18) is not adding `BaseState()`'s `paused` and `menus` to timeout errors as spec 4.1 requires: fix it there, not here.
+Expected at the main menu: `test_m1_mainmenu.py`: `3 passed`. After the save is loaded: `test_m1_calls.py` passes (all tests; `test_odd_timeout_values_never_hang_or_crash` counts 6). Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure: nothing ran. The core log shows one `game backend: late result dropped: ...` warning per dropped late result (from `on_late`). This is the first time a Papyrus call travels from Linux through the dev bridge, `_skyrim`, the Dispatcher and the VM. If `StringUtil` fails, SKSE's script is not loaded: check `Scripts/StringUtil.pex` and substitute, recording which. If `Utility.RandomInt` fails with `vm_error`, read `Papyrus.0.log` (on the box: `bssh "Get-Content '$BOX_MYGAMES\\Logs\\Script\\Papyrus.0.log' -Tail 50"` after `source tools/box/box_env.sh`) and STOP: S2 saw no refused dispatch for a validated target, so a refusal here means the dispatch rules from S2 do not hold (the log has one `ops: the VM refused a dispatch` warning; the args were kept, R37). If `test_timeout_carries_game_state` fails only because `paused`/`menus` are missing from the timeout detail, the Dispatcher (Task 18) is not adding `BaseState()`'s `paused` and `menus` to timeout errors as spec 4.1 requires: fix it there, not here.
 
 - [ ] **Step 8: Commit**
 

@@ -6,7 +6,7 @@ Adapted from: branch `plan-out-of-process`, task 17b (`task-17b-papyrus-value-co
 
 > **Gate:** start only after Task 27 is done **and spike S7 has passed** (Task 9; `spikes/RESULTS.md` has an S7 PASS row recording the exact `FindBoundObject`, `PackHandle`, `GetParam` and `ObjectTypeInfo` calls that work on the pinned checkout). **If S4 (Task 6) is FAIL, STOP and ask the owner** before going on to Task 29.
 >
-> **Runs on:** the Windows build box plus the game; live tests run on Linux through the dev bridge.
+> **Runs on:** the Windows build box plus the game, which runs on the box ([Task 1c](task-01c-part-c-on-the-box.md)); live tests run on Linux through the dev bridge and the session tunnel.
 >
 > **STOP and ask the owner (do not improvise) if:** S7 is missing or FAIL; the form-argument route S7 recorded differs from the code below by more than a rename; a live test crashes the game; the game does not reach the main menu within 10 minutes; the build box does not answer `ssh` within 10 s.
 >
@@ -400,19 +400,20 @@ json FromVariable(const Variable& v)
 
 - [ ] **Step 4: Build, deploy, run**
 
+The game runs on the Windows box ([Task 1c](task-01c-part-c-on-the-box.md)); waits count only this launch's log text.
 ```bash
 tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll
-tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --package
-tools/launch_game.sh
-source tools/env.sh
-export SINCE="$SKYRIM_PYTHON_STATE/launch.stamp"   # every wait ignores logs from an earlier run
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
+tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini
+tools/box/box_deploy.sh --package
+tools/box/box_launch.sh
+tools/box/box_wait_log.sh SkyrimPython.log "python host: (running|failed|disabled)" 600 || echo "STOP: Python did not report in 10 minutes; ask the owner"
+tools/box/box_session.sh up && source out/box-live.env
+tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: Main Menu open" 600 || echo "STOP: no main menu in 10 minutes; ask the owner"
 SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_mainmenu.py -q -rs
-# Manual: press Continue. Then:
-tools/wait_for_log.sh "$SKSE_LOG_DIR/SkyrimPython.log" "lifecycle: interactive = true" 300
+tools/box/box_console.sh "load spikebase"     # stands in for Continue; then Task 1b block B6
+tools/box/box_wait_log.sh SkyrimPython.log "lifecycle: interactive = true" 300
 SKYRIM_LIVE=1 uv run --project python pytest livetest/test_m1_calls.py -q -rs
-unset SINCE
+tools/box/box_quit.sh     # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh (Task 1b Known issue)
 ```
 
 Expected: `test_m1_mainmenu.py` passes (3); `test_m1_calls.py` passes in full. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. `test_form_argument_round_trip` shows a form argument is accepted for a native `Form` parameter, and `test_form_of_the_wrong_class_is_rejected_before_dispatch` that `BindObject` refuses the wrong class; the proof that the form itself arrives (not a None) is Task 29's `GetItemCount` round trip, which carries the STOP for the form-argument route. If any form-argument test fails with `vm_error` or the game crashes, STOP: the `PackHandle` route S7 recorded differs from the code here. If a `None` test crashes the game or fails with `vm_error`, STOP: the typed None (`Variable(t)`) is not what the VM accepts; record what happened. If `test_primitive_arrays_round_trip` fails on `CreateFloatArray`, check `Utility.psc` and substitute.

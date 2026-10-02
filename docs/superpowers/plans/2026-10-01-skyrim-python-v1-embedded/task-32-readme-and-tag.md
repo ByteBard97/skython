@@ -6,7 +6,7 @@ Adapted from: branch `plan-out-of-process`, task 20 (`task-20-readme-and-milesto
 
 > **Gate:** start only after Task 31 is done and `spikes/RESULTS.md` has a recorded result (PASS or FAIL with evidence) for every spike S1, S2, S4-S10. M1 is not complete while S5, S6 or S10 is unrecorded (index, Gates).
 >
-> **Runs on:** Linux (the repository). Step 2 needs the game running with a save loaded, so it is a hand-off to the owner.
+> **Runs on:** Linux (the repository). Step 2 needs the game running on the Windows box with a save loaded ([Task 1c](task-01c-part-c-on-the-box.md)).
 >
 > **STOP and ask the owner (do not improvise) if:** the full run in Step 2 fails anywhere; the alias or property tests were skipped because the `SPY_S4_*` or `SPY_S7C_*` values are missing (a skip is not a pass); a live test was skipped for lack of `SKYRIM_LIVE=1`; a spike row is missing from `spikes/RESULTS.md`.
 
@@ -25,7 +25,7 @@ Replace `README.md` with the text below. Fill the two bracketed figures from `li
 
 Python inside Skyrim (SE/AE): an SKSE plugin that embeds CPython 3.14 and lets Python code call any Papyrus function in the running game, with the same API from a separate process during development. Built as the foundation for [skyrim-dm].
 
-Status: M1 (embedded dispatcher). Verified on Skyrim AE 1.6.1170 under GE-Proton; the plugin does not start Python on any other runtime. Events and save/load arrive in M2, typed bindings in M3, packaging for players in M4.
+Status: M1 (embedded dispatcher). Verified on Skyrim AE 1.6.1170 on Windows (the build box, native); the plugin does not start Python on any other runtime. Events and save/load arrive in M2, typed bindings in M3, packaging for players in M4.
 
 ## How it fits together
 
@@ -70,7 +70,7 @@ With the dev ini (`bridge_enabled = true`), the same API works from any process 
 ```python
 import skyrim
 
-game = skyrim.connect()                  # finds the bridge through SKYRIM_PYTHON_SESSION (source tools/env.sh)
+game = skyrim.connect()                  # finds the bridge through SKYRIM_PYTHON_SESSION (dev box: source out/box-live.env)
 print(game.call("Utility", "RandomInt", 1, 6))
 ```
 The bridge listens on `127.0.0.1` only, checks a token on every connection, and is off in the shipped ini. Code that works through the bridge works unchanged as a script in `scripts/`; run it in-process now and then, because only there does it meet Windows CPython, its vendored wheels and the game's threads.
@@ -92,8 +92,8 @@ The bridge listens on `127.0.0.1` only, checks a token on every connection, and 
 ## Build and test
 - Core and `_skyrim` (Linux): `cmake -S core -B core/build && cmake --build core/build -j && ctest --test-dir core/build`; the `_skyrim` module and its tests per `pyglue/` (Task 19); the package: `cd python && uv run pytest`.
 - CPython runtime and headers: `tools/fetch_python.sh` (checks SHA-256s against `docs/PINS.md`).
-- Plugin (Windows box over ssh), two calls because the script fetches one DLL per call: `tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll`; deploy with `tools/deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini --python --package --scripts livetest/scripts` (`--python` and `--scripts` only when the runtime or the scripts changed); launch with `tools/launch_game.sh`.
-- Live tests (game running, save loaded): `source tools/env.sh && SKYRIM_LIVE=1 uv run --project python pytest livetest -q -rs`. Without `SKYRIM_LIVE=1` every live test is skipped.
+- Plugin (Windows box over ssh), two calls because the script fetches one DLL per call: `tools/remote_build.sh plugin SkyrimPython.dll && tools/remote_build.sh plugin SkyrimPythonCore.dll`; the game runs on the Windows box: deploy with `tools/box/box_deploy.sh out/SkyrimPython.dll plugin/config/SkyrimPython.dev.ini`, then `tools/box/box_deploy.sh --package` (and `--python`, `--scripts livetest/scripts` when the runtime or the scripts changed); launch with `tools/box/box_launch.sh`, quit with `tools/box/box_quit.sh` (plan Tasks 1b and 1c).
+- Live tests (game running on the box, save loaded): `tools/box/box_session.sh up && source out/box-live.env && SKYRIM_LIVE=1 uv run --project python pytest livetest -q -rs` (an ssh tunnel, loopback on both ends; the session file with the token stays in `out/`). Without `SKYRIM_LIVE=1` every live test is skipped.
 - Protocol: `protocol/PROTOCOL.md`, fixtures in `protocol/v1/fixtures/`. Design: `docs/specs/2026-09-30-skyrim-python-design.md`. Spike results: `spikes/RESULTS.md`.
 
 ## Licence
@@ -112,10 +112,14 @@ Expected: `README filled in`.
 ```bash
 ctest --test-dir core/build --output-on-failure
 (cd python && uv run pytest -q)
-source tools/env.sh && export SPY_S4_QUEST=0x... SPY_S4_ALIAS=... SPY_S4_REF=0x...   # from spikes/RESULTS.md
+# The game on the box (Task 1c), deployed as in Task 31 Step 4, at the main menu; then load the save S7 ran on:
+#   tools/box/box_console.sh "load <the S7 save>" and Task 1b block B6
+tools/box/box_session.sh up && source out/box-live.env
+export SPY_S4_QUEST=0x... SPY_S4_ALIAS=... SPY_S4_REF=0x...   # from spikes/RESULTS.md
 export SPY_S7C_QUEST=0x... SPY_S7C_SCRIPT=... SPY_S7C_PROPERTY=... SPY_S7C_KIND=...   # from spikes/RESULTS.md (Task 30)
 SKYRIM_LIVE=1 uv run --project python pytest livetest -q -rs --deselect livetest/test_m1_mainmenu.py --deselect livetest/test_m1_throughput.py
 git status --short    # clean: nothing in the run rewrote a tracked file
+tools/box/box_quit.sh   # NOT_CLEAN with NO_NEW_CRASH_LOG: tools/box/box_stop.sh (Task 1b Known issue)
 ```
 (`test_m1_throughput.py` is deselected: Task 31 recorded the baseline that Step 1 copied into the README, and running it again would rewrite `livetest/results/throughput.json` with numbers that disagree with the README. The save loaded must be the one S7 ran on, for the property and alias tests.) Also run the `_skyrim` Linux suite the way Task 19 set it up. Expected: all pass. The skip report (`-rs`) lists only tests that need another setup: the startup-variant tests (Task 26), the low-cap test (run in Task 30 with its own ini) and the two `SPY_MANUAL` tests (run in Task 31). The main-menu tests ran in Tasks 27-29 before a save was loaded. Any skip whose reason is `live test: set SKYRIM_LIVE=1` is a failure. Any skip about missing `SPY_S4_*` or `SPY_S7C_*` values means the alias or property tests did not run: set them and rerun.
 
