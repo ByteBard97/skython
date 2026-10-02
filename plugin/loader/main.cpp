@@ -53,6 +53,13 @@ SKSE_PLUGIN_LOAD(const SKSE::LoadInterface* skse)
             Log(std::format("runtime check: Skyrim {} is not a verified runtime; Python and Skython stay off", ver));
             return true;
         }
+        // Address Library for SKSE Plugins: CommonLib's REL::ID needs it and stops the game with a message box if it
+        // is missing, so the core is not started without it. File name as the box has it: versionlib-1-6-1170-0.bin.
+        if (const auto lib = "versionlib-" + REL::Module::get().version().string("-") + ".bin";
+            !spy::loader::PluginsFileExists(lib)) {
+            Log("Address Library for SKSE Plugins not found (" + lib + "); Python stays off");
+            return true;
+        }
         if (const std::string why = spy::loader::StartCore(skse, &Log); !why.empty())
             Log("Python disabled: " + why);
     } catch (const std::exception& e) {

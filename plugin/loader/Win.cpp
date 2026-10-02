@@ -41,6 +41,18 @@ bool SamePath(const fs::path& a, const fs::path& b)
 std::string WinError(const std::string& what) { return what + " (Windows error " + std::to_string(GetLastError()) + ")"; }
 }
 
+bool PluginsFileExists(const std::string& name) noexcept
+{
+    try {
+        const fs::path plugins = OwnPath().parent_path();
+        if (plugins.empty()) return true;
+        std::error_code ec;
+        return fs::exists(plugins / fs::path(name), ec) || ec;
+    } catch (...) {
+        return true;
+    }
+}
+
 bool TestUnverifiedRuntime(LogFn log) noexcept
 {
 #ifdef SPY_TEST_HOOKS
