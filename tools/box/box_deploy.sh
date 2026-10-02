@@ -35,6 +35,11 @@
 # Files are staged under C:\dev\skyrim-python-box\stage (no spaces for scp), then copied into place on the box.
 set -euo pipefail
 source "$(dirname "$0")/box_env.sh"
+if [ "${1:-}" = --where ]; then
+  printf 'BOX_GAME=%s (SkyrimSE.exe %s)\nBOX_GAME_DIR=%s\nBOX_DATA=%s\nBOX_PLUGINS=%s\nBOX_OWN=%s\n' \
+    "$BOX_GAME" "$BOX_GAME_VERSION" "$BOX_GAME_DIR" "$BOX_DATA" "$BOX_PLUGINS" "$BOX_OWN"
+  exit 0
+fi
 mkdir -p "$BOX_ROOT/out/box-stage"
 [ "${BOX_DEPLOY_PRINT_TARGET:-0}" = 1 ] || touch "$BOX_DEPLOYED"   # print mode never creates the record
 
@@ -84,11 +89,6 @@ put_entries() {  # put_entries <local dir> <windows dest dir>: each top-level en
 spike_ok() { case "$(basename "$1")" in *Spike*) [ "${CONFIRM_THROWAWAY_SAVE:-0}" = 1 ] || box_die "$1 is spike code (unauthenticated port); use a throwaway save and re-run with CONFIRM_THROWAWAY_SAVE=1" ;; esac; }
 
 [ $# -ge 1 ] || box_die "usage: see the header of $0"
-if [ "$1" = --where ]; then
-  printf 'BOX_GAME=%s (SkyrimSE.exe %s)\nBOX_GAME_DIR=%s\nBOX_DATA=%s\nBOX_PLUGINS=%s\nBOX_OWN=%s\n' \
-    "$BOX_GAME" "$BOX_GAME_VERSION" "$BOX_GAME_DIR" "$BOX_DATA" "$BOX_PLUGINS" "$BOX_OWN"
-  exit 0
-fi
 owned() {  # owned <windows path>: recorded, or inside a recorded folder
   local r
   [ -f "$BOX_DEPLOYED" ] || box_die "no deploy record $BOX_DEPLOYED: this tool deployed nothing, so there is nothing it may move"

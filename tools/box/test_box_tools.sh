@@ -487,6 +487,8 @@ for kv in "ae1170 $EX_1170 1.6.1170.0" "ae17104 $EX_17104 1.7.104.0"; do
   P2="$dir\\Data\\SKSE\\Plugins"
   [ "$t" = "$(printf '%s\n' "$P2\\Skython.dll" "$P2\\Skython\\SkythonCore.dll" "$P2\\Skython.ini")" ] && ok "BOX_GAME=$k: DLL targets under its Plugins" || { bad "BOX_GAME=$k DLL targets:"; echo "$t"; }
 done
+[ "$(grep -n '^if \[ "${1:-}" = --where \]' "$B/box_deploy.sh" | cut -d: -f1)" -lt "$(grep -n '^mkdir -p "$BOX_ROOT/out/box-stage"' "$B/box_deploy.sh" | cut -d: -f1)" ] \
+  && ok "box_deploy.sh --where exits before it creates out/ or the deploy record" || bad "box_deploy.sh --where runs after the out/ side effects"
 for k in ae9 AE1170 'ae1170 x' ''; do
   [ -z "$k" ] && continue
   t="$(clean BOX_LOCAL_ENV="$EXAMPLE" BOX_GAME="$k" "$B/box_deploy.sh" --where 2>&1)"; rc=$?
@@ -552,6 +554,8 @@ t="$(clean BOX_LOCAL_ENV="$EXAMPLE" BOX_SETUP_PRINT_CONFIG=1 "$B/box_setup.sh" 2
 [ "$t" = "$(printf 'user\t%s\ngame\tae1170\t%s\ngame\tae17104\t%s' "$EX_USER" "$EX_1170" "$EX_17104")" ] && ok "box_setup.sh box.config: user and both installs" || { bad "box.config text:"; echo "$t"; }
 grep -qF 'New-ScheduledTaskPrincipal -UserId $TaskUser ' "$B/win/setup_task.ps1" && grep -qxF '$TaskUser = $cfg.User' "$B/win/setup_task.ps1" \
   && ! grep -qE -- "-UserId '" "$B/win/setup_task.ps1" && ok "setup_task.ps1: -UserId from box.config" || bad "setup_task.ps1 -UserId"
+grep -qF "if (\$state -ne 'OK') { \$bad++ }" "$B/win/config.ps1" && grep -qxF 'if ($bad) { exit 1 }' "$B/win/config.ps1" \
+  && grep -qF "Join-Path \$d 'skse64_loader.exe'" "$B/win/config.ps1" && ok "config.ps1 fails setup for a wrong exe version or a missing loader" || bad "config.ps1 checks"
 grep -qF "\$BoxConfig = Join-Path \$BoxDir 'box.config'" "$cl" && grep -qE '^bps 60 setup_task\.ps1' "$B/box_setup.sh" \
   && [ "$(grep -nE "launch.game|box.config'," "$B/box_setup.sh" | head -1 | cut -d: -f1)" -lt "$(grep -nE '^bps 60 setup_task' "$B/box_setup.sh" | cut -d: -f1)" ] \
   && ok "box_setup.sh writes box.config before setup_task.ps1 reads it" || bad "box_setup.sh order"
