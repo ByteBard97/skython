@@ -19,19 +19,17 @@ namespace SkythonTestEsp
         static readonly FormKey NordRace = E(0x013746);
         static readonly FormKey WEFarmerMale = E(0x1034E4);         // neutral NPC_ used as the template
         static readonly FormKey EncClassBanditMelee = E(0x01CE17);  // the class WEFarmerMale itself carries (required field)
-        static readonly FormKey DefaultLightingTemplate = E(0x0300E2);
         static readonly FormKey XMarker = E(0x00003B);
         static readonly FormKey COCMarkerHeading = E(0x000032);
         static readonly FormKey ImpFloorMid01 = E(0x03CB89);       // 256 x 256 floor piece; scaled x4 below
-        static readonly FormKey WhiteRunIntIS = E(0x036ED2);        // image space of WhiterunBreezehome
-        static readonly FormKey IntRoomWoodMediumAcousticSpace = E(0x0C5B6B);  // acoustic space of WhiterunBreezehome
+        static readonly FormKey WhiterunBreezehome = E(0x0165A8);   // vanilla interior whose cell record ours copies
 
         static readonly (string EditorId, FormKey Key)[] EsmRefs =
         {
             ("NordRace", NordRace), ("WEFarmerMale", WEFarmerMale), ("EncClassBanditMelee", EncClassBanditMelee),
-            ("DefaultLightingTemplate", DefaultLightingTemplate), ("XMarker", XMarker),
+            ("XMarker", XMarker),
             ("COCMarkerHeading", COCMarkerHeading), ("ImpFloorMid01", ImpFloorMid01),
-            ("WhiteRunIntIS", WhiteRunIntIS), ("IntRoomWoodMediumAcousticSpace", IntRoomWoodMediumAcousticSpace),
+            ("WhiterunBreezehome", WhiterunBreezehome),
         };
 
         // `verify-esm <Skyrim.esm>`: prints "<EditorID> <FormKey> ok|MISMATCH <found>" for each reference above.
@@ -55,12 +53,12 @@ namespace SkythonTestEsp
         public const uint LocationId = 0x000801, CellId = 0x000802, NpcBaseId = 0x000803, NpcRefId = 0x000804,
                           MarkerId = 0x000805, CocMarkerId = 0x000806, FloorId = 0x000807, NextId = 0x000808;
 
-        public static void Write(string path)
+        public static void Write(string path, string esmPath)
         {
             var mod = new SkyrimMod(Own, R);
             mod.Locations.Add(new Location(O(LocationId), R) { EditorID = "SkythonTestLocation", Name = "Skython Test Location" });
             mod.Npcs.Add(NpcBase());
-            mod.Cells.Records.Add(CellBlockWith(TestCell()));
+            mod.Cells.Records.Add(CellBlockWith(TestCell(esmPath)));
             mod.Quests.Add(TestQuest());
             mod.ModHeader.Author = "Skython test data";
             mod.ModHeader.Stats.NextFormID = NextId;
@@ -86,19 +84,32 @@ namespace SkythonTestEsp
         static Placement At(float x, float y, float z) =>
             new Placement { Position = new P3Float(x, y, z), Rotation = new P3Float(0, 0, 0) };
 
-        static Cell TestCell()
+        // Default location of the installed Skyrim.esm (this machine); SKYTHON_SKYRIM_ESM overrides it. The cell is
+        // copied from it, so the build reads it (Task 48 R67).
+        public const string DefaultSkyrimEsm = "/mnt/games/SteamLibrary/steamapps/common/Skyrim Special Edition/Data/Skyrim.esm";
+
+        static Cell TestCell(string esmPath)
         {
-            var cell = new Cell(O(CellId), R) { EditorID = "SkythonTestCell", Name = "Skython Test Cell", Flags = Cell.Flag.IsInteriorCell };
-            cell.LightingTemplate = DefaultLightingTemplate;
-            // Every Creation Kit interior in Skyrim.esm carries XCLL (lighting) and XCLW (water height); without them the
-            // game crashed in the renderer on the first frame in this cell (Task 48, launch 1). These values copy the
-            // vanilla interior WhiterunBreezehome (Skyrim.esm|0x0165A8): its XCLL with the same inherit flags (so ambient,
-            // directional, fog colours, fog near/far and clip distance come from the lighting template), its water
-            // height 0, image space and acoustic space.
-            cell.Lighting = BreezehomeLighting();
-            cell.WaterHeight = 0f;
-            cell.ImageSpace = WhiteRunIntIS;
-            cell.AcousticSpace = IntRoomWoodMediumAcousticSpace;
+            // The cell record is a copy of the vanilla interior WhiterunBreezehome (lighting template, XCLL, water, image
+            // and acoustic space, music, sky region, encounter zone, flags), without its references, navmeshes and
+            // name. Two hand-built cells crashed the renderer on the first frame after coc (Task 48 launches 1 and 2).
+            using var esm = SkyrimMod.CreateFromBinaryOverlay(esmPath, R);
+            ICellGetter src = null;
+            foreach (var b in esm.Cells.Records)
+                foreach (var sb in b.SubBlocks)
+                    foreach (var c in sb.Cells)
+                        if (c.FormKey == WhiterunBreezehome) src = c;
+            if (src == null || src.EditorID != "WhiterunBreezehome")
+                throw new System.InvalidOperationException($"WhiterunBreezehome {WhiterunBreezehome} not found in {esmPath}");
+            var mask = new Cell.TranslationMask(defaultOn: true)
+            {
+                Persistent = false, Temporary = false, NavigationMeshes = false, Landscape = false, Name = false,
+            };
+            // Duplicate() throws on a binary-overlay source in Mutagen 23.4.0 (its release is unset), so copy into a new record.
+            var cell = new Cell(O(CellId), R);
+            cell.DeepCopyIn(src, mask);
+            cell.EditorID = "SkythonTestCell";
+            cell.Name = "Skython Test Cell";
             cell.Location = O(LocationId);
             var npc = new PlacedNpc(O(NpcRefId), R) { EditorID = "SkythonTestNPC", MajorFlags = PlacedNpc.MajorFlag.Persistent, Placement = At(0, 128, 70) };
             npc.Base = O(NpcBaseId);
@@ -115,26 +126,6 @@ namespace SkythonTestEsp
             cell.Temporary.Add(floor);
             return cell;
         }
-
-        static System.Drawing.Color Rgb(int r, int g, int b) => System.Drawing.Color.FromArgb(0, r, g, b);
-
-        static CellLighting BreezehomeLighting() => new CellLighting
-        {
-            AmbientColor = Rgb(30, 30, 40), DirectionalColor = Rgb(0, 0, 0),
-            FogNearColor = Rgb(0, 0, 0), FogFarColor = Rgb(0, 0, 0), FogNear = 0, FogFar = 0,
-            DirectionalRotationXY = 0, DirectionalRotationZ = 0, DirectionalFade = 0, FogClipDistance = 0, FogPower = 1,
-            AmbientDirectionalXPlus = Rgb(15, 13, 12), AmbientDirectionalXMinus = Rgb(12, 13, 11),
-            AmbientDirectionalYPlus = Rgb(14, 13, 12), AmbientDirectionalYMinus = Rgb(14, 12, 12),
-            AmbientDirectionalZPlus = Rgb(6, 6, 5), AmbientDirectionalZMinus = Rgb(21, 19, 18),
-            AmbientSpecular = Rgb(0, 0, 0), AmbientScale = 1,
-            DirectionalXPlus = Rgb(15, 13, 12), DirectionalXMinus = Rgb(12, 13, 11),
-            DirectionalYPlus = Rgb(14, 13, 12), DirectionalYMinus = Rgb(14, 12, 12),
-            DirectionalZPlus = Rgb(6, 6, 5), DirectionalZMinus = Rgb(21, 19, 18),
-            Specular = Rgb(0, 0, 0), Scale = 1,
-            FogMax = 1, LightFadeBegin = 0, LightFadeEnd = 0,
-            Inherits = CellLighting.Inherit.AmbientColor | CellLighting.Inherit.DirectionalColor | CellLighting.Inherit.FogColor
-                       | CellLighting.Inherit.FogNear | CellLighting.Inherit.FogFar | CellLighting.Inherit.ClipDistance,
-        };
 
         static CellBlock CellBlockWith(Cell cell)
         {

@@ -2,7 +2,7 @@ plugin SkythonTest.esp masters=Skyrim.esm
 location SkythonTestLocation 000801:SkythonTest.esp
 npc SkythonTestNPCBase 000803:SkythonTest.esp race=013746:Skyrim.esm template=1034E4:Skyrim.esm
 cell SkythonTestCell 000802:SkythonTest.esp block=0/5 location=000801:SkythonTest.esp
-  cell-data flags=IsInteriorCell lighting_template=0300E2:Skyrim.esm lighting=inherits=AmbientColor, DirectionalColor, FogColor, FogNear, FogFar, ClipDistance water_height=0 image_space=036ED2:Skyrim.esm acoustic_space=0C5B6B:Skyrim.esm
+  cell-data flags=IsInteriorCell, PublicArea, ShowSky lighting_template=06175D:Skyrim.esm lighting=inherits=AmbientColor, DirectionalColor, FogColor, FogNear, FogFar, ClipDistance water_height=0 image_space=036ED2:Skyrim.esm acoustic_space=0C5B6B:Skyrim.esm
   persistent SkythonTestNPC 000804:SkythonTest.esp base=000803:SkythonTest.esp
   persistent SkythonTestMarker 000805:SkythonTest.esp base=00003B:Skyrim.esm
   temporary - 000806:SkythonTest.esp base=000032:Skyrim.esm
