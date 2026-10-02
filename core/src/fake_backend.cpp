@@ -60,6 +60,39 @@ void FakeBackend::Run(const std::string& op, const json& args, Done done, Cancel
         done(OpResult::Ok(std::move(state)));
         return;
     }
+    if (op == ops::kGameSave) {
+        const std::string name = args.at("name").get<std::string>();  // parse_request checked it is a save name
+        bool inserted = false;
+        {
+            std::lock_guard lk(mx_);
+            inserted = saves_.insert(name).second;
+        }
+        if (inserted) done(OpResult::Ok({{"name", name}}));
+        else done(OpResult::Err(ErrorCode::bad_request, "a save named " + name + " already exists", {{"reason", "save_exists"}}));
+        return;
+    }
+    if (op == ops::kGameLoad) {
+        const std::string name = args.at("save").get<std::string>();
+        const std::optional<std::string> reason = NotReadyReason(false);
+        if (reason == "starting" || reason == "loading") {
+            const json base = BaseState();
+            done(OpResult::Err(ErrorCode::not_ready, *reason == "starting" ? "the game is still starting" : "a game is loading",
+                               {{"reason", *reason}, {"paused", base["paused"]}, {"menus", base["menus"]}}));
+            return;
+        }
+        bool known = false;
+        {
+            std::lock_guard lk(mx_);
+            known = saves_.count(name) == 1;
+        }
+        if (!known) {
+            done(OpResult::Err(ErrorCode::not_found, "no save named " + name));
+            return;
+        }
+        BumpLoads();  // the load is a world reset: in-flight needs_game calls end not_ready at the next Tick
+        done(OpResult::Ok({{"save", name}, {"started", true}}));
+        return;
+    }
     const std::string script = args.contains("script") && args["script"].is_string() ? args["script"].get<std::string>() : "";
     if (op != ops::kPapyrusCallStatic || script != "Fake") {
         Schedule(Clock::now(), [done, op] { done(OpResult::Err(ErrorCode::unsupported, "fake backend: " + op + " is not supported")); });
@@ -127,4 +160,16 @@ void FakeBackend::SetPaused(bool paused)
 }
 
 std::uint64_t FakeBackend::RunCount() const { return runs_.load(); }
+
+void FakeBackend::AddFakeSave(std::string name)
+{
+    std::lock_guard lk(mx_);
+    saves_.insert(std::move(name));
+}
+
+std::vector<std::string> FakeBackend::FakeSaves() const
+{
+    std::lock_guard lk(mx_);
+    return {saves_.begin(), saves_.end()};
+}
 }

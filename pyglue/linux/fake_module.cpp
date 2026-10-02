@@ -60,12 +60,20 @@ PYBIND11_MODULE(_skython, m)
     // Leaked on purpose: the fake's worker and the dispatcher's reaper live until the process exits, as in the game,
     // which never finalises Python. Destroying them during interpreter shutdown would join threads at a bad time.
     static spy::FakeBackend* fake = new spy::FakeBackend();
+    // The hub's epoch is the fake's (BaseState()["epoch"] counts loads); it is "loading" while _fake_set_not_ready("loading").
+    static spy::EventHub* hub = new spy::EventHub({[] { return fake->LoadsStarted(); },
+                                                   [] { return fake->NotReadyReason(false).value_or("") == "loading"; }});
     static spy::Dispatcher* dispatcher = [] {
         const spy::Config cfg = FakeConfig();
-        auto* d = new spy::Dispatcher(*fake, {cfg.default_timeout_ms, cfg.max_inflight_total});
+        spy::DispatcherOptions options{cfg.default_timeout_ms, cfg.max_inflight_total};
+        options.events = hub;
+        auto* d = new spy::Dispatcher(*fake, options);
         d->StartReaper();
         return d;
     }();
-    spy::InstallModuleHost({dispatcher, "fake", ConfigJson, Log, fake});
+    // Named fields (C++20 designated initializers), never positional: later tasks append ModuleHost fields
+    // (console_echo in Task 43, probe_sink_cycles in Task 44), each with a default.
+    spy::InstallModuleHost({.dispatcher = dispatcher, .backend = "fake", .config_json = ConfigJson, .log = Log,
+                            .fake = fake, .events = hub});
     spy::DefineModule(m);
 }

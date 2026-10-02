@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <random>
 #include <set>
@@ -136,7 +137,11 @@ TEST_CASE("fixture replay: every valid request is accepted, every invalid one ge
         CHECK(r["id"] == m["id"]);
         // The fake answers game.state and refuses every real Papyrus op; what matters is that the request got past
         // parsing and readiness to the backend.
-        CHECK(code_of(r) == (m["op"] == "game.state" ? "ok" : "unsupported"));
+        // game.save creates its save (ok); game.load names a save the fake does not have (not_found); events.* need a
+        // hub, and this Dispatcher has none (unsupported).
+        const std::map<std::string, std::string> expected = {{"game.state", "ok"}, {"game.save", "ok"}, {"game.load", "not_found"}};
+        const auto it = expected.find(m["op"].get<std::string>());
+        CHECK(code_of(r) == (it != expected.end() ? it->second : "unsupported"));
     }
     for (const auto& c : fx["invalid"]) {
         CAPTURE(c.dump());
@@ -279,4 +284,94 @@ TEST_CASE("stress: Wait, WaitAny, cancels, timeouts and loads racing on the same
         std::this_thread::sleep_for(5ms);
     CHECK(fake.RunCount() - runs_before == oks + d.LateResults());
     CHECK(d.Abandoned() == 0);
+}
+
+// ---- Task 35: game.save and game.load on the fake ----------------------------------------------------------------
+namespace {
+std::string op_text(std::uint64_t id, const std::string& op, json args)
+{
+    return spy::dump_json({{"type", "request"}, {"id", id}, {"op", op}, {"args", std::move(args)}});
+}
+json golden_response(std::uint64_t id)
+{
+    const json fx = load_fixture("responses.json");
+    for (const auto& r : fx["valid"])
+        if (r["type"] == "response" && r.value("id", std::uint64_t{0}) == id) return r;
+    FAIL("no golden response with id " << id);
+    return {};
+}
+json valid_request(std::uint64_t id)
+{
+    const json fx = load_fixture("requests.json");
+    for (const auto& r : fx["valid"])
+        if (r["id"] == id) return r;
+    FAIL("no valid request with id " << id);
+    return {};
+}
+}
+
+TEST_CASE("FakeBackend game.save records the name and refuses an existing one with save_exists")
+{
+    spy::FakeBackend fake;
+    spy::Dispatcher d(fake, {});
+    CHECK(run(d, op_text(1, "game.save", {{"name", "skython_a"}}))["result"] == json{{"name", "skython_a"}});
+    auto r = run(d, op_text(2, "game.save", {{"name", "skython_a"}}));
+    CHECK(code_of(r) == "bad_request");
+    CHECK(r["error"]["detail"]["reason"] == "save_exists");
+    fake.AddFakeSave("skython_b");
+    CHECK(fake.FakeSaves() == std::vector<std::string>{"skython_a", "skython_b"});
+    CHECK(code_of(run(d, op_text(3, "game.save", {{"name", "skython_b"}}))) == "bad_request");
+    fake.SetNotReady(std::string("no_game"));  // game.save needs a game: the Dispatcher refuses it first
+    CHECK(code_of(run(d, op_text(4, "game.save", {{"name", "skython_c"}}))) == "not_ready");
+    CHECK(fake.FakeSaves().size() == 2);
+}
+
+TEST_CASE("FakeBackend game.load: not_found, not_ready while starting or loading, allowed at the main menu, bumps loads")
+{
+    spy::FakeBackend fake;
+    spy::Dispatcher d(fake, {});
+    CHECK(code_of(run(d, op_text(1, "game.load", {{"save", "nope"}}))) == "not_found");
+    CHECK(fake.LoadsStarted() == 0);
+    fake.AddFakeSave("skython_s");
+    for (const char* reason : {"starting", "loading"}) {
+        CAPTURE(reason);
+        fake.SetNotReady(std::string(reason));
+        auto r = run(d, op_text(2, "game.load", {{"save", "skython_s"}}));
+        CHECK(code_of(r) == "not_ready");
+        CHECK(r["error"]["detail"]["reason"] == reason);
+        CHECK(r["error"]["detail"].contains("paused"));
+        CHECK(r["error"]["detail"].contains("menus"));
+    }
+    CHECK(fake.LoadsStarted() == 0);
+    fake.SetNotReady(std::string("no_game"));  // the main menu: loading from there works
+    CHECK(run(d, op_text(3, "game.load", {{"save", "skython_s"}}))["result"] == json{{"save", "skython_s"}, {"started", true}});
+    CHECK(fake.LoadsStarted() == 1);
+    CHECK(fake.BaseState()["epoch"] == 1);
+}
+
+TEST_CASE("FakeBackend game.load ends an in-flight Fake.Sleep with not_ready and dispatched")
+{
+    spy::FakeBackend fake;
+    spy::Dispatcher d(fake, {});
+    d.StartReaper(5ms);
+    fake.AddFakeSave("skython_s");
+    const auto slow = d.Submit(fake_call(1, "Sleep", json::array({5000})));
+    CHECK(run(d, op_text(2, "game.load", {{"save", "skython_s"}}))["result"]["started"] == true);
+    const auto text = d.Wait(slow, 2000ms);
+    REQUIRE(text);
+    const auto r = json::parse(*text);
+    CHECK(code_of(r) == "not_ready");
+    CHECK(r["error"]["detail"]["dispatched"] == true);
+    CHECK(r["error"]["detail"]["reason"] == "loading");
+}
+
+TEST_CASE("golden: game.save and game.load responses from the fake (responses.json ids 62 to 65)")
+{
+    spy::FakeBackend fake;
+    spy::Dispatcher d(fake, {});
+    CHECK(spy::dump_json(run(d, spy::dump_json(valid_request(62)))) == spy::dump_json(golden_response(62)));
+    fake.AddFakeSave("skython_t41");
+    CHECK(spy::dump_json(run(d, spy::dump_json(valid_request(63)))) == spy::dump_json(golden_response(63)));
+    CHECK(spy::dump_json(run(d, op_text(64, "game.save", {{"name", "skython_t41"}}))) == spy::dump_json(golden_response(64)));
+    CHECK(spy::dump_json(run(d, op_text(65, "game.load", {{"save", "no_such_save_skython"}}))) == spy::dump_json(golden_response(65)));
 }

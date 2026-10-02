@@ -1,5 +1,6 @@
 #pragma once
 #include "spy/requests.h"  // json, ErrorCode, make_ok, make_error, parse_request_text
+#include "spy/events.h"  // EventHub, ConsumerId, SubId
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -57,6 +58,7 @@ struct DispatcherOptions
     std::uint32_t max_inflight_total = 1024;
     std::uint64_t abandon_after_ms = kMaxTimeoutMs;             // a response nobody collected is dropped after this
     std::function<void(const std::string&)> on_late = nullptr;  // told about each dropped late result, outside the lock
+    EventHub* events = nullptr;  // answers events.subscribe / events.unsubscribe; null -> those ops are unsupported
 };
 
 // Turns request text into backend calls and backend results into response text (spec 4.2, 4.5). Thread-safe.
@@ -64,7 +66,7 @@ struct DispatcherOptions
 // not_ready at once; more than max_inflight_total in flight -> busy; past its deadline -> timeout; a world reset
 // (LoadsStarted() differs from its value at Submit) -> not_ready for that needs_game call, reason from
 // NotReadyReason(false) (else "loading"), detail.dispatched = true if it had reached Backend::Run; an exception from
-// Run -> internal. timeout_ms and require_unpaused are read only for ops whose OpSpec declares them. Backend::Run,
+// Run -> internal; events.* -> EventHub (unsupported without one; bad_request without a consumer). timeout_ms and require_unpaused are read only for ops whose OpSpec declares them. Backend::Run,
 // done callbacks and on_late never run while the dispatcher's lock is held.
 // "In flight" means Dispatcher entries: a cancelled or timed-out call frees its slot at once, even if the backend's
 // work (a Papyrus call suspended in the VM) is still running. That is a known limit of v1.
@@ -76,7 +78,10 @@ public:
     Dispatcher(const Dispatcher&) = delete;
     Dispatcher& operator=(const Dispatcher&) = delete;
 
-    Ticket Submit(std::string_view request_text);  // never throws; a refused request yields a ticket that is already done
+    // Never throws; a refused request yields a ticket that is already done. `consumer` travels beside the request text
+    // (never inside it) and is used only by events.subscribe / events.unsubscribe, which the hub answers at once: no
+    // backend call, no deadline, no in-flight slot, no readiness check. 0 means "no consumer" (those ops: bad_request).
+    Ticket Submit(std::string_view request_text, ConsumerId consumer = 0);
     // Response text {type, id, ok, result|error}; nullopt if not done within max_wait, or unknown. A returned ticket is consumed.
     std::optional<std::string> Wait(Ticket ticket, std::chrono::milliseconds max_wait);
     // The finished ones among `tickets` (consumed), as soon as at least one is finished or max_wait passes.

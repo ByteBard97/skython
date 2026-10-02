@@ -46,6 +46,22 @@ std::string error_text(std::uint64_t id, ErrorCode code, std::string_view messag
     return dump_json(make_error(id, code, message, std::move(detail)));
 }
 
+// events.subscribe / events.unsubscribe, answered here by the hub (index Contracts, dispatcher.h changes).
+std::string event_op_text(EventHub* hub, const Request& req, ConsumerId consumer)
+{
+    if (hub == nullptr) return error_text(req.id, ErrorCode::unsupported, "this build has no event hub");
+    if (consumer == 0) return error_text(req.id, ErrorCode::bad_request, "no event consumer");
+    try {
+        if (req.op == ops::kEventsSubscribe) return dump_json(make_ok(req.id, hub->Subscribe(consumer, req.args)));
+        hub->Unsubscribe(consumer, req.args.at("sub").get<SubId>());
+        return dump_json(make_ok(req.id, nullptr));
+    } catch (const ProtocolError& e) {
+        return error_text(req.id, e.code, e.what());
+    } catch (const std::exception& e) {
+        return error_text(req.id, ErrorCode::internal, std::string("event hub error: ") + e.what());
+    }
+}
+
 // True if the op's generated table entry lists `name` among its arguments; other keys in args are ignored.
 bool declares(const OpSpec* spec, std::string_view name)
 {
@@ -114,7 +130,7 @@ Dispatcher::~Dispatcher()
     if (reaper_.joinable()) reaper_.join();
 }
 
-Ticket Dispatcher::Submit(std::string_view request_text)
+Ticket Dispatcher::Submit(std::string_view request_text, ConsumerId consumer)
 {
     Request req;
     try {
@@ -126,6 +142,9 @@ Ticket Dispatcher::Submit(std::string_view request_text)
     } catch (...) {
         return shared_->AddDone(error_text(0, ErrorCode::internal, "request parse failed (unknown exception)"));
     }
+
+    if (req.op == ops::kEventsSubscribe || req.op == ops::kEventsUnsubscribe)
+        return shared_->AddDone(event_op_text(options_.events, req, consumer));
 
     const OpSpec* spec = find_op(req.op);  // parse_request_text accepted it, so it exists
     const bool needs_game = spec == nullptr || spec->needs_game;

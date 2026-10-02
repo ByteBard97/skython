@@ -625,3 +625,98 @@ TEST_CASE("golden: not_ready with dispatched, after a save load and after a quit
     REQUIRE(text);
     CHECK(canon(*text) == spy::dump_json(golden(44)));
 }
+
+// ---- Task 35: events.* answered by the EventHub, the consumer beside the request text ----------------------------
+namespace {
+std::string sub_text(std::uint64_t id, json args)
+{
+    return spy::dump_json({{"type", "request"}, {"id", id}, {"op", "events.subscribe"}, {"args", std::move(args)}});
+}
+std::string unsub_text(std::uint64_t id, spy::SubId sub)
+{
+    return spy::dump_json({{"type", "request"}, {"id", id}, {"op", "events.unsubscribe"}, {"args", {{"sub", sub}}}});
+}
+spy::DispatcherOptions with_hub(spy::EventHub& hub)
+{
+    spy::DispatcherOptions o;
+    o.events = &hub;
+    return o;
+}
+}
+
+TEST_CASE("events.subscribe and events.unsubscribe are answered by the hub at once, without the backend or an in-flight slot")
+{
+    ManualBackend b;
+    spy::EventHub hub({});
+    spy::Dispatcher d(b, with_hub(hub));
+    const auto c = hub.OpenConsumer();
+    const auto t = d.Submit(sub_text(1, {{"event", "death"}, {"max_queue", 8}}), c);
+    CHECK(d.InFlight() == 0);
+    auto r = wait_json(d, t, 0ms);  // already done: no wait
+    CHECK(r == json::parse(R"({"type":"response","id":1,"ok":true,"result":{"sub":1,"event":"death","max_queue":8}})"));
+    CHECK(hub.Subscriptions() == 1);
+    r = wait_json(d, d.Submit(unsub_text(2, 1), c), 0ms);
+    CHECK(r == json::parse(R"({"type":"response","id":2,"ok":true,"result":null})"));
+    CHECK(hub.Subscriptions() == 0);
+    CHECK(b.count() == 0);
+}
+
+TEST_CASE("events.* without a consumer is bad_request, with no hub unsupported, and readiness does not apply")
+{
+    ManualBackend b;
+    b.not_ready = "loading";  // events.* are answered with no game
+    spy::EventHub hub({});
+    spy::Dispatcher d(b, with_hub(hub));
+    auto r = wait_json(d, d.Submit(sub_text(3, {{"event", "death"}})));
+    CHECK(code_of(r) == "bad_request");
+    CHECK(r["error"]["message"] == "no event consumer");
+    CHECK(r["id"] == 3);
+    CHECK(code_of(wait_json(d, d.Submit(unsub_text(4, 1)))) == "bad_request");
+    const auto c = hub.OpenConsumer();
+    CHECK(code_of(wait_json(d, d.Submit(sub_text(5, {{"event", "death"}}), c))) == "ok");
+
+    spy::Dispatcher plain(b, {});
+    CHECK(code_of(wait_json(plain, plain.Submit(sub_text(6, {{"event", "death"}}), c))) == "unsupported");
+    CHECK(code_of(wait_json(plain, plain.Submit(unsub_text(7, 1), c))) == "unsupported");
+    // Consumer 0 with no hub (Task 37's bridge fallback, Review A#1): unsupported is checked before the consumer.
+    CHECK(code_of(wait_json(plain, plain.Submit(sub_text(8, {{"event", "death"}})))) == "unsupported");
+    CHECK(code_of(wait_json(plain, plain.Submit(unsub_text(9, 1)))) == "unsupported");
+    CHECK(b.count() == 0);
+}
+
+TEST_CASE("a consumer cannot unsubscribe another consumer's subscription; hub and parse errors become error responses")
+{
+    ManualBackend b;
+    spy::EventHub hub({});
+    spy::Dispatcher d(b, with_hub(hub));
+    const auto c1 = hub.OpenConsumer();
+    const auto c2 = hub.OpenConsumer();
+    const auto sub = wait_json(d, d.Submit(sub_text(1, {{"event", "death"}}), c1))["result"]["sub"].get<spy::SubId>();
+    auto r = wait_json(d, d.Submit(unsub_text(2, sub), c2));
+    CHECK(code_of(r) == "not_found");
+    CHECK(hub.Subscriptions() == 1);
+    CHECK(code_of(wait_json(d, d.Submit(unsub_text(3, sub), c1))) == "ok");
+
+    r = wait_json(d, d.Submit(sub_text(4, {{"event", "hit"}}), c1));
+    CHECK(code_of(r) == "bad_request");
+    CHECK(r["error"]["message"] == "hit needs a filter on target or aggressor");
+    r = wait_json(d, d.Submit(sub_text(5, {{"event", "no_such_event"}}), c1));  // refused by parse_request, before the hub
+    CHECK(code_of(r) == "bad_request");
+    CHECK(r["id"] == 5);
+    hub.CloseConsumer(c1);
+    CHECK(code_of(wait_json(d, d.Submit(sub_text(6, {{"event", "death"}}), c1))) == "bad_request");  // a closed consumer
+}
+
+TEST_CASE("every other op ignores the consumer")
+{
+    ManualBackend b;
+    spy::EventHub hub({});
+    spy::Dispatcher d(b, with_hub(hub));
+    const auto t = d.Submit(call_text(9), 12345);
+    REQUIRE(b.count() == 1);
+    b.take(0).done(OpResult::Ok(4));
+    CHECK(wait_json(d, t)["result"] == 4);
+    b.answer_inline = true;
+    CHECK(code_of(wait_json(d, d.Submit(state_text(10), 7))) == "ok");
+    CHECK(hub.Subscriptions() == 0);
+}
