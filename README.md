@@ -1,28 +1,30 @@
 # Skython
 
-Python inside Skyrim (SE/AE). Skython is an SKSE plugin that embeds CPython 3.14 and lets Python code call any Papyrus function in the running game. During development the same API also works from a separate process. It is a general-purpose bridge: mods are built on top of it.
+Python inside Skyrim AE 1.6.1170. Skython is an SKSE plugin that embeds CPython 3.14 and lets Python code call any Papyrus function in the running game. During development the same API also works from a separate process. It is a general-purpose bridge: mods are built on top of it.
 
 Status: M1 (embedded dispatcher). Verified on Skyrim AE 1.6.1170, Windows-native. Proton (the game on Linux) has not been tested yet. The plugin does not start Python on any other runtime. Events and save/load arrive in M2, typed bindings in M3, packaging for players in M4.
 
 ## How it fits together
 
 - `Data/SKSE/Plugins/Skython.dll` is a small loader. SKSE loads it. It checks the runtime, loads `Skython/python/python314.dll` by full path (it refuses to share a `python314.dll` that another mod loaded from somewhere else), then loads `Skython/SkythonCore.dll`. Any failure is logged and the game runs on without Python.
-- The core starts a host thread once the game's data is loaded. That thread initialises CPython (isolated: no environment variables, no signal handlers), then runs `skython._host`, which loads your scripts and, in dev builds, starts the dev bridge. The game's own threads never run Python.
-- Python calls reach the game through the built-in `_skython` module. Each call becomes one SKSE task (the game runs these once per frame), plus at most one more to convert an object result, and is dispatched through the Papyrus VM. A blocking call releases the GIL while it waits.
+- The core starts a host thread once the game's data is loaded. That thread initialises CPython (isolated: `PYTHON*` environment variables and the user site are ignored, though `os.environ` still works; no signal handlers), then runs `skython._host`, which loads your scripts and, when `bridge_enabled` is set in `Skython.ini`, starts the dev bridge. The game's own threads never run Python.
+- Python calls reach the game through the built-in `_skython` module. Each call becomes one SKSE task (the game runs these in its task drain), plus at most one more to convert an object result, and is dispatched through the Papyrus VM. A blocking call releases the GIL while it waits.
 
 ## Install
 
-There is no packaged release yet (that is M4), and no PyPI package: the `skython` Python package ships inside the mod, in `lib/skython/`. You need SKSE64 (tested with 2.2.6) and Address Library for SKSE Plugins. Build the two DLLs (see Build and test), then lay the files out like this:
+There is no packaged release yet (that is M4), and no PyPI package: the `skython` Python package ships inside the mod, in `lib/skython/`. You need SKSE64 (tested with 2.2.6) and Address Library for SKSE Plugins (required: CommonLibSSE-NG uses it to find game addresses). Build the two DLLs (see Build and test), then lay the files out like this:
 ```
-Data/SKSE/Plugins/Skython.dll          loader
-Data/SKSE/Plugins/Skython.ini          settings (bridge off in the shipped ini)
+Data/SKSE/Plugins/Skython.dll          loader                  out/Skython.dll from the build
+Data/SKSE/Plugins/Skython.ini          settings                plugin/config/Skython.ini (bridge off)
 Data/SKSE/Plugins/Skython/
-  SkythonCore.dll                      core (links CPython)
-  python/                              the official python-3.14.8-embed-amd64.zip, unmodified
-  site-packages/                       vendored win_amd64 / cp314 wheels
-  lib/skython/                         the skython package
+  SkythonCore.dll                      core (links CPython)    out/SkythonCore.dll from the build
+  python/                              CPython runtime         third_party/cpython/embed/ after tools/fetch_python.sh
+                                                               (the official python-3.14.8-embed-amd64.zip, unmodified)
+  site-packages/                       third-party packages    vendored win_amd64 / cp314 wheels, unpacked
+  lib/skython/                         the skython package     python/src/skython/
   scripts/                             your scripts
 ```
+For the dev bridge use `plugin/config/Skython.dev.ini` as `Skython.ini` instead.
 Logs: `Documents/My Games/Skyrim Special Edition/SKSE/Skython.log` (C++) and `.../SKSE/Skython/python.log` (Python).
 
 ## Write a script
@@ -53,7 +55,7 @@ See [`examples/`](examples/): Twitch chat spawning named mudcrabs, talking to NP
 
 ## Develop from outside the game (the dev bridge)
 
-With the dev ini (`bridge_enabled = true`), the same API works from any process on the game's machine, so you can iterate on Python without restarting the game:
+With the dev ini (`bridge_enabled = true`), the same API works from any process on the game's machine, so you can iterate on Python without restarting the game. On the development machine, install the package from this repository with `pip install ./python` (or `uv pip install ./python`); it is not on PyPI.
 ```python
 import skython
 
@@ -89,11 +91,27 @@ Code that works through the bridge works unchanged as a script in `scripts/`. Ru
 - The `_skython` module over a fake backend (Linux): `cmake -S pyglue/linux -B pyglue/build -DCMAKE_BUILD_TYPE=Release -DPython_EXECUTABLE="$(uv python find 3.14)" && cmake --build pyglue/build -j`, then `uv run --no-project --python 3.14 --with pytest python -m pytest pyglue/tests`.
 - The `skython` package (Python 3.12 and 3.14): `cd python && uv run pytest`.
 - CPython runtime and headers: `tools/fetch_python.sh` (checks SHA-256s against `docs/PINS.md`).
-- Plugin (built on a Windows machine over ssh), one DLL per call: `tools/remote_build.sh plugin Skython.dll && tools/remote_build.sh plugin SkythonCore.dll`.
+- Plugin (built on a Windows machine over ssh), one DLL per call: `tools/remote_build.sh plugin Skython.dll && tools/remote_build.sh plugin SkythonCore.dll`. It syncs the repository to the build machine and runs `plugin/build.ps1` there. That script is used by `tools/remote_build.sh`; it can be run on a Windows machine with Visual Studio 2022 and vcpkg (`C:\vcpkg`, or pass `-VcpkgRoot`; triplet `x64-windows-static-md`), given the CommonLibSSE-NG submodule checked out and `third_party/cpython/nuget/tools/` from `tools/fetch_python.sh`. Run standalone it is untested.
 - On the project's Windows test machine: deploy with `tools/box/box_deploy.sh out/Skython.dll plugin/config/Skython.dev.ini`, then `tools/box/box_deploy.sh --package` (and `--python`, `--scripts livetest/scripts` when the runtime or the scripts changed); launch with `tools/box/box_launch.sh`; stop with `tools/box/box_stop.sh` (the test machine's game hangs on `qqq` exit with or without Skython, so the tools end it instead).
-- Live tests (game running on the test machine, save loaded): `tools/box/box_session.sh up && source out/box-live.env && SKYTHON_LIVE=1 uv run --project python pytest livetest -q -rs` (an ssh tunnel, loopback on both ends; the session file with the token stays in `out/`). Without `SKYTHON_LIVE=1` every live test is skipped.
+- Live tests (game running on the test machine, save loaded): `tools/box/box_session.sh up && source out/box-live.env && source livetest/s4test.env && SKYTHON_LIVE=1 uv run --project python pytest livetest -q -rs` (an ssh tunnel, loopback on both ends; the session file with the token stays in `out/`). `livetest/s4test.env` holds the form ids and script names the alias, property and own-script tests use on the test machine's `s4test` save; under `SKYTHON_LIVE=1` a missing one fails the test. Without `SKYTHON_LIVE=1` every live test is skipped.
 - Protocol: `protocol/PROTOCOL.md`, fixtures in `protocol/v1/fixtures/`. Design: `docs/specs/2026-09-30-skyrim-python-design.md`. Spike results: `spikes/RESULTS.md`.
 
 ## Licence
 
-MIT (`LICENSE`). The embedded CPython runtime is under the PSF licence, bundled as `Skython/python/LICENSE.txt`.
+The source in this repository is MIT (`LICENSE`).
+
+### Third-party software
+
+Compiled into the plugin DLLs:
+
+| Component | Where it comes from | Licence |
+|---|---|---|
+| CommonLibSSE-NG 10.1.0 (commit `39f9d07`) | `plugin/extern/CommonLibSSE-NG` (submodule), statically linked into both DLLs | GPL-3.0-or-later with the Modding Exception and GPL-3.0 Linking Exception in its `EXCEPTIONS.md` (its `COPYING.txt`, `README.md`, `vcpkg.json`; earlier versions were MIT) |
+| pybind11 3.1.0 | `third_party/pybind11` (headers), in `SkythonCore.dll` | BSD-3-Clause (`third_party/pybind11/LICENSE`) |
+| nlohmann/json 3.11.3 | `third_party/nlohmann/json.hpp`, in `SkythonCore.dll` | MIT (SPDX header in the file) |
+| spdlog | vcpkg (CommonLibSSE-NG's logging) | MIT upstream; not checked against a local copy |
+| fmt, DirectXTK, DirectXMath, rapidcsv, SimpleIni | vcpkg, pulled in by CommonLibSSE-NG and `plugin/vcpkg.json` | not checked locally |
+
+Bundled with the mod: the CPython 3.14.8 embeddable runtime, under the PSF License Agreement, shipped with its own `LICENSE.txt` as `Skython/python/LICENSE.txt` (that file also covers components the Windows build bundles, such as libffi and Zstandard).
+
+Because both DLLs statically link CommonLibSSE-NG, they are a combined work with a GPL-3.0-or-later library. Under which terms the built DLLs may be distributed is an open question for the project owner; until it is settled, this README makes no claim that the compiled plugin is MIT.

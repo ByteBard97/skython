@@ -4,6 +4,7 @@ import os
 import pytest
 
 from skython import _protocol_generated as g
+from skython import discovery
 from skython.discovery import Session, find_session, write_inactive_session_file, write_session_file
 from skython.errors import NotRunning
 
@@ -105,6 +106,45 @@ def test_write_session_file_replaces_atomically_and_leaves_no_temp_files(tmp_pat
     write_session_file(p, Session("127.0.0.1", 2, TOK))
     assert find_session(p, env={}).port == 2
     assert sorted(os.listdir(tmp_path)) == ["session.json"]
+
+
+def test_a_replace_blocked_by_a_reader_is_retried(tmp_path, monkeypatch):
+    p = tmp_path / "session.json"
+    real, calls = os.replace, []
+
+    def flaky(src, dst):
+        calls.append(dst)
+        if len(calls) < 3:
+            raise PermissionError("a reader has it open")
+        real(src, dst)
+
+    monkeypatch.setattr(discovery.os, "replace", flaky)
+    monkeypatch.setattr(discovery, "_REPLACE_RETRY_S", 0.001)
+    write_inactive_session_file(p, "why")
+    assert len(calls) == 3
+    assert json.loads(p.read_text(encoding="utf-8"))["reason"] == "why"
+    assert sorted(os.listdir(tmp_path)) == ["session.json"]
+
+
+@pytest.mark.parametrize("fail", ["replace", "dump"])
+def test_a_failed_write_raises_and_leaves_no_temp_file(tmp_path, monkeypatch, fail):
+    p = tmp_path / "session.json"
+    write_session(p, port=1)  # the previous file survives a failed write
+    if fail == "replace":
+        def blocked(src, dst):
+            raise PermissionError("still open")
+        monkeypatch.setattr(discovery.os, "replace", blocked)
+        monkeypatch.setattr(discovery, "_REPLACE_RETRY_S", 0.001)
+        expected = PermissionError
+    else:
+        def full(*args, **kwargs):
+            raise OSError("disk full")
+        monkeypatch.setattr(discovery.json, "dump", full)
+        expected = OSError
+    with pytest.raises(expected):
+        write_inactive_session_file(p, "why")
+    assert sorted(os.listdir(tmp_path)) == ["session.json"]
+    assert find_session(p, env={}).port == 1
 
 
 def test_an_inactive_session_file_names_its_reason(tmp_path):

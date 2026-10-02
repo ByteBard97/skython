@@ -6,6 +6,9 @@
 #      REMOTE_ROOT='C:\dev\skyrim-python' (override only to test this script somewhere else);
 #      ARCHIVE_ONLY=1 builds the sync archive, lists it and stops (no ssh; for checking what gets sent).
 # The box's OpenSSH default shell is Windows PowerShell 5.1, so every remote command below is PowerShell.
+# The archive is extracted into REMOTE_ROOT (C:\dev\skyrim-python): the build checkout, the existing build area,
+# never the game folder. Every ssh call is bounded: 60 s for a command, 600 s for an scp and for hashing and
+# extracting the archive (CommonLib makes it large); the build step keeps its own BUILD_TIMEOUT.
 # What is synced besides the sources: third_party/pybind11 (committed) and, when tools/fetch_python.sh
 # has run, only third_party/cpython/nuget/tools/{include,libs} (the CPython headers and import library;
 # Tasks 3 and 25 onward need them). The rest of third_party/cpython (archives, embed runtime, the
@@ -17,7 +20,10 @@ SSH_OPTS=(-o ConnectTimeout=10 -o BatchMode=yes -o ServerAliveInterval=15 -o Ser
 BUILD_TIMEOUT="${BUILD_TIMEOUT:-3600}"
 REMOTE_ROOT="${REMOTE_ROOT:-C:\\dev\\skyrim-python}"      # backslash form, for PowerShell
 REMOTE_FWD="${REMOTE_ROOT//\\//}"                         # forward-slash form, for scp (C:/dev/...)
-wssh() { ssh "${SSH_OPTS[@]}" "$WIN" "$@"; }
+SSH_CMD_TIMEOUT=60; SCP_TIMEOUT=600
+wssh() { timeout "$SSH_CMD_TIMEOUT" ssh "${SSH_OPTS[@]}" "$WIN" "$@"; }
+wssh_long() { timeout "$SCP_TIMEOUT" ssh "${SSH_OPTS[@]}" "$WIN" "$@"; }   # hash and extract a large archive
+wscp() { timeout "$SCP_TIMEOUT" scp "${SSH_OPTS[@]}" -q "$@"; }
 die() { echo "remote_build: $*" >&2; exit 1; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -26,7 +32,7 @@ ARCHIVE_ONLY="${ARCHIVE_ONLY:-0}"
 if [ "$ARCHIVE_ONLY" != 1 ]; then
   # --- preflight: fail fast with a clear message instead of a hang or a confusing shell error
   psv="$(wssh 'Write-Output "PSV=$($PSVersionTable.PSVersion.Major)"' 2>&1 | tr -d '\r')" \
-    || die "cannot ssh to $WIN within 10 s (is the Windows build box up? STOP and ask the owner)"
+    || die "cannot ssh to $WIN within ${SSH_CMD_TIMEOUT} s (is the Windows build box up? STOP and ask the owner)"
   case "$psv" in
     *PSV=[5-9]*) ;;
     *) die "the box's ssh shell is not Windows PowerShell (it answered: '$psv'). Every remote command here is PowerShell syntax. STOP and ask the owner." ;;
@@ -77,10 +83,10 @@ if [ "$ARCHIVE_ONLY" = 1 ]; then
   exit 0
 fi
 LOCAL_SUM="$(sha256sum "$ARCH" | cut -d' ' -f1)"
-scp "${SSH_OPTS[@]}" -q "$ARCH" "$WIN:$REMOTE_FWD/.sync.tgz" || die "scp of the sync archive failed"
-REMOTE_SUM="$(wssh "(Get-FileHash '$REMOTE_ROOT\\.sync.tgz' -Algorithm SHA256).Hash" | tr -d '\r\n ' | tr 'A-F' 'a-f')"
+wscp "$ARCH" "$WIN:$REMOTE_FWD/.sync.tgz" || die "scp of the sync archive failed or took longer than ${SCP_TIMEOUT}s"
+REMOTE_SUM="$(wssh_long "(Get-FileHash '$REMOTE_ROOT\\.sync.tgz' -Algorithm SHA256).Hash" | tr -d '\r\n ' | tr 'A-F' 'a-f')"
 [ "$REMOTE_SUM" = "$LOCAL_SUM" ] || die "archive checksum mismatch after scp (local $LOCAL_SUM, remote $REMOTE_SUM)"
-wssh "tar -xzf '$REMOTE_ROOT\\.sync.tgz' -C '$REMOTE_ROOT'; exit \$LASTEXITCODE" || die "extraction on the Windows box failed"
+wssh_long "tar -xzf '$REMOTE_ROOT\\.sync.tgz' -C '$REMOTE_ROOT'; exit \$LASTEXITCODE" || die "extraction on the Windows box failed or took longer than ${SCP_TIMEOUT}s"
 if [ "$SEND_EXTERN" = 1 ]; then
   wssh "Set-Content -NoNewline -Path '$MARKER' -Value '$PIN'" || die "could not write the sync marker"
 fi
@@ -94,7 +100,7 @@ timeout "$BUILD_TIMEOUT" ssh "${SSH_OPTS[@]}" "$WIN" "powershell -NoProfile -Exe
 mkdir -p out
 got=0
 for rel in "$SRC_DIR/build/Release/$DLL" "$SRC_DIR/build/$DLL"; do
-  if scp "${SSH_OPTS[@]}" -q "$WIN:$REMOTE_FWD/$rel" "out/${DLL}.part" 2>/dev/null; then got=1; break; fi
+  if wscp "$WIN:$REMOTE_FWD/$rel" "out/${DLL}.part" 2>/dev/null; then got=1; break; fi
 done
 [ "$got" = 1 ] || die "could not scp $DLL from $REMOTE_FWD/$SRC_DIR/build/Release/"
 [ "$(head -c2 "out/${DLL}.part")" = "MZ" ] || die "out/${DLL}.part is not a Windows binary"

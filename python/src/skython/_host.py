@@ -314,19 +314,20 @@ def _drop_script_modules(name: str, folder: pathlib.Path) -> None:
     """Forget `name` and `name.*` from sys.modules, but only modules that came from the scripts folder."""
     root = folder.resolve()
     for key in [k for k in sys.modules if k == name or k.startswith(name + ".")]:
-        file = getattr(sys.modules[key], "__file__", None)
+        file = getattr(sys.modules.get(key), "__file__", None)  # another thread may import or drop modules
         try:
             inside = bool(file) and pathlib.Path(file).resolve().is_relative_to(root)
         except (OSError, ValueError):
             inside = False
         if inside:
-            del sys.modules[key]
+            sys.modules.pop(key, None)
 
 
 def reload(name: str) -> str:
     """Development aid, best effort (spec 4.10): teardown(), close the script's previous Game, forget the
     script's modules, import it again and call setup() with a new Game. State in C extensions is not reset;
-    threads teardown() did not stop keep running, but their Game is closed (ConnectionLost)."""
+    threads teardown() did not stop keep running, but their Game is closed (ConnectionLost). Don't call reload on
+    a script's own name from its setup()."""
     with _RELOAD_LOCK:
         with _LOCK:
             game = _STATE["game"]
@@ -369,8 +370,11 @@ def _start_bridge(module, cfg: dict) -> None:
         with _LOCK:
             _STATE["bridge_status"] = "disabled"
         if session_file:
-            write_inactive_session_file(session_file, "bridge_enabled is false in Skython.ini",
-                                        pid=os.getpid(), plugin_version=cfg.get("plugin_version"))
+            try:
+                write_inactive_session_file(session_file, "bridge_enabled is false in Skython.ini",
+                                            pid=os.getpid(), plugin_version=cfg.get("plugin_version"))
+            except Exception:  # noqa: BLE001 - a failed session-file write must never stop the scripts loading
+                log.exception("could not write the inactive session file")
         log.info("bridge: disabled (bridge_enabled = false)")
         return
 
@@ -388,8 +392,11 @@ def _start_bridge(module, cfg: dict) -> None:
         with _LOCK:
             _STATE["bridge_status"] = f"failed: {e}"
         if session_file and not isinstance(e, OSError):  # serve() writes its own on OSError ("could not listen")
-            write_inactive_session_file(session_file, f"the bridge could not start: {e}",
-                                        pid=os.getpid(), plugin_version=cfg.get("plugin_version"))
+            try:
+                write_inactive_session_file(session_file, f"the bridge could not start: {e}",
+                                            pid=os.getpid(), plugin_version=cfg.get("plugin_version"))
+            except Exception:  # noqa: BLE001 - a failed session-file write must never stop the scripts loading
+                log.exception("could not write the inactive session file")
         return
     with _LOCK:
         _STATE["bridge"] = bridge

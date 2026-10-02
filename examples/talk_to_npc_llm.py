@@ -13,6 +13,8 @@ import threading
 import time
 import urllib.request
 
+from skython.errors import NotReady
+
 ENDPOINT = "http://localhost:11434/v1/chat/completions"   # Ollama's OpenAI-compatible endpoint
 MODEL = "llama3.1"
 API_KEY = os.environ.get("SKYTHON_LLM_KEY", "")            # only for hosted APIs; never hard-code it here
@@ -47,7 +49,12 @@ def talk(game, player):
 
 
 def run(game):
-    game.wait_ready()
+    while True:                                  # a long stay at the main menu is not an error
+        try:
+            game.wait_ready()
+            break
+        except NotReady:
+            continue
     player = game.form(PLAYER)
     was_down = False
     while True:

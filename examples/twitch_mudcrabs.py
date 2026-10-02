@@ -10,24 +10,29 @@ import socket
 import threading
 import time
 
-from skython.errors import StaleReference
+from skython.errors import NotReady, StaleReference
 
 CHANNEL = "your_twitch_channel"   # lower case, without the #
 COMMAND = "!mudcrab"
 COOLDOWN_S = 10                   # per viewer
 MAX_ALIVE = 20                    # never more than this many summoned crabs at once
 
+READ_TIMEOUT_S = 360               # Twitch PINGs about every 5 minutes; silence longer than this is a dead link
+RETRY_MIN_S, RETRY_MAX_S = 5, 60  # reconnect back-off
+
 MUDCRAB = "Skyrim.esm|0x0E4010"   # the base Mudcrab actor
 PLAYER = "Skyrim.esm|0x14"
 
 
-def chat_messages(channel):
+def chat_messages(sock, channel):
     """Yield (user, text) for every chat line. Anonymous read-only login: nick justinfanNNNN."""
-    sock = socket.create_connection(("irc.chat.twitch.tv", 6667))
     sock.sendall(f"NICK justinfan{int(time.time()) % 100000}\r\nJOIN #{channel}\r\n".encode())
     buf = b""
     while True:
-        buf += sock.recv(4096)
+        data = sock.recv(4096)                   # socket.timeout (an OSError) if the link goes quiet
+        if not data:
+            raise ConnectionError("chat closed")
+        buf += data
         *lines, buf = buf.split(b"\r\n")
         for line in lines:
             text = line.decode("utf-8", "replace")
@@ -38,12 +43,33 @@ def chat_messages(channel):
                 yield user, text.split(" :", 1)[1]
 
 
+def chat_forever(channel):
+    """chat_messages, reconnecting with back-off whenever the connection drops."""
+    delay = RETRY_MIN_S
+    while True:
+        try:
+            with socket.create_connection(("irc.chat.twitch.tv", 6667), timeout=30) as sock:
+                sock.settimeout(READ_TIMEOUT_S)
+                for message in chat_messages(sock, channel):
+                    delay = RETRY_MIN_S              # connected and reading: reset the back-off
+                    yield message
+        except OSError as e:                     # includes ConnectionError and socket.timeout
+            print(f"twitch_mudcrabs: chat connection lost ({e}); retrying in {delay} s")
+        time.sleep(delay)
+        delay = min(delay * 2, RETRY_MAX_S)
+
+
 def run(game):
-    game.wait_ready()                            # wait until a save is loaded
+    while True:                                  # wait until a save is loaded; a long main-menu stay is fine
+        try:
+            game.wait_ready()
+            break
+        except NotReady:
+            continue
     player = game.form(PLAYER)
     mudcrab = game.form(MUDCRAB)
     last_spawn, alive = {}, []
-    for user, text in chat_messages(CHANNEL):
+    for user, text in chat_forever(CHANNEL):
         if text.strip().lower() != COMMAND or time.time() - last_spawn.get(user, 0) < COOLDOWN_S:
             continue
         try:

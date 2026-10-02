@@ -2,7 +2,8 @@
 SPY_S4_QUEST=0x<quest form id> SPY_S4_ALIAS=<alias id> SPY_S4_REF=0x<expected reference form id>
 SPY_PLAIN_QUEST=0x<quest form id> SPY_PLAIN_ALIAS=<id of an unscripted alias>
 SPY_OWN_QUEST=0x<quest form id> SPY_OWN_SCRIPT=<its attached script> SPY_OWN_FUNCTION=<parameterless bytecode getter>
-Values used on the box (s4test): spikes/RESULTS.md, S4 row and the Task 29 entry.
+Values used on the box (s4test): spikes/RESULTS.md, S4 row and the Task 29 entry; `source livetest/s4test.env`.
+Under SKYTHON_LIVE=1 a missing value fails the test (support.spy_env), it never skips.
 """
 import os
 import time
@@ -11,7 +12,7 @@ import pytest
 
 from skython import errors
 from skython.values import Alias, Form
-from support import log_text, raw_connect, rpc
+from support import log_text, raw_connect, rpc, spy_env
 
 PLAYER_ID = 0x14
 IRON_SWORD = "Skyrim.esm|0x012EB7"
@@ -243,10 +244,8 @@ def test_light_plugin_form_key(game):
 
 def _s4():
     """The quest/alias/reference spike S4 recorded. They come from one particular throwaway save and can go stale."""
-    try:
-        return int(os.environ["SPY_S4_QUEST"], 16), int(os.environ["SPY_S4_ALIAS"]), int(os.environ["SPY_S4_REF"], 16)
-    except KeyError as e:
-        pytest.skip(f"set SPY_S4_QUEST, SPY_S4_ALIAS and SPY_S4_REF from spikes/RESULTS.md ({e.args[0]} is missing)")
+    quest, alias, ref = spy_env("SPY_S4_QUEST", "SPY_S4_ALIAS", "SPY_S4_REF")
+    return int(quest, 16), int(alias), int(ref, 16)
 
 
 def test_method_call_float(game):
@@ -299,8 +298,8 @@ def test_editor_id_unavailable_is_a_clear_not_found(game):
 def test_object_array_result(game):
     try:
         forms = game.call_method(Form(form_id=PLAYER_ID), "ObjectReference", "GetContainerForms")  # SKSE
-    except errors.UnknownFunction:
-        pytest.skip("SKSE's ObjectReference.GetContainerForms is not available")
+    except errors.UnknownFunction as e:  # SKSE 2.2.6 always has it: its absence is a failure, not a reason to skip
+        pytest.fail(f"SKSE's ObjectReference.GetContainerForms is missing (SKSE 2.2.6 provides it): {e}")
     assert isinstance(forms, list) and forms, "the player's inventory should not be empty"
     assert all(isinstance(f, Form) for f in forms) and any(f.form_key for f in forms)
 
@@ -359,10 +358,8 @@ def test_quest_result_is_a_quest_not_an_alias(game):
 
 def test_alias_plain_is_not_dispatchable_as_reference_alias(game):
     # R45: an unscripted alias has no bound ReferenceAlias object, and the server never binds one on demand.
-    try:
-        quest_id, alias_id = int(os.environ["SPY_PLAIN_QUEST"], 16), int(os.environ["SPY_PLAIN_ALIAS"])
-    except KeyError:
-        pytest.skip("set SPY_PLAIN_QUEST/SPY_PLAIN_ALIAS (S7g cand 0: quest 0x0010FDD5, alias 0, plain)")
+    quest, alias = spy_env("SPY_PLAIN_QUEST", "SPY_PLAIN_ALIAS")  # S7g cand 0: quest 0x0010FDD5, alias 0, plain
+    quest_id, alias_id = int(quest, 16), int(alias)
     alias = game.alias(game.resolve(form_id=quest_id), alias_id)
     with pytest.raises(errors.TypeMismatch, match="script object bound"):
         game.call_method(alias, "ReferenceAlias", "GetReference")
@@ -385,10 +382,8 @@ def test_skse_native_with_form_argument(game):
 
 def _own_script():
     """A quest, a script attached to it (not a native class) and a member function declared on that script itself."""
-    try:
-        return (int(os.environ["SPY_OWN_QUEST"], 16), os.environ["SPY_OWN_SCRIPT"], os.environ["SPY_OWN_FUNCTION"])
-    except KeyError as e:
-        pytest.skip(f"set SPY_OWN_QUEST, SPY_OWN_SCRIPT and SPY_OWN_FUNCTION (see Step 1) ({e.args[0]} is missing)")
+    quest, script, function = spy_env("SPY_OWN_QUEST", "SPY_OWN_SCRIPT", "SPY_OWN_FUNCTION")
+    return int(quest, 16), script, function
 
 
 def test_own_script_bytecode_member_function(game):

@@ -13,13 +13,16 @@ $dest = From-B64 $DestB64
 # Allowed destinations: the Data\SKSE\Plugins tree, and exactly one file outside it, the spike's compiled Papyrus
 # script Data\Scripts\SkyrimPython.pex (Task 7; box_deploy.sh --pex).
 $PexDest = 'C:\ChronicleDev\Stock Game\Data\Scripts\SkyrimPython.pex'
-if (-not $dest.StartsWith('C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\') -and $dest -ne $PexDest) { "REFUSED $dest is outside Data\SKSE\Plugins and is not $PexDest"; exit 2 }
+$root = 'C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\'
+if (-not $dest.StartsWith($root) -and $dest -ne $PexDest) { "REFUSED $dest is outside Data\SKSE\Plugins and is not $PexDest"; exit 2 }
+# Every mode: no '..' and the normalised path must still be inside (a prefix test alone lets Plugins\..\.. escape).
+$fullDest = [IO.Path]::GetFullPath($dest)
+if ($dest -match '\.\.' -or -not ($fullDest.StartsWith($root) -or $fullDest -eq $PexDest)) { "REFUSED $dest is not inside Data\SKSE\Plugins"; exit 2 }
 switch ($Mode) {
   'exists' { if (Test-Path -LiteralPath $dest) { 'EXISTS' } else { 'ABSENT' }; exit 0 }
   'list'   { if (Test-Path -LiteralPath $dest) { Get-ChildItem -LiteralPath $dest -Force | ForEach-Object { $_.Name } }; exit 0 }
   'move' {
     $src = From-B64 $SrcB64
-    $root = 'C:\ChronicleDev\Stock Game\Data\SKSE\Plugins\'
     foreach ($p in @($src, $dest)) {
       if (-not ([IO.Path]::GetFullPath($p)).StartsWith($root) -or $p -match '\.\.') { "REFUSED $p is not inside Data\SKSE\Plugins"; exit 2 }
     }

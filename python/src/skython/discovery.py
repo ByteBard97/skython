@@ -3,6 +3,7 @@ writes the session file with write_session_file, or write_inactive_session_file 
 import json
 import os
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from . import _protocol_generated as _g
 from .errors import NotRunning
 
 _PORT_MAX = _g.CONFIG_KEYS["port"]["max"]
+_REPLACE_ATTEMPTS = 5  # os.replace on PermissionError: 5 tries, 50 ms apart
+_REPLACE_RETRY_S = 0.05
 
 
 @dataclass(frozen=True)
@@ -78,9 +81,25 @@ def _write_json(path, data: dict) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(data, f)  # plain str/int/None values: only an OSError (disk full) can stop it
-    os.replace(tmp, path)
+    replaced = False
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f)  # plain str/int/None values: only an OSError (disk full) can stop it
+        for attempt in range(_REPLACE_ATTEMPTS):
+            try:
+                os.replace(tmp, path)
+                replaced = True
+                break
+            except PermissionError:  # Windows: a reader has the target open without FILE_SHARE_DELETE
+                if attempt == _REPLACE_ATTEMPTS - 1:
+                    raise
+                time.sleep(_REPLACE_RETRY_S)
+    finally:
+        if not replaced:  # our own scratch file from mkstemp above, never anything else
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 def write_session_file(path, session: Session) -> None:

@@ -2,6 +2,7 @@
 # Offline checks for the Windows-box game harness (no ssh, no game). Exit 0 = all pass.
 # 1. every tools/box/*.sh exists and parses (bash -n);
 # 2. no ssh/scp call outside box_env.sh's wrappers (so every call has a timeout and BatchMode);
+#    in tools/*.sh every ssh/scp is written `timeout "$VAR" ssh|scp "${SSH_OPTS[@]}"` with BatchMode in SSH_OPTS;
 # 3. no destructive verb in any script that acts on the box (Remove-Item, Unregister-ScheduledTask, rm, del, ...);
 # 4. Stop-Process only by the two game process names;
 # 5. the box paths in box_env.sh are the ones the investigation verified;
@@ -46,6 +47,13 @@ for f in "${PS[@]}"; do [ -f "$B/win/$f" ] && ok "present win/$f" || bad "missin
 # 2. raw ssh/scp only inside box_env.sh (the wrappers bssh/bssh_t/bscp/bps carry timeout + BatchMode)
 raw="$(grep -HnE '(^\s*|[;&|({]\s*|\$\(\s*|timeout +[^ ]+ +|then +|do +)(ssh|scp) ' "$B"/*.sh 2>/dev/null | grep -v '^[^:]*/box_env.sh:' | grep -v '^[^:]*/test_box_tools.sh:' | grep -vE ':[0-9]+:\s*#' )"
 if [ -z "$raw" ]; then ok "no raw ssh/scp outside box_env.sh"; else bad "raw ssh/scp outside box_env.sh:"; echo "$raw"; fi
+# 2b. tools/*.sh (remote_build.sh and friends): every ssh/scp is bounded by timeout and carries SSH_OPTS (BatchMode)
+raw="$(grep -HnE '(^\s*|[;&|({]\s*|\$\(\s*|timeout +[^ ]+ +|then +|do +|if +|! +)(ssh|scp) ' "$ROOT"/tools/*.sh 2>/dev/null | grep -vE ':[0-9]+:\s*#' \
+       | grep -vE 'timeout +"\$[A-Z_]+" +(ssh|scp) +"\$\{SSH_OPTS\[@\]\}"')"
+if [ -z "$raw" ]; then ok "tools/*.sh: every ssh/scp has a timeout and SSH_OPTS"; else bad "tools/*.sh: unbounded ssh/scp:"; echo "$raw"; fi
+for f in "$ROOT"/tools/*.sh; do
+  if grep -qE 'timeout +[^ ]+ +(ssh|scp) ' "$f" && ! grep -qE 'SSH_OPTS=\(.*BatchMode=yes' "$f"; then bad "$(basename "$f"): SSH_OPTS lacks BatchMode=yes"; fi
+done
 if grep -q 'BatchMode=yes' "$B/box_env.sh" 2>/dev/null && grep -q 'ConnectTimeout=' "$B/box_env.sh" 2>/dev/null \
    && grep -qE 'timeout "\$' "$B/box_env.sh" 2>/dev/null; then ok "wrappers use BatchMode, ConnectTimeout and timeout"
 else bad "box_env.sh wrappers lack BatchMode/ConnectTimeout/timeout"; fi
@@ -179,6 +187,60 @@ grep -qF 'Get-NewText' "$B/win/files.ps1" 2>/dev/null && ok "files.ps1 pull uses
 
 # 6f. box_saves.sh: a save name is checked before any ssh
 if "$B/box_saves.sh" count 'bad name*' >/dev/null 2>&1; then bad "box_saves.sh accepted 'bad name*'"; else ok "box_saves.sh refuses a name that is not [A-Za-z0-9_]"; fi
+
+# 6f2. box_console.sh never saves over an existing save: `save NAME` is sent only when box_saves.sh count NAME is 0.
+#      BOX_SSH_STUB (honoured only with BOX_OFFLINE=1) answers in place of the box and logs every command.
+stubd="$(mktemp -d)"; STUB="$stubd/stub.sh"; STUBLOG="$stubd/calls.log"
+cat > "$STUB" <<'STUBEOF'
+#!/usr/bin/env bash
+echo "$*" >> "$STUBLOG"
+case "$*" in
+  *"Get-ChildItem"*".ess"*)   echo "${STUB_SAVES:-0}" ;;
+  *"Get-Process -Name SkyrimSE,skse64_loader"*) echo IDLE ;;
+  *"place.ps1 -Mode exists"*) echo "${STUB_EXISTS:-ABSENT}" ;;
+  *"console.ps1"*)            echo '{"ok": true}' ;;
+  *) echo "stub: unexpected command" >&2; exit 99 ;;
+esac
+STUBEOF
+chmod +x "$STUB"; export STUBLOG
+con() { : > "$STUBLOG"; STUB_SAVES="$1" BOX_SSH_STUB="$STUB" "$B/box_console.sh" "${@:2}" 2>&1; }
+t="$(con 1 'save t31_probe')"; rc=$?
+[ "$rc" != 0 ] && case "$t" in *"refusing 'save t31_probe'"*) true ;; *) false ;; esac && ! grep -q console.ps1 "$STUBLOG" \
+  && ok "box_console.sh refuses 'save NAME' when box_saves count is 1 (console.ps1 never called)" || bad "box_console save with count 1: rc=$rc '$t'"
+t="$(con 2 '  SAVE   t31_probe')"; rc=$?
+[ "$rc" != 0 ] && ! grep -q console.ps1 "$STUBLOG" && ok "box_console.sh save guard is case-insensitive and allows leading spaces" || bad "SAVE (upper case) not guarded: rc=$rc '$t'"
+t="$(con 1 --tool console '{"command": "save t31_probe"}')"; rc=$?
+[ "$rc" != 0 ] && ! grep -q console.ps1 "$STUBLOG" && ok "box_console.sh --tool console is guarded too" || bad "--tool console save not guarded: rc=$rc '$t'"
+t="$(con 0 'save t31_probe')"; rc=$?
+[ "$rc" = 0 ] && grep -q console.ps1 "$STUBLOG" && ok "box_console.sh sends 'save NAME' when box_saves count is 0" || bad "box_console save with count 0: rc=$rc '$t'"
+t="$(con 0 'save "two words"')"; rc=$?
+[ "$rc" != 0 ] && ! grep -q console.ps1 "$STUBLOG" && ok "box_console.sh refuses a save name box_saves cannot check" || bad "quoted save name sent: rc=$rc '$t'"
+t="$(con 1 'player.additem f 1')"; rc=$?
+[ "$rc" = 0 ] && grep -q console.ps1 "$STUBLOG" && ! grep -q '\.ess' "$STUBLOG" && ok "box_console.sh passes other commands through" || bad "non-save command: rc=$rc '$t'"
+t="$("$B/box_console.sh" 'save t31_probe' 2>&1)"; rc=$?
+[ "$rc" != 0 ] && case "$t" in *refusing*) true ;; *) false ;; esac && ok "box_console.sh offline without a stub: a save is refused before any ssh" || bad "offline save: rc=$rc '$t'"
+
+# 6f3. box_deploy.sh check_target: a target that exists on the box and is not in the deploy record is never overwritten
+dd="$(mktemp -d)"; : > "$dd/T12Probe.dll"; drec="$dd/box-deployed.txt"; : > "$drec"
+dep() { : > "$STUBLOG"; STUB_EXISTS="$1" BOX_DEPLOYED="$drec" BOX_SSH_STUB="$STUB" "$B/box_deploy.sh" "$dd/T12Probe.dll" 2>&1; }
+t="$(dep EXISTS)"; rc=$?
+[ "$rc" != 0 ] && case "$t" in *"exists on the box but is not in out/box-deployed.txt; not overwriting it"*) true ;; *) false ;; esac \
+  && grep -q 'place.ps1 -Mode exists' "$STUBLOG" && ! grep -q 'place.ps1 -Mode place' "$STUBLOG" && [ ! -s "$drec" ] \
+  && ok "box_deploy.sh refuses to overwrite an unrecorded target that exists (nothing placed, nothing recorded)" || bad "check_target refusal: rc=$rc '$t'"
+t="$(dep ABSENT)"; rc=$?
+[ "$rc" != 0 ] && case "$t" in *"BOX_OFFLINE: refusing scp"*) true ;; *) false ;; esac \
+  && ok "box_deploy.sh goes on to the copy for an absent target (stopped at scp by BOX_OFFLINE)" || bad "check_target absent: rc=$rc '$t'"
+[ "$(BOX_DEPLOYED=/tmp/elsewhere.txt bash -c 'source "$1/box_env.sh"; echo "$BOX_DEPLOYED"' _ "$B")" = "$ROOT/out/box-deployed.txt" ] \
+  && ok "BOX_DEPLOYED override still ignored without BOX_SSH_STUB" || bad "BOX_DEPLOYED override honoured without a stub"
+t="$(BOX_OFFLINE=0 BOX_SSH_STUB="$STUB" BOX=nobody@127.0.0.1 bash -c 'source "$1/box_env.sh"; box_stubbed && echo STUBBED || echo REAL' _ "$B")"
+[ "$t" = REAL ] && ok "BOX_SSH_STUB is ignored unless BOX_OFFLINE=1" || bad "BOX_SSH_STUB honoured without BOX_OFFLINE: '$t'"
+
+# 6f4. place.ps1: every mode normalises Dest (GetFullPath) and rejects '..', not only -Mode move
+pl="$B/win/place.ps1"
+pre="$(sed -n '/^switch (\$Mode)/q;p' "$pl" 2>/dev/null)"
+echo "$pre" | grep -qF '$fullDest = [IO.Path]::GetFullPath($dest)' \
+  && echo "$pre" | grep -qF "if (\$dest -match '\.\.' -or -not (\$fullDest.StartsWith(\$root) -or \$fullDest -eq \$PexDest)) { \"REFUSED" \
+  && ok "place.ps1 checks GetFullPath(Dest) and '..' before the mode switch (all modes)" || bad "place.ps1 does not normalise Dest for every mode"
 
 # 6g. the teardown list shows Task 31's save
 grep -qF 'spikebase|spytest|s4test|skypy_r38_savecall' "$B/win/list.ps1" 2>/dev/null && ok "list.ps1 lists skypy_r38_savecall" || bad "list.ps1 does not list skypy_r38_savecall"

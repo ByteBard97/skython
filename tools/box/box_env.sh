@@ -4,6 +4,9 @@
 # btunnel_* for the port-forwarding tunnel. Nothing here deletes anything.
 # BOX_OFFLINE=1 (set by tools/box/test_box_tools.sh): every wrapper refuses, prints "BOX_OFFLINE: refusing <cmd>"
 # and exits non-zero, so an offline check can never reach the box, even through a missing dry-run mode.
+# BOX_SSH_STUB=<program> (offline tests only, honoured only together with BOX_OFFLINE=1): bssh/bssh_t/bps run
+# that program with the PowerShell command instead of ssh, so a test can drive a script's checks (a save count, a
+# deploy target that exists) with canned answers. bscp and the tunnels still refuse.
 BOX="${BOX:-geoff@192.168.0.211}"
 BOX_SSH_OPTS=(-o ConnectTimeout=10 -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
 BOX_GAME_DIR='C:\ChronicleDev\Stock Game'
@@ -22,9 +25,11 @@ BOX_DIR_FWD='C:/dev/skyrim-python-box'          # scp wants forward slashes
 BOX_TASK=SkyrimPythonGame
 BOX_DEVBENCH_URL='http://127.0.0.1:8920'
 BOX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-# The deploy record. An override (BOX_DEPLOYED=...) is honoured only with BOX_DEPLOY_PRINT_TARGET=1 (offline tests):
-# a real deploy always records in out/box-deployed.txt.
-if [ "${BOX_DEPLOY_PRINT_TARGET:-0}" != 1 ] || [ -z "${BOX_DEPLOYED:-}" ]; then BOX_DEPLOYED="$BOX_ROOT/out/box-deployed.txt"; fi
+# box_stubbed: true only in an offline test that supplies BOX_SSH_STUB (see above).
+box_stubbed() { [ "${BOX_OFFLINE:-0}" = 1 ] && [ -n "${BOX_SSH_STUB:-}" ]; }
+# The deploy record. An override (BOX_DEPLOYED=...) is honoured only with BOX_DEPLOY_PRINT_TARGET=1 or under
+# box_stubbed (offline tests): a real deploy always records in out/box-deployed.txt.
+if { [ "${BOX_DEPLOY_PRINT_TARGET:-0}" != 1 ] && ! box_stubbed; } || [ -z "${BOX_DEPLOYED:-}" ]; then BOX_DEPLOYED="$BOX_ROOT/out/box-deployed.txt"; fi
 SKYTHON_STATE="${SKYTHON_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/skython}"
 BOX_TUNNEL_SOCK="$SKYTHON_STATE/box-tunnel.sock"
 BOX_SESSION_SOCK="$SKYTHON_STATE/box-session.sock"   # the dev-bridge tunnel (box_session.sh)
@@ -33,14 +38,17 @@ export BOX BOX_GAME_DIR BOX_DATA BOX_PLUGINS BOX_OWN BOX_MYGAMES BOX_SKSE_LOG_DI
 # box_offline <what>: refuse (exit 97) when BOX_OFFLINE=1. Every wrapper below calls it first.
 box_offline() { if [ "${BOX_OFFLINE:-0}" = 1 ]; then echo "BOX_OFFLINE: refusing $*" >&2; exit 97; fi; }
 # bssh_t <seconds> <powershell command>: one bounded remote command.
-bssh_t() { box_offline "ssh $*"; local t="$1"; shift; timeout "$t" ssh "${BOX_SSH_OPTS[@]}" "$BOX" "$@"; }
+bssh_t() {
+  if box_stubbed; then shift; "$BOX_SSH_STUB" "$@"; return; fi
+  box_offline "ssh $*"; local t="$1"; shift; timeout "$t" ssh "${BOX_SSH_OPTS[@]}" "$BOX" "$@"
+}
 # bssh <powershell command>: bounded at 60 s.
 bssh() { bssh_t 60 "$@"; }
 # bscp <scp args...>: bounded at 600 s.
 bscp() { box_offline "scp $*"; timeout 600 scp "${BOX_SSH_OPTS[@]}" -q "$@"; }
 # bps <seconds> <script.ps1> [args...]: run one of our scripts in C:\dev\skyrim-python-box (args must not contain
 # quotes or spaces: pass text through b64).
-bps() { box_offline "bps $*"; local t="$1" s="$2"; shift 2; bssh_t "$t" "powershell -NoProfile -ExecutionPolicy Bypass -File $BOX_DIR\\$s $*"; }
+bps() { box_stubbed || box_offline "bps $*"; local t="$1" s="$2"; shift 2; bssh_t "$t" "powershell -NoProfile -ExecutionPolicy Bypass -File $BOX_DIR\\$s $*"; }
 # b64 <text>: base64 of the UTF-8 text, one line (decoded on the box by our scripts).
 b64() { printf '%s' "$1" | base64 -w0; }
 box_die() { echo "box: $*" >&2; exit 1; }
