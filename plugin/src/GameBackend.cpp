@@ -33,7 +33,7 @@ public:
             ops::Measured measured;  // Task 31 drain meter: before the cancelled() check, a cancelled body still ran
             if (timing) {
                 timing->task_start.store(NowUs());
-                timing->frame_dt = static_cast<std::int64_t>(RE::GetSecondsSinceLastFrame() * 1'000'000.0f);
+                timing->frame_dt.store(static_cast<std::int64_t>(RE::GetSecondsSinceLastFrame() * 1'000'000.0f));
             }
             ops::WithTiming traced(timing);  // a Callback built below keeps it
             if (cancelled()) return;  // timed out, cancelled or a load started while queued
@@ -68,7 +68,7 @@ private:
             log::Info("timing: id=" + std::to_string(t->id) + " submit=" + std::to_string(t->submit) +
                       " task_start=" + std::to_string(t->task_start.load()) + " callback=" +
                       std::to_string(t->callback.load()) + " done=" + std::to_string(at) +
-                      " frame_dt=" + std::to_string(t->frame_dt));
+                      " frame_dt=" + std::to_string(t->frame_dt.load()));
         };
     }
     static json WithDiagnostics(json s)

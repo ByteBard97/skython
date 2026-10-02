@@ -81,7 +81,7 @@ struct Timing
     std::int64_t submit = 0;
     std::atomic<std::int64_t> task_start{0};
     std::atomic<std::int64_t> callback{0};
-    std::int64_t frame_dt = 0;  // RE::GetSecondsSinceLastFrame() in µs, read at task start
+    std::atomic<std::int64_t> frame_dt{0};  // RE::GetSecondsSinceLastFrame() in µs, read at task start
 };
 inline thread_local std::shared_ptr<Timing> t_timing;
 struct WithTiming

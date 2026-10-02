@@ -161,4 +161,6 @@ def test_in_process_mod_event():
     r = command("mod_event", event="skython_smoke")
     assert len(r["received"]) == 1, r
     got = r["received"][0]
-    assert (got["name"], got["str_arg"], got["num_arg"], got["sender"], got["seq"]) == ("skython_smoke", "in-process", 2.5, 0x14, 1)
+    # name and str_arg come back through the engine's string pool, which can change case (R56).
+    assert (got["name"].lower(), got["str_arg"].lower()) == ("skython_smoke", "in-process"), got
+    assert (got["num_arg"], got["sender"], got["seq"]) == (2.5, 0x14, 1), got
