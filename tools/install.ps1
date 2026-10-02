@@ -71,7 +71,7 @@ if ($needSkse) {
 }
 if (-not (Test-Path -LiteralPath $addrLib -PathType Leaf)) {
   $missing += "Address Library: $addrLib is missing"
-  $missing += "  Get 'All in one (all game versions)' from $AddressLibUrl"
+  $missing += "  Get the file that covers game version $ver from $AddressLibUrl"
   $missing += "  and put its versionlib-*.bin files in $(Join-Path $GameDir 'Data\SKSE\Plugins') (or install it with your mod manager)."
 }
 if ($missing.Count) { Stop-Install (@("not installed: requirements missing") + $missing) }
