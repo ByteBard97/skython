@@ -23,7 +23,7 @@ QUEST_SCRIPT = "SkythonTestQuest"
 BASE_SCRIPT = "SkythonTestQuestBase"
 ALIAS_SCRIPT = "SkythonTestAlias"
 LOCATION_ALIAS_SCRIPT = "SkythonTestLocationAlias"
-# The scenario function and the fragments' channel, exactly as spikes/RESULTS.md records them. The ESP-based
+# The scenario function and the fragments' channel, fixed when the test ESP was designed. The ESP-based
 # live tests use t.SCENARIO_FUNCTION and t.CHANNEL, never literals.
 SCENARIO_FUNCTION = "SetupScenario"
 CHANNEL = "skython_test"

@@ -16,7 +16,7 @@ RESULTS = pathlib.Path(__file__).parent / "results" / "throughput.json"
 BURST_RESULTS = pathlib.Path(__file__).parent / "results" / "burst.json"
 BURST_TOTAL = int(os.environ.get("SPY_BURST", "1024"))           # the dev ini's max_inflight_total
 BURST_PER_CONNECTION = int(os.environ.get("SPY_BURST_PER_CONN", "256"))  # the dev ini's max_inflight_per_connection
-S9_FRAME_MS = float(os.environ.get("SPY_S9_FRAME_MS", "46.1"))   # spikes/RESULTS.md S9 row: baseline median frame, test machine
+S9_FRAME_MS = float(os.environ.get("SPY_S9_FRAME_MS", "46.1"))   # baseline median frame on the test machine
 SEQUENTIAL = int(os.environ.get("SPY_SEQ", "500"))   # S9: one drain (~46 ms on the test machine) per call alone: 500 calls take about 25 s
 SPIN_CALLS = int(os.environ.get("SPY_SPIN_CALLS", "300"))
 CALLS_PER_DEPTH = 2000
@@ -109,7 +109,7 @@ def test_throughput_baseline(game):
                           "spin": {k: inproc_spin[k] for k in ("per_s", "p50_ms", "p99_ms")}},
             "spin_loops": spin_off["spin_loops"],
             # One reading from an overlay while the spinner runs (SPY_FPS_SPIN); null if not taken. Not a frame-time
-            # measurement: frame stalls are pinned by spike S9.
+            # measurement: frame stalls are pinned by the frame-time test above.
             "fps_observed_spin": os.environ.get("SPY_FPS_SPIN"),
         },
     }

@@ -2,7 +2,7 @@
 SPY_S4_QUEST=0x<quest form id> SPY_S4_ALIAS=<alias id> SPY_S4_REF=0x<expected reference form id>
 SPY_PLAIN_QUEST=0x<quest form id> SPY_PLAIN_ALIAS=<id of an unscripted alias>
 SPY_OWN_QUEST=0x<quest form id> SPY_OWN_SCRIPT=<its attached script> SPY_OWN_FUNCTION=<parameterless bytecode getter>
-Values used on the test machine (s4test): spikes/RESULTS.md, S4 row; `source livetest/s4test.env`.
+Values used on the test machine (s4test) are in `livetest/s4test.env`.
 Under SKYTHON_LIVE=1 a missing value fails the test (support.spy_env), it never skips.
 """
 import os
@@ -73,7 +73,7 @@ def test_latent_function_completes_with_none(game):
 
 def test_unknown_script_and_function(game):
     # Twice: after the first failed lookup the VM keeps an empty stub type that the next lookup returns as found
-    # (spike S7b); TypeOf's NoLoad cross-check must still answer unknown_function.
+    # (found during development); TypeOf's NoLoad cross-check must still answer unknown_function.
     for _ in range(2):
         with pytest.raises(errors.UnknownFunction):
             game.call("NoSuchScriptAnywhere", "Foo")
@@ -91,7 +91,7 @@ def test_script_defined_global_function(game):
     # ArmorAddon.GetMaskForSlot and Game.GetSkillLegendaryLevel are Papyrus bytecode in SKSE's scripts (no `native`
     # keyword); Armor.GetMaskForSlot is the SKSE native the first one wraps. (Game.GetCameraState, the obvious choice, wraps
     # Camera.GetCameraState, which SKSE 2.2.6 never registers: papyrusCamera::RegisterFuncs has no caller, the native
-    # returns None and the wrapper casts it to 0. Recorded in spikes/RESULTS.md.)
+    # returns None and the wrapper casts it to 0.)
     assert game.call("ArmorAddon", "GetMaskForSlot", 32) == game.call("Armor", "GetMaskForSlot", 32) == 4
     # The SKSE sources alone say ArmorAddon.GetMaskForSlot is bytecode; the VM says so too: a script-defined function
     # reports its .psc parameter name (`int Function GetMaskForSlot(int slot) global`), a native reports param1.
@@ -100,10 +100,10 @@ def test_script_defined_global_function(game):
     with pytest.raises(errors.TypeMismatch, match=r"parameter param1 \(argument 0 of Armor\.GetMaskForSlot\)"):
         game.call("Armor", "GetMaskForSlot", "thirty-two")
     assert isinstance(game.call("Game", "GetSkillLegendaryLevel", "OneHanded"), int)
-    # Unmeasured: whether a script-defined function reports its .psc parameter name (S7 sampled natives only).
+    # Unmeasured: whether a script-defined function reports its .psc parameter name (only natives were sampled).
     with pytest.raises(errors.TypeMismatch, match="argument 0 of Game.GetSkillLegendaryLevel") as ei:
         game.call("Game", "GetSkillLegendaryLevel", 5)
-    print("script-defined parameter name reported:", "actorValue" in str(ei.value))  # record in spikes/RESULTS.md
+    print("script-defined parameter name reported:", "actorValue" in str(ei.value))  # printed, not asserted: a live run records the answer
 
 
 def test_wrong_argument_count(game):
@@ -243,7 +243,7 @@ def test_light_plugin_form_key(game):
 
 
 def _s4():
-    """The quest/alias/reference spike S4 recorded. They come from one particular throwaway save and can go stale."""
+    """The quest/alias/reference recorded from the s4test save. They come from one particular throwaway save and can go stale."""
     quest, alias, ref = spy_env("SPY_S4_QUEST", "SPY_S4_ALIAS", "SPY_S4_REF")
     return int(quest, 16), int(alias), int(ref, 16)
 
@@ -347,7 +347,7 @@ def test_alias_result_is_an_alias_not_its_quest(game):
 
 def test_quest_result_is_a_quest_not_an_alias(game):
     # Measurement for the handle decode order: ObjectToJson logs, once, whether a Quest's own handle also passes
-    # HandleIsType(BGSRefAlias/BGSLocAlias). Record the line in spikes/RESULTS.md; form-first is correct either way.
+    # HandleIsType(BGSRefAlias/BGSLocAlias). Form-first is correct either way; the line records which happened.
     quest_id, alias_id, _ = _s4()
     owner = game.call_method(game.alias(game.resolve(form_id=quest_id), alias_id), "Alias", "GetOwningQuest")
     assert isinstance(owner, Form) and not isinstance(owner, Alias) and owner.type == "Quest"

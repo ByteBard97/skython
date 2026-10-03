@@ -1,5 +1,4 @@
-"""Needs a save loaded (interactive): s4test on the test machine (spikes/RESULTS.md). The property read uses the auto property
-spike S7c enumerated:
+"""Needs a save loaded (interactive): s4test on the test machine. The property read uses an auto property named in env vars:
 SPY_S7C_QUEST=0x001093E4 SPY_S7C_SCRIPT=QF_TGTQ01Handler_001093E4 SPY_S7C_PROPERTY=Alias_TGHandlerSilverMoldAlias
 SPY_S7C_KIND=Alias (optional SPY_S7C_GETTER: a parameterless function returning the same property; unset for this one).
 The Int auto property read uses SPY_OWN_QUEST/SPY_OWN_SCRIPT (as in test_m1_calls.py) and
@@ -110,7 +109,7 @@ def test_property_errors(game):
 
 
 def _s7c_property():
-    """The quest and the auto property spike S7c enumerated (spikes/RESULTS.md, the S7c row)."""
+    """The quest and the auto property enumerated from the running game during development."""
     quest, script, prop, kind = spy_env("SPY_S7C_QUEST", "SPY_S7C_SCRIPT", "SPY_S7C_PROPERTY", "SPY_S7C_KIND")
     return int(quest, 16), script, prop, kind
 
