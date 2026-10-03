@@ -12,32 +12,15 @@ Each example is one Python file. Drop it into `Data/SKSE/Plugins/Skython/scripts
 | [`papyrus_to_python.py`](papyrus_to_python.py) | Your own Papyrus script reports to Python with one line, `Skython.Send("my_mod", ...)`; the docstring has the `.psc` side. | ~50 |
 | [`quest_stage_notifier.py`](quest_stage_notifier.py) | A notification whenever a quest you follow reaches a new stage; handy while writing a quest mod. | ~60 |
 
-## Why Python
-
-Talking to the outside world from Papyrus takes a separate HTTP plugin, a server process, and code like this (from the SKSE_HTTP plugin's README):
-
-```papyrus
-int handle = SKSE_HTTP.createDictionary()
-SKSE_HTTP.setString(handle, "requestType", "startConversation")
-SKSE_HTTP.setBool(handle, "isInCombatWithPlayer", false)
-SKSE_HTTP.sendLocalhostHttpRequest(handle, 5000, "mantella")
-; ...then register for "SKSE_HTTP_OnHttpReplyReceived" and read the reply back one key at a time
-```
-
-In Skython the request, the reply and the game calls are ordinary Python:
-
-```python
-reply = json.load(urllib.request.urlopen(url, json.dumps({"requestType": "startConversation"}).encode()))
-game.call("Debug", "Notification", reply["text"])
-```
-
-## The API in five lines
+## The API
 
 ```python
 player = game.form("Skyrim.esm|0x14")                                  # any form, by plugin and local ID
 health = game.call_method(player, "Actor", "GetActorValue", "Health")  # any Papyrus method
 game.call("Debug", "Notification", f"Health: {health:.0f}")             # any global Papyrus function
-b = game.batch(); b.call_method(player, "Actor", "GetLevel"); b.call_method(player, "Actor", "GetGoldAmount")
+b = game.batch()
+b.call_method(player, "Actor", "GetLevel")
+b.call_method(player, "Actor", "GetGoldAmount")
 level, gold = b.run(stop_on_error=False)        # in order; a failed step comes back as an exception object
 ```
 
@@ -47,8 +30,8 @@ Pass every Papyrus parameter, including the ones Papyrus lets you leave out: the
 
 Game calls can fail for ordinary reasons (the game is paused, a menu is open, a save is loading), so loops catch exceptions and try again; `print` goes to `python.log`.
 
-Scripts run on their own threads, so a slow network call never stalls the game; each game call is queued as an SKSE task that the game runs in its next task drain, so a call takes about one SKSE task drain (~46 ms on the test machine). Long-running work goes on a thread that `setup` starts and that first calls `game.wait_ready()` (no save is loaded while `setup` runs). `wait_ready()` raises `NotReady` when no save is loaded within its timeout, so the examples call it in a loop that catches `NotReady` and tries again: a long stay at the main menu never ends the thread.
+Scripts run on their own threads, so a slow network call never stalls the game. Each game call waits for the next SKSE task drain, about 46 ms on the test machine. Long-running work goes on a thread that `setup` starts and that first calls `game.wait_ready()` (no save is loaded while `setup` runs). `wait_ready()` raises `NotReady` when no save is loaded within its timeout, so the examples call it in a loop that catches `NotReady` and tries again: a long stay at the main menu never ends the thread.
 
 ## Status
 
-I've run `live_dashboard.py` in game. For the other three I checked every Papyrus call against the running game but haven't run them end to end yet. There are no event examples yet.
+I've run `live_dashboard.py` in game end to end. For the other six I checked every Papyrus call against the running game's API, but I haven't run them end to end yet.
