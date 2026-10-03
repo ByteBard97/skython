@@ -86,7 +86,7 @@ You need, in the game folder:
 - SKSE for your game version: https://www.nexusmods.com/skyrimspecialedition/mods/30379?tab=files
 - Address Library for SKSE Plugins: https://www.nexusmods.com/skyrimspecialedition/mods/32444?tab=files
 
-Supported game versions: 1.6.1170 and 1.7.104 (SkyrimSE.exe FileVersion 1.6.1170.0 or 1.7.104.0). On any other version the plugin loads but leaves Python off.
+I've verified 1.6.1170 (SkyrimSE.exe FileVersion 1.6.1170.0). The loader also accepts 1.7.104, but I haven't done a live run on it yet. On any other version the plugin loads but leaves Python off.
 
 Then:
 
