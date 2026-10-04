@@ -343,14 +343,16 @@ Target ResolveTarget(const Value& object, const std::string& script)
     NoteBinding(static_cast<std::uint64_t>(handle), desc, boundBefore);
     if (boundBefore) return {bound, desc};
     // Aliases are never bound on demand: a plain alias would get an `Alias`-class object (S7g), still not a
-    // ReferenceAlias, and the binding adds an attachedScripts entry whose save persistence is unmeasured.
+    // ReferenceAlias, and binding it would add an attachedScripts entry that persists in saves (the form path below).
     if (std::holds_alternative<AliasRef>(object.v))
         throw ProtocolError(ErrorCode::type_mismatch, desc + " has no " + script + " script object bound (an unscripted alias; "
             "v1 drives scripted aliases only)");
     if (sig::IsA(nativeClass, script)) {
         // A form no script has touched (a cold form, or an unscripted quest) has no bound object yet; PackHandle binds
-        // the native one, and the Object& overload dispatches on it (S7d/S7g). Side effect: an attachedScripts entry
-        // (whether it persists in a save is unmeasured).
+        // the native one, and the Object& overload dispatches on it (S7d/S7g). Side effect: an attachedScripts entry.
+        // The VM serializes its bound objects itself (IVMSaveLoadInterface::SaveGame/LoadGame, and the binding
+        // policy's HandleLoadedBinding rebinds them on load), so the entry rides the engine's own save path; no save
+        // of ours has been inspected for it yet.
         Variable v;
         RE::BSScript::PackHandle(&v, ptr, type);
         if (v.IsObject())

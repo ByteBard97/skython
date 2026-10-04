@@ -126,7 +126,7 @@ A call takes about one SKSE task drain: ~46 ms in-process on the test machine (p
 
 ### Reloading
 
-- Script reload (`skython._host.reload(name)`) is best effort. C extension state survives it, and any thread you didn't stop in `teardown()` keeps running with a closed `Game` (its calls raise `ConnectionLost`).
+- Script reload (`skython._host.reload(name)`) is best effort. The script's modules are imported again and its settings file is re-read, but C extension state survives it, and any thread you didn't stop in `teardown()` keeps running with a closed `Game` (its calls raise `ConnectionLost`).
 
 ### The bundled test ESP
 
