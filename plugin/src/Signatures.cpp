@@ -92,11 +92,18 @@ PropertySlot FindPropertySlot(const std::string& script, const std::string& prop
             if (IEquals(t->GetPropertyIter()[i].name.c_str(), property)) {
                 PropertySlot slot;
                 slot.info = t->GetPropertyIter()[i].info;  // a copy
-                std::uint32_t parentVars = 0;
-                for (auto* up = t->GetParent(); up; up = up->GetParent()) parentVars += up->GetNumVariables();
-                slot.variableIndex = parentVars + slot.info.autoVarIndex;
-                if (slot.info.autoVarIndex < t->GetNumVariables() && t->GetVariableIter())
-                    slot.variableName = t->GetVariableIter()[slot.info.autoVarIndex].name.c_str();
+                // Find the backing variable by its pex link name (see the PropertySlot comment for why
+                // autoVarIndex is not used). The absolute index adds the declaring class's ancestors' variables.
+                const std::string want = "::" + std::string(t->GetPropertyIter()[i].name.c_str()) + "_var";
+                const auto* vars = t->GetVariableIter();
+                for (std::uint32_t v = 0; vars && v < t->GetNumVariables(); ++v)
+                    if (IEquals(vars[v].name.c_str(), want)) {
+                        std::uint32_t parentVars = 0;
+                        for (auto* up = t->GetParent(); up; up = up->GetParent()) parentVars += up->GetNumVariables();
+                        slot.variableIndex = parentVars + v;
+                        slot.variableName = vars[v].name.c_str();
+                        break;
+                    }
                 return slot;
             }
     throw ProtocolError(ErrorCode::not_found, "script " + script + " has no property " + property);

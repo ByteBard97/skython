@@ -194,11 +194,11 @@ AutoProperty FindAutoProperty(const PropertyArgs& p)
     if (slot.info.getFunction || slot.info.setFunction)
         throw ProtocolError(ErrorCode::unsupported, p.script + "." + p.property + " is a full property (it has Papyrus "
             "get/set code); v1 reads and writes auto properties only: call a Papyrus function on the script instead");
-    // FindPropertySlot leaves the name empty when autoVarIndex is outside the declaring class's own variables: then
-    // the absolute index would point at someone else's variable, so refuse instead of using it.
+    // FindPropertySlot leaves the name empty when the declaring class has no ::<property>_var variable: without the
+    // name link there is no slot this code can trust, so refuse instead of guessing an index.
     if (slot.variableName.empty())
         throw ProtocolError(ErrorCode::unsupported, p.script + "." + p.property + " has no auto variable in its "
-            "declaring script (its auto-variable index is out of range); v1 cannot read or write it");
+            "declaring script (no ::" + p.property + "_var variable); v1 cannot read or write it");
     return {slot.info.type, slot.variableIndex, slot.variableName};
 }
 
