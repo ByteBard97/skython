@@ -62,6 +62,7 @@ export SKYTHON_SESSION="$SESSION_OUT"
 export SKSE_LOG_DIR="$BOX_ROOT/out/box-skse"
 export SKYTHON_LOG="$BOX_ROOT/out/box-skse/Skython/python.log"
 export SKYTHON_BOX=1
+export SPY_GAME_VERSION="$BOX_GAME_VERSION"
 ENV
   echo "env: source $ENV_OUT"
 }

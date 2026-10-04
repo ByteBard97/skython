@@ -1,8 +1,8 @@
 # Skython
 
-Python inside Skyrim SE 1.6.1170. Skython is an SKSE plugin that embeds CPython 3.14 and lets Python code call any Papyrus function in the running game. During development the same API also works from a separate process. It's a library for mod authors; it does nothing in game on its own.
+Python inside Skyrim SE 1.6.1170 and 1.7.104. Skython is an SKSE plugin that embeds CPython 3.14 and lets Python code call any Papyrus function in the running game. During development the same API also works from a separate process. It's a library for mod authors; it does nothing in game on its own.
 
-Status: early. Calling Papyrus from Python works, events work, and saving and loading the game from Python works. I've only verified Skyrim SE 1.6.1170, Windows-native. The loader also accepts 1.7.104, but I haven't run that version against a live game yet. On any other version the plugin loads but leaves Python off. I haven't tried Proton.
+Status: early. Calling Papyrus from Python works, events work, and saving and loading the game from Python works. Verified against Skyrim SE 1.6.1170 and 1.7.104, Windows-native. On any other version the plugin loads but leaves Python off. I haven't tried Proton.
 
 ## How it fits together
 

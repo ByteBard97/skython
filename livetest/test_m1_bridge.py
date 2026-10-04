@@ -40,7 +40,9 @@ def test_welcome(session):
     s.sendall(hello(session))
     w = read_frame(s)
     assert w["type"] == "welcome" and w["protocol"][0] == 1
-    assert w["game_version"] == "1.6.1170.0" and w["runtime"] == "AE" and w["plugin_version"]
+    # The launched install's version: box_session.sh's env names it; a plain local run is the 1.6.1170 machine.
+    assert w["game_version"] == os.environ.get("SPY_GAME_VERSION", "1.6.1170.0") and w["runtime"] == "AE" \
+        and w["plugin_version"]
 
 
 def test_wrong_token_is_unauthorized(session):

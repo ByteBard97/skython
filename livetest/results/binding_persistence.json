@@ -1,5 +1,5 @@
 {
-  "save": "skython_t42bind_20261004160244",
+  "save": "skython_t42bind_20261004163026",
   "alias": {
     "quest": "0x0010FDD5",
     "alias_id": 0,
@@ -9,25 +9,25 @@
   "cold_form": {
     "form": "Skyrim.esm|0x013988",
     "log": [
-      "[2026-10-04 16:02:43.411] [global] [info] values: Skyrim.esm|0x013988 bound before call: false",
-      "[2026-10-04 16:02:48.245] [global] [info] values: Skyrim.esm|0x013988 bound before call: true"
+      "[2026-10-04 16:30:24.718] [global] [info] values: Skyrim.esm|0x013988 bound before call: false",
+      "[2026-10-04 16:30:29.480] [global] [info] values: Skyrim.esm|0x013988 bound before call: true"
     ]
   },
   "control": {
     "form": "Skyrim.esm|0x013982",
     "log": [
-      "[2026-10-04 16:02:47.010] [global] [info] values: Skyrim.esm|0x013982 bound before call: false",
-      "[2026-10-04 16:02:48.339] [global] [info] values: Skyrim.esm|0x013982 bound before call: false"
+      "[2026-10-04 16:30:28.251] [global] [info] values: Skyrim.esm|0x013982 bound before call: false",
+      "[2026-10-04 16:30:29.573] [global] [info] values: Skyrim.esm|0x013982 bound before call: false"
     ],
     "in_session_result": "valid"
   },
   "fresh_launch": {
     "alias_first_call": "works (0x10fdd5)",
     "cold_form_log": [
-      "[2026-10-04 16:13:46.910] [global] [info] values: Skyrim.esm|0x013988 bound before call: true"
+      "[2026-10-04 16:34:04.796] [global] [info] values: Skyrim.esm|0x013988 bound before call: true"
     ],
-    "when": "2026-10-04 16:13:50"
+    "when": "2026-10-04 16:34:08"
   },
   "old_epoch_event_reference": null,
-  "when": "2026-10-04 16:02:53"
+  "when": "2026-10-04 16:30:34"
 }

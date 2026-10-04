@@ -351,8 +351,8 @@ Target ResolveTarget(const Value& object, const std::string& script)
         // A form no script has touched (a cold form, or an unscripted quest) has no bound object yet; PackHandle binds
         // the native one, and the Object& overload dispatches on it (S7d/S7g). Side effect: an attachedScripts entry.
         // The VM serializes its bound objects itself (IVMSaveLoadInterface::SaveGame/LoadGame, and the binding
-        // policy's HandleLoadedBinding rebinds them on load), so the entry rides the engine's own save path; no save
-        // of ours has been inspected for it yet.
+        // policy's HandleLoadedBinding rebinds them on load); verified live on both runtimes: a fresh process that
+        // loads such a save reports the form already bound (livetest/results/binding_persistence.json).
         Variable v;
         RE::BSScript::PackHandle(&v, ptr, type);
         if (v.IsObject())
