@@ -48,25 +48,30 @@ def test_bytecode_member_function_on_our_own_script(game, esp):
     assert game.call_method(esp.quest, t.QUEST_SCRIPT, "GetCounter") == 7
 
 
+def describe(game, esp, fn, *args) -> str:
+    # The Describe* answers come back through the engine's string pool, which can change case (README limit).
+    return game.call_method(esp.quest, t.QUEST_SCRIPT, fn, *args).lower()
+
+
 def test_alias_argument_arrives_as_that_alias(game, esp):
     # The BindAlias path: the argument binds the object already bound to the alias, re-typed to ReferenceAlias.
     # DescribeAlias answers "empty" for an unfilled alias of this quest and "filled" once it holds a reference; an
     # argument that arrived as None would answer "none", one bound to another quest "foreign".
     for a in esp.ref_aliases:
-        assert game.call_method(esp.quest, t.QUEST_SCRIPT, "DescribeAlias", a) == "empty", a
+        assert describe(game, esp, "DescribeAlias", a) == "empty", a
     target = esp.ref_aliases[t.TARGET_ALIAS]
     game.call_method(target, "ReferenceAlias", "ForceRefTo", esp.npc)
     try:
-        assert game.call_method(esp.quest, t.QUEST_SCRIPT, "DescribeAlias", target) == "filled"
-        others = [game.call_method(esp.quest, t.QUEST_SCRIPT, "DescribeAlias", a) for a in esp.ref_aliases[1:]]
+        assert describe(game, esp, "DescribeAlias", target) == "filled"
+        others = [describe(game, esp, "DescribeAlias", a) for a in esp.ref_aliases[1:]]
         assert others == ["empty", "empty"], others          # the filled answer belongs to the alias passed
     finally:
         game.call_method(target, "ReferenceAlias", "Clear")
-    assert game.call_method(esp.quest, t.QUEST_SCRIPT, "DescribeAlias", target) == "empty"
+    assert describe(game, esp, "DescribeAlias", target) == "empty"
 
 
 def test_none_alias_argument(game, esp):
-    assert game.call_method(esp.quest, t.QUEST_SCRIPT, "DescribeAlias", None) == "none"
+    assert describe(game, esp, "DescribeAlias", None) == "none"
 
 
 def test_unscripted_alias_argument_is_type_mismatch(game, esp):
@@ -98,14 +103,14 @@ def test_location_alias_argument_arrives_as_that_alias(game, esp):
     # The BindAlias path with a LocationAlias parameter: "empty" while alias 3 holds no location, "filled" after
     # ForceLocationTo (an argument that arrived as None would answer "none", another quest's alias "foreign").
     la = esp.location_alias
-    assert game.call_method(esp.quest, t.QUEST_SCRIPT, "DescribeLocationAlias", la) == "empty"
+    assert describe(game, esp, "DescribeLocationAlias", la) == "empty"
     game.call_method(la, "LocationAlias", "ForceLocationTo", t.location(game))
     try:
-        assert game.call_method(esp.quest, t.QUEST_SCRIPT, "DescribeLocationAlias", la) == "filled"
+        assert describe(game, esp, "DescribeLocationAlias", la) == "filled"
     finally:
         game.call_method(la, "LocationAlias", "Clear")
-    assert game.call_method(esp.quest, t.QUEST_SCRIPT, "DescribeLocationAlias", la) == "empty"
-    assert game.call_method(esp.quest, t.QUEST_SCRIPT, "DescribeLocationAlias", None) == "none"
+    assert describe(game, esp, "DescribeLocationAlias", la) == "empty"
+    assert describe(game, esp, "DescribeLocationAlias", None) == "none"
 
 
 def test_alias_argument_typed_as_our_alias_script(game, esp):

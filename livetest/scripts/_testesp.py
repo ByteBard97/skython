@@ -41,7 +41,9 @@ INITIAL = {  # the ESP's initial property values; skythonbase holds them, fresh_
 PLAYER = Form(form_id=0x14)
 IRON_SWORD = "Skyrim.esm|0x012EB7"
 WHITERUN_LOCATION = "Skyrim.esm|0x018A56"  # a vanilla Location (a second value for alias 3); type-checked on use
-FORM_TYPE_ACTOR = 62  # FormType::ActorCharacter (0x3E, ACHR) at the CommonLibSSE-NG pin: the Cell.GetNthRef filter
+# The Cell.GetNthRef filter that matches actor refs in a cell. 62 (ACHR, the placed ref's record type) matches
+# nothing there; 43 (NPC_, the actor's base form type) matches (measured live on 1.6.1170: GetNumRefs 0 vs 2).
+FORM_TYPE_ACTOR = 43
 
 
 def stage_payload(stage: int) -> str:
