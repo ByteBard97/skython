@@ -40,7 +40,21 @@ function LastLineNo([string]$pat) {
   if ($m) { return $m.LineNumber } else { return 0 }
 }
 # EnsureSteam: '' once Steam runs and is logged on, else the failure reason. Only ever starts Steam -silent.
+function SteamOffline() {
+  $vdf = 'C:\Steam\config\loginusers.vdf'
+  return ((Test-Path $vdf) -and ((Get-Content $vdf -Raw) -match '"WantsOfflineMode"\s+"1"'))
+}
 function EnsureSteam([int]$waitSec) {
+  # Offline Mode: Steam holds no online session (so a game on another machine is not disturbed) and writes no
+  # "Logged On" line. The game only needs the client process, so start it -silent and give it time to come up.
+  if (SteamOffline) {
+    if (-not (Get-Process -Name steam -ErrorAction SilentlyContinue)) {
+      Log 'steam offline mode: starting steam -silent'
+      Start-Process 'C:\Steam\steam.exe' -ArgumentList '-silent'
+      Start-Sleep -Seconds 20
+    } else { Log 'steam offline mode: steam already running' }
+    return ''
+  }
   $before = LastMatch $logonPat
   $steam = Get-Process -Name steam -ErrorAction SilentlyContinue
   $started = $false

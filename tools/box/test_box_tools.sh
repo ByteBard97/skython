@@ -167,7 +167,7 @@ grep -qF "steam logged off during launch: Logged In Elsewhere" "$L" 2>/dev/null 
   && echo "$lc" | grep -qE 'Result "fail [^"]*\(\$reason\)"' && ok "launch.ps1 warns, retries once and puts the logoff reason in RESULT" || bad "launch.ps1 logoff warning/RESULT reason"
 [ "$(echo "$lc" | grep -cE '^\s*\$why = EnsureSteam (120|90)$')" = 2 ] && ok "launch.ps1 re-ensures Steam before the retry (bounded 90 s)" || bad "launch.ps1 EnsureSteam calls"
 st="$(echo "$lc" | grep -iE 'steam' | grep -iE 'Stop-Process|Kill|Terminate|taskkill|-shutdown|Set-Content|Out-File|Move-Item')"
-[ -z "$st" ] && [ "$(echo "$lc" | grep -cF "Start-Process 'C:\Steam\steam.exe' -ArgumentList '-silent'")" = 2 ] \
+[ -z "$st" ] && [ "$(echo "$lc" | grep -cF "Start-Process 'C:\Steam\steam.exe' -ArgumentList '-silent'")" = 3 ] \
   && ok "launch.ps1 only starts Steam -silent, never stops or modifies it" || { bad "launch.ps1 touches Steam beyond -silent start:"; echo "$st"; }
 
 # 6d. box_session.sh: loopback-only forward; the token only in out/box-session.json (mode 600), never printed
