@@ -86,7 +86,7 @@ a1cc06b524ab3edca51f8ad3895f9c4fa20b8b19283173dff4ae781449dc9639  pybind11-3.1.0
 - Mutagen 23.4.0 nupkg sha256: Skyrim 4bdec615ae07c8ac9066f62d8a6420f0355e76c94db69e730a46bfc296856696, Core fa50598700a836dfef6639fbc1893aaf276d3f9383d51437cc8d6b8f6c254313, Kernel 07f9fbd65c846f2071a3c752671c5860409766715bab0ed9450796331a774b55.
 - `testesp/spike/SkythonTest.esp` (the VMAD spike) sha256 00a11e2e3481e87d02f38d8ff23d0b8a42ce9df6fbd6bde0aca66c288479cbce (deterministic: rebuilds are byte-identical).
 - Full plugin and scripts, checked by testesp/build.sh (the plugin is built from the installed Skyrim.esm 1.6.1170, whose WhiterunBreezehome cell record and WhiterunBreezehomeLocation location record it copies):
-- pin testesp/SkythonTest.esp sha256 23b0b90e0eeac79cd7a4a57ca5552ec65c7c4dc21072a36aebcae5e9e252baa4
+- pin testesp/SkythonTest.esp sha256 a045be4f79f197f60487f9b1f18d44d86019d4ad7872ff01950f8043d3cfd75b
 - pin testesp/compiled/SkythonTestQuestBase.pex stable cc8a53906fb4bdbd3bc31b2f4c88b0c9524b4d4585f5cb9be422165969729213
 - pin testesp/compiled/SkythonTestQuest.pex stable f0ea0761147bc3a64ea7c965cadc4c820294653c80b24e932eb0d09126f831da
 - pin testesp/compiled/SkythonTestAlias.pex stable 2985c5da915b259c5fa45d5de579349e7d0d9437ca70b53ffbbaccc4582ab551

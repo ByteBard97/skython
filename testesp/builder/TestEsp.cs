@@ -222,12 +222,14 @@ namespace SkythonTestEsp
             };
             // ANAM (NextAliasID) has no settable property in Mutagen 23.4.0: its writer computes it from the aliases.
             // With aliases 0-3 it writes ANAM = 4, the next free alias id, as vanilla quests do (checked in the bytes).
+            // StoresText: objective text's <Alias=...> tags resolve only for aliases that store text (probe 1/2's
+            // banner rendered "[...]" without it, 2026-10-04).
             var refFlags = QuestAlias.Flag.Optional | QuestAlias.Flag.AllowDisabled | QuestAlias.Flag.AllowReserved
-                           | QuestAlias.Flag.AllowDead | QuestAlias.Flag.AllowCleared;
+                           | QuestAlias.Flag.AllowDead | QuestAlias.Flag.AllowCleared | QuestAlias.Flag.StoresText;
             string[] refNames = { "SkythonTarget", "SkythonItem", "SkythonExtra" };
             for (uint i = 0; i < refNames.Length; i++)
                 quest.Aliases.Add(new QuestAlias { ID = i, Type = QuestAlias.TypeEnum.Reference, Name = refNames[i], Flags = refFlags });
-            quest.Aliases.Add(new QuestAlias { ID = 3, Type = QuestAlias.TypeEnum.Location, Name = "SkythonPlace", Flags = QuestAlias.Flag.Optional | QuestAlias.Flag.AllowCleared });
+            quest.Aliases.Add(new QuestAlias { ID = 3, Type = QuestAlias.TypeEnum.Location, Name = "SkythonPlace", Flags = QuestAlias.Flag.Optional | QuestAlias.Flag.AllowCleared | QuestAlias.Flag.StoresText });
 
             foreach (var (stage, _) in Stages)
             {

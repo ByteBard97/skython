@@ -244,10 +244,10 @@ cell SkythonTestCell 000802:SkythonTest.esp block=0/5 location=000801:SkythonTes
   temporary - 0008F2:SkythonTest.esp base=0CE784:Skyrim.esm
   temporary - 0008F3:SkythonTest.esp base=000021:Skyrim.esm
 quest SkythonTestQuest 000800:SkythonTest.esp flags=AllowRepeatedStages form_version=0
-  alias 0 SkythonTarget Reference flags=Optional, AllowDead, AllowDisabled, AllowReserved, AllowCleared
-  alias 1 SkythonItem Reference flags=Optional, AllowDead, AllowDisabled, AllowReserved, AllowCleared
-  alias 2 SkythonExtra Reference flags=Optional, AllowDead, AllowDisabled, AllowReserved, AllowCleared
-  alias 3 SkythonPlace Location flags=Optional, AllowCleared
+  alias 0 SkythonTarget Reference flags=Optional, AllowDead, AllowDisabled, StoresText, AllowReserved, AllowCleared
+  alias 1 SkythonItem Reference flags=Optional, AllowDead, AllowDisabled, StoresText, AllowReserved, AllowCleared
+  alias 2 SkythonExtra Reference flags=Optional, AllowDead, AllowDisabled, StoresText, AllowReserved, AllowCleared
+  alias 3 SkythonPlace Location flags=Optional, StoresText, AllowCleared
   stage 10 log_entries=1
   stage 20 log_entries=1
   stage 100 log_entries=1

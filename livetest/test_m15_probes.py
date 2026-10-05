@@ -63,15 +63,29 @@ def filled(mgame, esp):
     return {"sword": sword, "place": place}
 
 
+def _shot(tag: str) -> str:
+    """One in-game screenshot through DevBench's capture tool, fetched to OUT. box_shot.sh sees only the box's
+    desktop (an ssh session cannot foreground the game window), so its shots could never show the HUD banner;
+    the in-game capture includes the HUD."""
+    reply = json.loads(_tool("box_console.sh", "--tool", "capture", json.dumps({"kind": "native", "checkpointId": tag})))
+    assert reply.get("ok"), reply
+    local = OUT / f"{tag}.png"
+    box_src = reply["path"].replace("/", "\\")
+    cmd = ("source tools/box/box_env.sh && "
+           f"bssh \"Copy-Item '{box_src}' \\\"$BOX_DIR\\\\probe-shot.png\\\"\" && "
+           f"bscp \"$BOX:$BOX_DIR_FWD/probe-shot.png\" '{local}'")
+    r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=180, cwd=str(REPO))
+    assert r.returncode == 0, f"fetch of {box_src} failed: {r.stdout}{r.stderr}"
+    return str(local)
+
+
 def show_and_shoot(game, esp, tag: str) -> list:
     """Force the objective banner and screenshot it, up to SHOT_TRIES times. Returns the PNG paths."""
     paths = []
     for i in range(SHOT_TRIES):
         game.call_method(esp.quest, "Quest", "SetObjectiveDisplayed", esp.objective, False, False)
         game.call_method(esp.quest, "Quest", "SetObjectiveDisplayed", esp.objective, True, True)
-        png = OUT / f"{tag}_try{i + 1}.png"
-        print(_tool("box_shot.sh", str(png)))
-        paths.append(str(png))
+        paths.append(_shot(f"{tag}_try{i + 1}"))
         time.sleep(2)
     return paths
 
